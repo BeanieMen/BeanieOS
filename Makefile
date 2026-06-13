@@ -5,9 +5,9 @@ ASM := nasm
 CC := gcc
 LD := ld
 OBJCOPY := objcopy
-QEMU := qemu-system-x86_64
+QEMU := qemu-system-i386
 
-CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib
+CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector -nostdlib -O0 -g
 LDFLAGS := -m elf_i386 -T linker.ld
 
 BOOT_SRC := $(SRC_DIR)/boot/boot.asm

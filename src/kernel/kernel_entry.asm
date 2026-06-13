@@ -8,4 +8,5 @@ _start:
     call kmain         ; Call the kernel main function
 
 .hang:
+    hlt               ; Halt the CPU
     jmp .hang          ; Infinite loop to prevent returning from the kernel

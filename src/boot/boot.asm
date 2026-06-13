@@ -10,9 +10,9 @@ xor ax, ax
 mov es, ax
 mov bx, 0x1000
 
-; Read 4 sectors starting at sector 2
+; Read 5 sectors starting at sector 2
 mov ah, 0x02
-mov al, 4
+mov al, 5
 mov ch, 0
 mov cl, 2
 mov dh, 0
