@@ -4,15 +4,21 @@
 
 use core::panic::PanicInfo;
 mod interrupts;
-mod vga_buffer;
 mod mem;
+mod vga_buffer;
+mod gdt;
+
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     println!("Hello World{}", "!");
     init();
 
-    x86_64::instructions::interrupts::int3(); 
-    
+    fn stack_overflow() {
+        stack_overflow();
+    }
+    stack_overflow();
+
+    println!("It did not crash!");
     loop {}
 }
 
@@ -24,4 +30,5 @@ fn panic(info: &PanicInfo) -> ! {
 
 pub fn init() {
     interrupts::init_idt();
+    gdt::init();
 }
