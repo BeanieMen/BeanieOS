@@ -22,3 +22,9 @@ build-std = ["core", "compiler_builtins"]
 
 [dependencies]
 bootloader = "0.9"
+lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
+spin = { version = "0.10", default-features = false, features = ["mutex", "spin_mutex"] }
+x86_64 = "0.15.5"
+
+[target.'cfg(target_os = "none")']
+runner = "bootimage runner"
