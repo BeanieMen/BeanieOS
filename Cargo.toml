@@ -1,0 +1,24 @@
+[package]
+name = "beanieos"
+version = "0.1.0"
+authors = ["Author Name <jainarjav886@gmail.com>"]
+edition = "2024"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort" # disable stack unwinding on panic
+
+[[bin]]
+name = "beanieos"
+test = false
+bench = false
+
+[unstable]
+json-target-spec = true
+build-std-features = ["compiler-builtins-mem"]
+build-std = ["core", "compiler_builtins"]
+
+[dependencies]
+bootloader = "0.9"
