@@ -16,3 +16,11 @@ thinking of leaving this as is and adding some sort of bootloader (multiboot2). 
 i dont want a 80x25 vga framebuffer i want a real one
 
 ts frying me there is so much to learn
+
+### 16-09-2026 20:52
+
+i mean it has gotten a lot easier now we just setup interrupts. we get interrupt index from pic and set handler of that interrupts index from the pic with a handler function 
+
+i also set up paging (already enabled via bootloader crate. will go into detail in the guide that me and nilu will make). we get bootinfo and from bootinfo, the physical memory offset and using that get the virt addr of page tables (physical addr in cr3 reg)
+
+ig we can take input and give output rn. probably a smiple shell is possible but no filesystem or read or write is available to files only with the framebuffer
