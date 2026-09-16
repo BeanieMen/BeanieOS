@@ -3,23 +3,20 @@
 #![feature(abi_x86_interrupt)]
 
 use core::panic::PanicInfo;
+mod gdt;
 mod interrupts;
 mod mem;
 mod vga_buffer;
-mod gdt;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     println!("Hello World{}", "!");
     init();
 
-    fn stack_overflow() {
-        stack_overflow();
+    loop {
+        // crate::print!("-");
+        // x86_64::instructions::hlt();
     }
-    stack_overflow();
-
-    println!("It did not crash!");
-    loop {}
 }
 
 #[panic_handler]
@@ -29,6 +26,10 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 pub fn init() {
-    interrupts::init_idt();
     gdt::init();
+    interrupts::init_idt();
+    unsafe {
+        interrupts::PICS.lock().initialize();
+    }
+    x86_64::instructions::interrupts::enable();
 }
