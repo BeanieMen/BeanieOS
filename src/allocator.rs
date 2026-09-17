@@ -1,4 +1,4 @@
-use alloc::alloc::GlobalAlloc;
+use linked_list_allocator::LockedHeap;
 use x86_64::VirtAddr;
 use x86_64::structures::paging::Page;
 use x86_64::structures::paging::PageTableFlags;
@@ -7,19 +7,8 @@ use x86_64::structures::paging::mapper::MapToError;
  use x86_64::structures::paging::Size4KiB;
  use x86_64::structures::paging::Mapper;
 
-pub struct Dummy;
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 100 * 1024; // 100 KiB
-
-unsafe impl GlobalAlloc for Dummy {
-    unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
-        core::ptr::null_mut()
-    }
-
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {
-        panic!("dealloc should never be called");
-    }
-}
 
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
@@ -41,8 +30,9 @@ pub fn init_heap(
         unsafe { mapper.map_to(page, frame, flags, frame_allocator)?.flush() };
     }
 
+    unsafe { ALLOCATOR.lock().init(HEAP_START as *mut u8, HEAP_SIZE) };
     Ok(())
 }
 
 #[global_allocator]
-static ALLOCATOR: Dummy = Dummy;
+static ALLOCATOR: LockedHeap = LockedHeap::empty();

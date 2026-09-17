@@ -22,3 +22,4 @@ spin = { version = "0.10", default-features = false, features = ["mutex", "spin_
 x86_64 = "0.15.5"
 pic8259 = "0.11.0"
 pc-keyboard = "0.7.0"
+linked_list_allocator = "0.10"

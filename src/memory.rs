@@ -8,11 +8,27 @@ use x86_64::{
     structures::paging::{OffsetPageTable, PageTable},
 };
 
-pub struct EmptyFrameAllocator;
+pub struct BootInfoFrameAllocator {
+    memory_map: &'static bootloader::bootinfo::MemoryMap,
+    next: usize,
+}
 
-unsafe impl FrameAllocator<Size4KiB> for EmptyFrameAllocator {
+impl BootInfoFrameAllocator {
+    /// The memory map must be valid and its usable frames must be unused.
+    pub unsafe fn init(memory_map: &'static bootloader::bootinfo::MemoryMap) -> Self {
+        Self { memory_map, next: 0 }
+    }
+}
+
+unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        None
+        let frame = self.memory_map.iter()
+            .filter(|r| r.region_type == bootloader::bootinfo::MemoryRegionType::Usable)
+            .flat_map(|r| (r.range.start_addr()..r.range.end_addr()).step_by(4096))
+            .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
+            .nth(self.next);
+        self.next += 1;
+        frame
     }
 }
 
