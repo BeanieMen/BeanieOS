@@ -236,7 +236,7 @@ pub fn init_framebuffer(addr: u64, width: usize, height: usize, pitch: usize, bp
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
-        $crate::framebuffer::_print(format_args!($($arg)*))
+        $crate::graphics::framebuffer::_print(format_args!($($arg)*))
     };
 }
 
