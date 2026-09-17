@@ -15,11 +15,6 @@ name = "beanieos"
 test = false
 bench = false
 
-[unstable]
-json-target-spec = true
-build-std-features = ["compiler-builtins-mem"]
-build-std = ["core", "compiler_builtins"]
-
 [dependencies]
 bootloader = { version = "0.9", features = ["map_physical_memory"]}
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
@@ -27,6 +22,3 @@ spin = { version = "0.10", default-features = false, features = ["mutex", "spin_
 x86_64 = "0.15.5"
 pic8259 = "0.11.0"
 pc-keyboard = "0.7.0"
-
-[target.'cfg(target_os = "none")']
-runner = "bootimage runner"

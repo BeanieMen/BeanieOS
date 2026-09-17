@@ -24,3 +24,7 @@ i mean it has gotten a lot easier now we just setup interrupts. we get interrupt
 i also set up paging (already enabled via bootloader crate. will go into detail in the guide that me and nilu will make). we get bootinfo and from bootinfo, the physical memory offset and using that get the virt addr of page tables (physical addr in cr3 reg)
 
 ig we can take input and give output rn. probably a smiple shell is possible but no filesystem or read or write is available to files only with the framebuffer
+
+### 17-09-2026 17:07
+
+i switched over to cachyos and setup everything again. setting this up made me realize the lack of automated setup for this project so i edited the makefile

@@ -3,13 +3,19 @@
 #![feature(abi_x86_interrupt)]
 
 use bootloader::{BootInfo, entry_point};
-use x86_64::VirtAddr;
 use core::panic::PanicInfo;
+use x86_64::{
+    VirtAddr,
+    structures::paging::{Page, PageTable, Translate},
+};
+mod allocator;
 mod gdt;
 mod interrupts;
+mod mem;
 mod memory;
 mod vga_buffer;
-mod mem;
+
+extern crate alloc;
 
 entry_point!(kernel_main);
 
@@ -17,18 +23,19 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("Hello World{}", "!");
     init();
 
-    use x86_64::registers::control::Cr3;
-
     let physical_memory_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    let level_4_table = unsafe { memory::active_level_4_table(physical_memory_offset) };
-    println!("Level 4 page table at: {:p}", level_4_table);
+    let mut mapper = unsafe { memory::init(physical_memory_offset) };
+    let mut frame_allocator = memory::EmptyFrameAllocator;
+    allocator::init_heap(&mut mapper, &mut frame_allocator);
+    // map an unused page
+    let page: Page = Page::containing_address(VirtAddr::new(0x0));
+    memory::create_example_mapping(page, &mut mapper, &mut frame_allocator);
 
-    for (i, entry) in level_4_table.iter().enumerate() {
-        if !entry.is_unused() {
-            println!("l4 entry {}: {:?}", i, entry);
-        }
-    }
-
+    // write the string `New!` to the screen through the new mapping
+    let page_ptr: *mut u64 = page.start_address().as_mut_ptr();
+    println!("page_ptr: {:?}", page_ptr);
+    unsafe { page_ptr.offset(400).write_volatile(0x_f021_f077_f065_f04e) };
+    let x = alloc::boxed::Box::new(0);
     loop {
         x86_64::instructions::hlt();
     }
