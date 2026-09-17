@@ -3,7 +3,6 @@
 #![feature(abi_x86_interrupt)]
 
 use alloc::{boxed::Box, rc::Rc, vec, vec::Vec};
-use bootloader::{BootInfo, entry_point};
 use core::panic::PanicInfo;
 use x86_64::{
     VirtAddr,
@@ -29,14 +28,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut frame_allocator =
         unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_map) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
-    // map an unused page
-    let page: Page = Page::containing_address(VirtAddr::new(0x0));
-    memory::create_example_mapping(page, &mut mapper, &mut frame_allocator);
 
-    // write the string `New!` to the screen through the new mapping
-    let page_ptr: *mut u64 = page.start_address().as_mut_ptr();
-    println!("page_ptr: {:?}", page_ptr);
-    unsafe { page_ptr.offset(400).write_volatile(0x_f021_f077_f065_f04e) };
+    
     let heap_value = Box::new(41);
     println!("heap_value at {:p}", heap_value);
 

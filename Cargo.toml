@@ -16,7 +16,7 @@ test = false
 bench = false
 
 [dependencies]
-bootloader = { version = "0.9", features = ["map_physical_memory"]}
+#bootloader = { version = "0.9", features = ["map_physical_memory"]}
 lazy_static = { version = "1.5.0", features = ["spin_no_std"] }
 spin = { version = "0.10", default-features = false, features = ["mutex", "spin_mutex"] }
 x86_64 = "0.15.5"

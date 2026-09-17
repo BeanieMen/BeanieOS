@@ -6,7 +6,6 @@ version = 4
 name = "beanieos"
 version = "0.1.0"
 dependencies = [
- "bootloader",
  "lazy_static",
  "linked_list_allocator",
  "pc-keyboard",
@@ -26,12 +25,6 @@ name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
-
-[[package]]
-name = "bootloader"
-version = "0.9.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22d5a0b9e11dd5bee9d24a68885de6dc7ed367f897323b1c1286150fd469374"
 
 [[package]]
 name = "const_fn"
