@@ -3,9 +3,8 @@
 layout: home
 
 hero:
-  name: "BeanieOS Docs"
-  text: "A VitePress Site"
-  tagline: My great project tagline
+  name: BeanieOS Docs
+  tagline: BeanieMan & nilu
   actions:
     - theme: brand
       text: Markdown Examples
@@ -17,9 +16,9 @@ hero:
 features:
   - title: Feature A
     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
+    link: /api-examples
   - title: Feature B
     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
   - title: Feature C
     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
 ---
-

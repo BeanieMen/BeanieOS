@@ -25,6 +25,10 @@ i also set up paging (already enabled via bootloader crate. will go into detail 
 
 ig we can take input and give output rn. probably a smiple shell is possible but no filesystem or read or write is available to files only with the framebuffer
 
-## 17-09-2026 15:25
+### 17-09-2026 15:25
 
 adding some docs haha :D
+
+### 19-09-2026 18:54
+
+okay so I really cant figure out how to change the colours, I've been trying so hard and I really dont know, its been like half an hour vro, im pring
