@@ -19,12 +19,20 @@ ts frying me there is so much to learn
 
 ### 16-09-2026 20:52
 
-i mean it has gotten a lot easier now we just setup interrupts. we get interrupt index from pic and set handler of that interrupts index from the pic with a handler function 
+i mean it has gotten a lot easier now we just setup interrupts. we get interrupt index from pic and set handler of that interrupts index from the pic with a handler function
 
 i also set up paging (already enabled via bootloader crate. will go into detail in the guide that me and nilu will make). we get bootinfo and from bootinfo, the physical memory offset and using that get the virt addr of page tables (physical addr in cr3 reg)
 
 ig we can take input and give output rn. probably a smiple shell is possible but no filesystem or read or write is available to files only with the framebuffer
 
+### 17-09-2026 15:25
+
+adding some docs haha :D
+
 ### 17-09-2026 17:07
 
 i switched over to cachyos and setup everything again. setting this up made me realize the lack of automated setup for this project so i edited the makefile
+
+### 19-09-2026 18:54
+
+okay so I really cant figure out how to change the colours, I've been trying so hard and I really dont know, its been like half an hour vro, im pring
