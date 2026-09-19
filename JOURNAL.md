@@ -29,6 +29,10 @@ ig we can take input and give output rn. probably a smiple shell is possible but
 
 adding some docs haha :D
 
+### 17-09-2026 17:07
+
+i switched over to cachyos and setup everything again. setting this up made me realize the lack of automated setup for this project so i edited the makefile
+
 ### 19-09-2026 18:54
 
 okay so I really cant figure out how to change the colours, I've been trying so hard and I really dont know, its been like half an hour vro, im pring
