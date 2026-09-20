@@ -1,4 +1,4 @@
-# 32 bit entru point just to long jump to 64 bit rust kernel
+# 32 bit entry point just to long jump to 64 bit rust kernel
 
 .section .text
 

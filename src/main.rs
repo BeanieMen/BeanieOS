@@ -33,7 +33,6 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     );
     let mut executor = executor::Executor::new();
     executor.spawn(executor::Task::new(testlol()));
-    executor.spawn(executor::Task::new(task::keyboard::print_keypresses()));
     executor.run();
 }
 

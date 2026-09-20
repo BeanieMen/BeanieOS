@@ -2,8 +2,10 @@ use core::mem::size_of;
 
 use crate::kernel_main;
 
+// check if bootloader is mb2 compat
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 
+// tell we are mb2 compat
 const MB_MAGIC: u32 = 0xe85250d6;
 const MB_ARCH: u32 = 0;
 
@@ -64,6 +66,7 @@ static MULTIBOOT_HEADER: MultibootHeader = MultibootHeader {
         typ: 1,
         flags: 0,
         size: 32,
+        // request memory map, boot device, command line, modules, rsdp v1/v2, framebuffer
         requests: [6, 8, 9, 1, 14, 15],
     },
     framebuffer_request: FramebufferRequestTag {
@@ -82,15 +85,17 @@ static MULTIBOOT_HEADER: MultibootHeader = MultibootHeader {
     },
 };
 
-const HUGE_PAGE_FLAGS: u64 = 0x83; // present | writable | huge
+const HUGE_PAGE_FLAGS: u64 = 0x83; // present | writable | huge bit
 
+// 1 p4 -> 1 p3 -> 8 p2 -> 1gib pages (8gb addressable)
 #[repr(align(4096))]
+#[allow(dead_code)]
 pub struct AlignedPageTable([u64; 512]);
 
 #[repr(align(4096))]
+#[allow(dead_code)]
 pub struct AlignedP2Tables([[u64; 512]; 8]);
 
-#[used]
 #[unsafe(no_mangle)]
 pub static mut P2_TABLES: AlignedP2Tables = AlignedP2Tables({
     let mut tables = [[0u64; 512]; 8];
@@ -106,22 +111,19 @@ pub static mut P2_TABLES: AlignedP2Tables = AlignedP2Tables({
     tables
 });
 
-#[used]
 #[unsafe(no_mangle)]
 pub static mut P3_TABLE: AlignedPageTable = AlignedPageTable([0; 512]);
 
-#[used]
 #[unsafe(no_mangle)]
 pub static mut P4_TABLE: AlignedPageTable = AlignedPageTable([0; 512]);
 
 #[repr(align(16))]
+#[allow(dead_code)]
 pub struct BootStack([u8; 65536]);
 
-#[used]
 #[unsafe(no_mangle)]
 pub static mut BOOT_STACK: BootStack = BootStack([0; 65536]);
 
-#[inline(never)]
 fn halt() -> ! {
     loop {
         x86_64::instructions::hlt();

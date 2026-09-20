@@ -1,9 +1,9 @@
-const KEYBOARD_VECTOR: u8 = 33;
-const LAPIC_DEFAULT: usize = 0xFEE0_0000;
+use super::super::consts::KEYBOARD_VECTOR;
+use super::lapic;
 
-struct IoApic {
-    address: usize,
-    gsi_base: u32,
+pub(super) struct IoApic {
+    pub(super) address: usize,
+    pub(super) gsi_base: u32,
 }
 
 unsafe fn read_u8(addr: usize) -> u8 {
@@ -21,9 +21,8 @@ unsafe fn ioapic_write(base: usize, reg: u8, value: u32) {
     }
 }
 
-unsafe fn find_madt(root: usize) -> usize {
+pub(super) unsafe fn find_madt(root: usize) -> usize {
     let signature = unsafe { core::slice::from_raw_parts(root as *const u8, 4) };
-
     let entry_size = if signature == b"XSDT" { 8 } else { 4 };
 
     let length = unsafe { read_u32(root + 4) } as usize;
@@ -38,7 +37,6 @@ unsafe fn find_madt(root: usize) -> usize {
         };
 
         let signature = unsafe { core::slice::from_raw_parts(table as *const u8, 4) };
-
         if signature == b"APIC" {
             return table;
         }
@@ -49,7 +47,7 @@ unsafe fn find_madt(root: usize) -> usize {
     panic!("No MADT");
 }
 
-unsafe fn parse_madt(madt: usize) -> (IoApic, u32) {
+pub(super) unsafe fn parse_madt(madt: usize) -> (IoApic, u32) {
     let length = unsafe { read_u32(madt + 4) } as usize;
 
     let mut ioapic = None;
@@ -71,21 +69,17 @@ unsafe fn parse_madt(madt: usize) -> (IoApic, u32) {
             1 => {
                 let address = unsafe { read_u32(offset + 4) } as usize;
                 let gsi_base = unsafe { read_u32(offset + 8) };
-
                 ioapic = Some(IoApic { address, gsi_base });
             }
-
             // Interrupt Source Override
             2 => {
                 let bus = unsafe { read_u8(offset + 2) };
                 let source = unsafe { read_u8(offset + 3) };
                 let gsi = unsafe { read_u32(offset + 4) };
-
-                if bus == 0 && source == 1 {
+                if bus == 0 && source == 1 { // legacy keyboard IRQ
                     keyboard_gsi = gsi;
                 }
             }
-
             _ => {}
         }
 
@@ -95,63 +89,20 @@ unsafe fn parse_madt(madt: usize) -> (IoApic, u32) {
     (ioapic.expect("No I/O APIC"), keyboard_gsi)
 }
 
-unsafe fn init_lapic() {
-    let svr = (LAPIC_DEFAULT + 0xF0) as *mut u32;
-
-    let value = unsafe { core::ptr::read_volatile(svr) };
-
-    unsafe {
-        core::ptr::write_volatile(svr, value | 0x100 | 0xFF);
-    }
-}
-
-unsafe fn init_ioapic(ioapic: IoApic, keyboard_gsi: u32) {
+pub(super) unsafe fn init(ioapic: IoApic, keyboard_gsi: u32) {
     let index = keyboard_gsi - ioapic.gsi_base;
-
+    // calculates the low and high register offsets to setup I/O APIC redirection table entry corresponding to the keyboard GSI using its index
+    // which is alo then calculated using keyboard gsi parsed from madt and gsi base of the I/O APIC.
+    // demonic level of confusion caused by legacy stuff once again
     let low = 0x10 + index * 2;
     let high = low + 1;
 
-    let lapic_id = unsafe { core::ptr::read_volatile((LAPIC_DEFAULT + 0x20) as *const u32) } >> 24;
+    let lapic_id = unsafe { lapic::id() };
 
     unsafe {
         ioapic_write(ioapic.address, high as u8, lapic_id << 24);
     }
-
     unsafe {
         ioapic_write(ioapic.address, low as u8, KEYBOARD_VECTOR as u32);
-    }
-}
-
-fn disable_legacy_pic() {
-    // 0x21/0xA1 are I/O *ports*, not MMIO addresses: they must be written
-    // with `out`, not with a plain memory store. A store to address 0x21
-    // would just corrupt low RAM (real-mode IVT) and leave the PIC live,
-    // so its timer/keyboard IRQs would keep firing on vectors that have no
-    // IDT entry -> #NP/#GP -> double fault.
-    use x86_64::instructions::port::Port;
-    unsafe {
-        Port::new(0x21).write(0xFFu8);
-        Port::new(0xA1).write(0xFFu8);
-    }
-}
-
-pub unsafe fn init(acpi_root_addr: usize) {
-    let madt = unsafe { find_madt(acpi_root_addr) };
-
-    let (ioapic, keyboard_gsi) = unsafe { parse_madt(madt) };
-
-    unsafe {
-        init_lapic();
-    }
-    unsafe {
-        init_ioapic(ioapic, keyboard_gsi);
-    }
-
-    disable_legacy_pic();
-}
-
-pub unsafe fn eoi() {
-    unsafe {
-        core::ptr::write_volatile((LAPIC_DEFAULT + 0xB0) as *mut u32, 0);
     }
 }

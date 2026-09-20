@@ -21,12 +21,15 @@ fn kernel_range() -> (u64, u64) {
 
 fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end: u64) -> bool {
     let frame_end = addr + 4096;
+    // 1 mib range is reserved for firmware
     if addr < 0x10_0000 {
         return true;
     }
+    // kernel range is reserved
     if addr < kend && frame_end > kstart {
         return true;
     }
+    // multiboot2 boot info range is reserved
     if addr < mbi_end && frame_end > mbi_start {
         return true;
     }
@@ -38,16 +41,6 @@ fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end:
 /// - the kernel ELF itself (kernel_start..kernel_end)
 /// - the Multiboot2 boot information (mbi_start..mbi_end)
 /// - low memory below 1 MiB (BIOS / real-mode / VGA hole)
-///
-/// Without this filtering the high-memory mappings (heap at
-/// 0x4444_4444_0000, framebuffer at 0x5555_5555_0000) allocate page-table
-/// frames from inside the kernel or the MBI and corrupt them. That shows
-/// up as page faults, heap corruption, or boot-allocator panics
-/// ("High memory allocator: Out of memory" style failures when the map is
-/// consumed by overlapping allocations).
-///
-/// NOTE: this must not use the heap itself (no Vec/Box) because it runs
-/// before `init_heap`. It is a simple O(n) cursor over the memory map.
 pub struct Multiboot2FrameAllocator<'a> {
     areas: &'a [MemoryArea],
     area_idx: usize,

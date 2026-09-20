@@ -5,6 +5,7 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable};
 use x86_64::structures::tss::TaskStateSegment;
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
+// 20 KiB stacks
 lazy_static! {
     static ref TSS: TaskStateSegment = {
         let mut tss = TaskStateSegment::new();
@@ -46,12 +47,7 @@ pub fn init() {
     GDT.0.load();
     unsafe {
         CS::set_reg(GDT.1.code_selector);
-        // boot.s left DS/ES/FS/GS/SS pointing at selector 0x10, which in
-        // this GDT is the TSS descriptor. In 64-bit mode every interrupt
-        // pushes SS:RSP and every iretq restores it, so the first iretq
-        // would try to load SS with a system descriptor -> #GP(0x10).
-        // Null data segments are valid in 64-bit mode.
-        DS::set_reg(SegmentSelector(0));
+        DS::set_reg(SegmentSelector(0)); // unused stuff
         ES::set_reg(SegmentSelector(0));
         FS::set_reg(SegmentSelector(0));
         GS::set_reg(SegmentSelector(0));
