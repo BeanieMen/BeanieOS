@@ -66,6 +66,19 @@
         </a>
         <p>This post introduces <i>paging</i>, a very common memory management scheme that will also use for our operating system. It explains why memory isolation is needed, how <i>segmentation</i> works, what <i>virtual memory</i> is, and how paging solves memory framentation issues. 
         It also explores the layout of multilevel page tables on the x84_ 64 architecture. <a href="paging-introduction.html" class="read-more">read more >></a></p>
+
+        <a href="paging-implementation.html">
+            <h2>Paging Implementation</h2>
+        </a>
+        <p>This post shows how to implement paging support in our kernel. It first explores different techniques to make the physical page table frames accessible to the kernel and discusses their respective advantages and drawbacks. 
+            It then implements address translation function and a function to create a new mapping. <a href="paging-implementation.html" class="read-more">read more >></a></p>
+
+        <a href="heap-allocation.html">
+            <h2>Heap Allocation</h2>
+        </a>
+        <p>This post adds support for heap allocation to our kernel. First, it gives an introduction to dynamic memory and shows how the borrow checker prevents common allocation errors. It then implements the basic allocation interface of Rust, creates a heap memory region, and sets up an allocator crate. 
+        At the end of this post, all the allocation and collection types of the built-in <code>alloc</code> crate will be available to our kernel. <a href="heap-allocation.html" class="read-more">read more>></a>
+        </p>
     </div>
 </body>
 </html>
