@@ -79,6 +79,13 @@
         <p>This post adds support for heap allocation to our kernel. First, it gives an introduction to dynamic memory and shows how the borrow checker prevents common allocation errors. It then implements the basic allocation interface of Rust, creates a heap memory region, and sets up an allocator crate. 
         At the end of this post, all the allocation and collection types of the built-in <code>alloc</code> crate will be available to our kernel. <a href="heap-allocation.html" class="read-more">read more>></a>
         </p>
+
+        <a href="allocator-designs.html">
+            <h2>Allocator Designs</h2>
+        </a>
+        <p>This post explains how to implement heap allocators from scratch. It presents and discusses different allocator designs, including bump allocation, linked list allocation and fixed-size block allocation. 
+            For each of th three designs, we will create a basic implementation that can be used for our kernel. <a href="allocator-designs.html" class="read-more">read more>></a>
+        </p>
     </div>
 </body>
 </html>
