@@ -31,12 +31,20 @@
         <p>The <a href="https://en.wikipedia.org/wiki/VGA_text_mode">VGA text mode</a> is a simple way to print text to the screen. 
             In this post, we create an interface that makes its usage safe and simple by encapsulating all unsafety in a separate module. 
         We also  implement support for Rust's <a href="https://doc.rust-lang.org/std/fmt/#related-macros">formatting macros.</a> <a href="vga-text-mode.html" class="read-more">read more >></a></p>
+
+        <a href="testing.html">
+            <h2>Testing</h2>
+        </a>
+        <p>This post explores unit integration testing in <code>no_std</code> executables. We will use Rust's support for custom test frameworks to execture test functions inside our kernel. 
+        To report the results out of QEMU, we will use different features of QEMU and the <code>bootimage</code> tool. <a href="testing.html" class="read-more">read more >></a></p>
     </div>
 
-    <a href="testing.html">
-        <h2>Testing</h2>
-    </a>
-    <p>This post explores unit integration testing in <code>no_std</code> executables. We will use Rust's support for custom test frameworks to execture test functions inside our kernel. 
-    To report the results out of QEMU, we will use different features of QEMU and the <code>bootimage</code> tool. <a href="testing.html" class="read-more">read more >></a></p>
+    <div class="post-container interrupts">
+        <a href="cpu-exceptions.html">
+            <h2>CPU Exceptions</h2>
+        </a>
+        <p>CPU exceptions occur in various erroneus situations, for example, when accessing an invalid memory address or when dividing by zero. To react to them, we have to set up an <i>interrupt descripter table</i> that provides handler functions. 
+        At the end of this post, our kernel will be able to catch <a href="https://wiki.osdev.org/Exceptions#Breakpoint">breakpoint exceptions</a> and resume normal execution afterward. <a href="cpu-exceptions" class="read-more">read more >></a></p>
+    </div>
 </body>
 </html>
