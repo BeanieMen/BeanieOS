@@ -2,72 +2,95 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
-use alloc::{boxed::Box, rc::Rc, vec, vec::Vec};
 use core::panic::PanicInfo;
-use x86_64::{
-    VirtAddr,
-    structures::paging::{Page, PageTable, Translate},
-};
-mod allocator;
-mod gdt;
-mod interrupts;
-mod mem;
-mod memory;
-mod vga_buffer;
+
+use multiboot2::BootInformation;
+use x86_64::VirtAddr;
+
+use crate::{graphics::framebuffer::WRITER, task::executor};
 
 extern crate alloc;
 
-entry_point!(kernel_main);
+mod arch;
+mod graphics;
+mod mem;
+mod memory;
+mod task;
 
-fn kernel_main(boot_info: &'static BootInfo) -> ! {
-    println!("Hello World{}", "!");
-    init();
+fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -> ! {
+    init(&boot_info, mbi_addr, mbi_size);
 
-    let physical_memory_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    let mut mapper = unsafe { memory::init(physical_memory_offset) };
-    let mut frame_allocator =
-        unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_map) };
-    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
+    println!("BeanieOS");
+    println!("heap ready");
+    println!("framebuffer ready");
 
-    
-    let heap_value = Box::new(41);
-    println!("heap_value at {:p}", heap_value);
-
-    // create a dynamically sized vector
-    let mut vec = Vec::new();
-    for i in 0..500 {
-        vec.push(i);
-    }
-    println!("vec at {:p}", vec.as_slice());
-
-    let reference_counted = Rc::new(vec![1, 2, 3]);
-    let cloned_reference = reference_counted.clone();
-    println!(
-        "current reference count is {}",
-        Rc::strong_count(&cloned_reference)
+    WRITER.lock().fill_rect(
+        100,
+        100,
+        50,
+        50,
+        crate::graphics::framebuffer::Color::Red.to_rgb(),
     );
-    core::mem::drop(reference_counted);
-    println!(
-        "reference count is {} now",
-        Rc::strong_count(&cloned_reference)
+    let mut executor = executor::Executor::new();
+    executor.spawn(executor::Task::new(testlol()));
+    executor.spawn(executor::Task::new(task::keyboard::print_keypresses()));
+    executor.run();
+}
+
+pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
+    let memory_map = boot_info
+        .memory_map_tag()
+        .expect("No Multiboot2 memory map");
+
+    let fb_tag = match boot_info.framebuffer_tag() {
+        Some(Ok(tag)) => tag,
+        Some(Err(_)) => panic!("Invalid Multiboot2 framebuffer"),
+        None => panic!("No Multiboot2 framebuffer"),
+    };
+
+    let mut frame_alloc = unsafe {
+        memory::allocator::Multiboot2FrameAllocator::init(
+            memory_map,
+            mbi_addr as u64,
+            mbi_addr as u64 + mbi_size as u64,
+        )
+    };
+
+    let mut mapper = unsafe { memory::allocator::init(VirtAddr::new(0)) };
+
+    let acpi_root_addr = if let Some(rsdp) = boot_info.rsdp_v2_tag() {
+        rsdp.xsdt_address()
+    } else if let Some(rsdp) = boot_info.rsdp_v1_tag() {
+        rsdp.rsdt_address()
+    } else {
+        panic!("No ACPI RSDP");
+    };
+
+    memory::heap::init_heap(&mut mapper, &mut frame_alloc).expect("heap initialization failed");
+
+    graphics::framebuffer::init_framebuffer(
+        fb_tag.address(),
+        fb_tag.width(),
+        fb_tag.height(),
+        fb_tag.pitch(),
+        fb_tag.bpp(),
     );
+
+    arch::gdt::init();
+    arch::interrupts::init_idt(acpi_root_addr);
+
+    x86_64::instructions::interrupts::enable();
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    println!("{}", info);
 
     loop {
         x86_64::instructions::hlt();
     }
 }
 
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    println!("{}", info);
-    loop {}
-}
-
-pub fn init() {
-    gdt::init();
-    interrupts::init_idt();
-    unsafe {
-        interrupts::PICS.lock().initialize();
-    }
-    x86_64::instructions::interrupts::enable();
+pub async fn testlol() {
+    println!("testlol");
 }

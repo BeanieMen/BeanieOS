@@ -1,21 +1,22 @@
-.PHONY: setup kernel boot bootloader-image kernel-image iso run-bootloader run clean
+.PHONY: all setup kernel boot limine disk run clean fmt fmt-check clippy lint check
 
-KERNEL_TARGET := x86_64-unknown-none
-BOOT_TARGET := x86_64-unknown-uefi
+KERNEL_TARGET := x86_64.json
+KERNEL := target/x86_64/debug/beanieos
 
-KERNEL := target/$(KERNEL_TARGET)/debug/beanieos
-BOOTLOADER := target/$(BOOT_TARGET)/debug/bootloader.efi
+BOOT_OBJ := target/boot.o
 
-BOOTLOADER_IMG := target/bootloader.img
-KERNEL_IMG := target/beanieos.img
+LIMINE_DIR := limine
+LIMINE_EFI := $(LIMINE_DIR)/BOOTX64.EFI
+
+OUT := out
+
+DISK := $(OUT)/beanieos.img
+ESP_OFFSET := 1048576
 
 OVMF_CODE := OVMF_CODE.4m.fd
 OVMF_VARS := OVMF_VARS.4m.fd
-OVMF_RUN_VARS := target/OVMF_VARS.fd
 
-EFI_DIR := target/efi/EFI/BOOT
-EFI_BOOT := $(EFI_DIR)/BOOTX64.EFI
-
+all: $(DISK)
 
 setup:
 	rustup default stable
@@ -23,77 +24,84 @@ setup:
 	rustup +nightly component add llvm-tools-preview
 	yay -S --needed qemu-system-x86 qemu-desktop dosfstools mtools parted
 
+boot: $(BOOT_OBJ)
 
-kernel:
+$(BOOT_OBJ): src/arch/boot.s
+	mkdir -p target
+	as --64 src/arch/boot.s -o $(BOOT_OBJ)
+
+kernel: boot linker.ld
+	touch src/main.rs
+	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
 	cargo +nightly build \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
-		--target ./x86_64.json
+		--target $(KERNEL_TARGET)
+	llvm-strip --strip-debug $(KERNEL) -o $(KERNEL).stripped
 
+disk: $(DISK)
 
-boot:
-	cargo build \
-		--manifest-path bootloader/Cargo.toml \
-		--target $(BOOT_TARGET)
+$(DISK): kernel limine
+	mkdir -p $(OUT)
 
+	rm -f $(DISK)
 
-bootloader-image: boot
-	rm -f $(BOOTLOADER_IMG)
+	truncate -s 128M $(DISK)
 
-	truncate -s 64M $(BOOTLOADER_IMG)
-	mkfs.fat -F 32 $(BOOTLOADER_IMG)
+	parted -s $(DISK) mklabel gpt
+	parted -s $(DISK) mkpart ESP fat32 1MiB 100%
+	parted -s $(DISK) set 1 esp on
 
-	mmd -i $(BOOTLOADER_IMG) ::EFI
-	mmd -i $(BOOTLOADER_IMG) ::EFI/BOOT
+	mkfs.fat -F 32 --offset 2048 $(DISK)
 
-	mcopy -i $(BOOTLOADER_IMG) \
-		$(BOOTLOADER) \
+	mmd -i $(DISK)@@$(ESP_OFFSET) ::EFI
+	mmd -i $(DISK)@@$(ESP_OFFSET) ::EFI/BOOT
+
+	mcopy -i $(DISK)@@$(ESP_OFFSET) \
+		$(LIMINE_EFI) \
 		::EFI/BOOT/BOOTX64.EFI
 
-
-iso: boot kernel
-	rm -f $(KERNEL_IMG)
-
-	truncate -s 64M $(KERNEL_IMG)
-	mkfs.fat -F 32 $(KERNEL_IMG)
-
-	mmd -i $(KERNEL_IMG) ::EFI
-	mmd -i $(KERNEL_IMG) ::EFI/BOOT
-
-	mcopy -i $(KERNEL_IMG) \
-		$(BOOTLOADER) \
-		::EFI/BOOT/BOOTX64.EFI
-
-	mcopy -i $(KERNEL_IMG) \
-		$(KERNEL) \
+	mcopy -i $(DISK)@@$(ESP_OFFSET) \
+		$(KERNEL).stripped \
 		::kernel
 
+	mcopy -i $(DISK)@@$(ESP_OFFSET) \
+		${LIMINE_DIR}/limine.conf \
+		::limine.conf
 
-run-bootloader: bootloader-image
-	mkdir -p target
-	cp $(OVMF_VARS) $(OVMF_RUN_VARS)
-
-	qemu-system-x86_64 \
-		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
-		-drive if=pflash,format=raw,file=$(OVMF_RUN_VARS) \
-		-drive format=raw,file=$(BOOTLOADER_IMG) \
-		-display sdl
-
-
-run: iso
-	mkdir -p target
-	cp $(OVMF_VARS) $(OVMF_RUN_VARS)
+run: $(DISK)
+	mkdir -p $(OUT)
 
 	qemu-system-x86_64 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
-		-drive if=pflash,format=raw,file=$(OVMF_RUN_VARS) \
-		-drive format=raw,file=$(KERNEL_IMG) \
+		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
+		-drive format=raw,file=$(DISK) \
+		-m 512 \
 		-display sdl
-
 
 clean:
 	cargo clean
-	rm -f $(BOOTLOADER_IMG)
-	rm -f $(KERNEL_IMG)
-	rm -f $(OVMF_RUN_VARS)
-	rm -rf target/efi
+	rm -rf $(OUT)
+
+fmt:
+	cargo +nightly fmt --all
+
+fmt-check:
+	cargo +nightly fmt --all -- --check
+
+clippy: boot
+	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
+	cargo +nightly clippy \
+		-Zbuild-std=core,alloc \
+		-Zjson-target-spec \
+		--target $(KERNEL_TARGET) \
+		--all-targets -- -D warnings
+
+lint: fmt-check clippy
+
+check: boot
+	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
+	cargo +nightly check \
+		-Zbuild-std=core,alloc \
+		-Zjson-target-spec \
+		--target $(KERNEL_TARGET)

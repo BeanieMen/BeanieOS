@@ -12,12 +12,40 @@ pub unsafe extern "C" fn memset(dest: *mut c_void, value: i32, count: usize) -> 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, count: usize) -> *mut c_void {
+pub unsafe extern "C" fn memcpy(
+    dest: *mut c_void,
+    src: *const c_void,
+    count: usize,
+) -> *mut c_void {
     let d = dest as *mut u8;
     let s = src as *const u8;
     for i in 0..count {
         unsafe {
             d.add(i).write(s.add(i).read());
+        }
+    }
+    dest
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn memmove(
+    dest: *mut c_void,
+    src: *const c_void,
+    count: usize,
+) -> *mut c_void {
+    let d = dest as *mut u8;
+    let s = src as *const u8;
+    if d as usize <= s as usize {
+        for i in 0..count {
+            unsafe {
+                d.add(i).write(s.add(i).read());
+            }
+        }
+    } else {
+        for i in (0..count).rev() {
+            unsafe {
+                d.add(i).write(s.add(i).read());
+            }
         }
     }
     dest

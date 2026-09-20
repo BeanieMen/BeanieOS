@@ -13,8 +13,7 @@ lazy_static! {
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
 
             let stack_start = VirtAddr::from_ptr(&raw const STACK);
-            let stack_end = stack_start + STACK_SIZE as u64;
-            stack_end
+            stack_start + STACK_SIZE as u64
         };
         tss
     };
@@ -41,12 +40,22 @@ struct Selectors {
 }
 
 pub fn init() {
-    use x86_64::instructions::segmentation::{CS, Segment};
+    use x86_64::instructions::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
     use x86_64::instructions::tables::load_tss;
 
     GDT.0.load();
     unsafe {
         CS::set_reg(GDT.1.code_selector);
+        // boot.s left DS/ES/FS/GS/SS pointing at selector 0x10, which in
+        // this GDT is the TSS descriptor. In 64-bit mode every interrupt
+        // pushes SS:RSP and every iretq restores it, so the first iretq
+        // would try to load SS with a system descriptor -> #GP(0x10).
+        // Null data segments are valid in 64-bit mode.
+        DS::set_reg(SegmentSelector(0));
+        ES::set_reg(SegmentSelector(0));
+        FS::set_reg(SegmentSelector(0));
+        GS::set_reg(SegmentSelector(0));
+        SS::set_reg(SegmentSelector(0));
         load_tss(GDT.1.tss_selector);
     }
 }

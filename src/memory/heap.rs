@@ -1,11 +1,11 @@
 use linked_list_allocator::LockedHeap;
 use x86_64::VirtAddr;
+use x86_64::structures::paging::FrameAllocator;
+use x86_64::structures::paging::Mapper;
 use x86_64::structures::paging::Page;
 use x86_64::structures::paging::PageTableFlags;
+use x86_64::structures::paging::Size4KiB;
 use x86_64::structures::paging::mapper::MapToError;
- use x86_64::structures::paging::FrameAllocator;
- use x86_64::structures::paging::Size4KiB;
- use x86_64::structures::paging::Mapper;
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 100 * 1024; // 100 KiB
