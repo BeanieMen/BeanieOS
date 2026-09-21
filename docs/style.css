@@ -81,13 +81,13 @@ h1{
     position: absolute;
     width: 30vw;
     top: 20vh;
-    left: 53vw;
+    left: 52vw;
 }
 
 #logo{
     position: absolute;
     top: 15vh;
-    left: 17vw;
+    left: 18vw;
     width: 30vw;
 }
 
@@ -98,4 +98,32 @@ h1{
 #download{
     left: 53vw;
     width: 25vw;
+    border-radius: 14px;
+}
+
+#corner-design{
+    position: absolute;
+    height: 50vh;
+    top: 40vh;
+    left: 4vw;
+}
+
+#right-corner-design{
+    position: absolute;
+    height: 50vh;
+    top: 40vh;
+    right: 4vw;
+}
+
+#leaves{
+    position: absolute;
+    height: 36vh;
+
+}
+
+#leaves2{
+    position: absolute;
+    height: 36vh;
+    right: 0;
+    top: 60;
 }
