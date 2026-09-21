@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BeanieOS</title>
+</head>
+<body>
+    <h1>Writing an OS in Rust</h1>
+    <p>This blog series creates a small operation system in the <a href="https://rust-lang.org/">Rust programming language</a>. 
+    Each post is a small tutorial that includes all needed code, so you can follow along if you like.</p>
+
+    <div class="post-container bare-bones">
+        <a href="free-standing-rust-binary.html">
+            <h2>A Free Standing Rust Binary</h2>
+        </a>
+        <p>The first step in creating our own operating system is to create a Rust executable that does not link the standard library. 
+            This makes it impossible to run rust code on the <a href="https://en.wikipedia.org/wiki/Bare_machine">bare metal</a> 
+            without an underlying operating system. <a href="free-standing-rust-binary.html" class="read-more">read more >></a>
+        </p>
+
+        <a href="minimal-rust-kernel.html">
+            <h2>A Minimal Rust Kernel</h2>
+        </a>
+        <p>In this post, we create a minimal 64-bit Rust kernel for the x84 architecture. We build upon the <a href="free-standing-rust-binary.html">freestanding Rust binary</a> 
+        from the previous post to create a bootable disk image that prints something to the screen. <a href="minimal-rust-kernel.html" class="read-more">read more >></a></p>
+
+        <a href="vga-text-mode.html">
+            <h2>VGA Text Mode</h2>
+        </a>
+        <p>The <a href="https://en.wikipedia.org/wiki/VGA_text_mode">VGA text mode</a> is a simple way to print text to the screen. 
+            In this post, we create an interface that makes its usage safe and simple by encapsulating all unsafety in a separate module. 
+        We also  implement support for Rust's <a href="https://doc.rust-lang.org/std/fmt/#related-macros">formatting macros.</a> <a href="vga-text-mode.html" class="read-more">read more >></a></p>
+
+        <a href="testing.html">
+            <h2>Testing</h2>
+        </a>
+        <p>This post explores unit integration testing in <code>no_std</code> executables. We will use Rust's support for custom test frameworks to execture test functions inside our kernel. 
+        To report the results out of QEMU, we will use different features of QEMU and the <code>bootimage</code> tool. <a href="testing.html" class="read-more">read more >></a></p>
+    </div>
+
+    <div class="post-container interrupts">
+        <a href="cpu-exceptions.html">
+            <h2>CPU Exceptions</h2>
+        </a>
+        <p>CPU exceptions occur in various erroneus situations, for example, when accessing an invalid memory address or when dividing by zero. To react to them, we have to set up an <i>interrupt descripter table</i> that provides handler functions. 
+        At the end of this post, our kernel will be able to catch <a href="https://wiki.osdev.org/Exceptions#Breakpoint">breakpoint exceptions</a> and resume normal execution afterward. <a href="cpu-exceptions" class="read-more">read more >></a></p>
+
+        <a href="double-faults.html">
+            <h2>Double Faults</h2>
+        </a>
+        <p>This post explores the double fault exceptions in detail, which occurs when the CPU fails to invoke an exceptions handler. By handling this this exception, we avoid fatal <i>triple faults</i> 
+        that cause a system reset. To prevent triple faults in all cases, we also set up an <i>Interrupt Stack Table</i> to catch double faults on a separate kernel stack. <a href="double-faults.html" class="read-more">read more >></a></p>
+
+        <a href="hardware-interrupts.html">
+            <h2>Hardware Interrupts</h2>
+        </a>
+        <p>In this post, we set up the programmable interrupt controller to correctly forward hardware interrupts to the CPU. To handle these interrupts, we add new entries to our interruptor table, just like we did for our exception handlers. 
+            We will learn how to get periodic timer interrupts and how to get input from the keyboard. <a href="hardware-interrupts.html" class="read-more">read more >></a>
+        </p>
+    </div>
+
+    <div class="post-container memory-management">
+        <a href="paging-introduction.html">
+            <h2>Introduction to Paging</h2>
+        </a>
+        <p>This post introduces <i>paging</i>, a very common memory management scheme that will also use for our operating system. It explains why memory isolation is needed, how <i>segmentation</i> works, what <i>virtual memory</i> is, and how paging solves memory framentation issues. 
+        It also explores the layout of multilevel page tables on the x84_ 64 architecture. <a href="paging-introduction.html" class="read-more">read more >></a></p>
+
+        <a href="paging-implementation.html">
+            <h2>Paging Implementation</h2>
+        </a>
+        <p>This post shows how to implement paging support in our kernel. It first explores different techniques to make the physical page table frames accessible to the kernel and discusses their respective advantages and drawbacks. 
+            It then implements address translation function and a function to create a new mapping. <a href="paging-implementation.html" class="read-more">read more >></a></p>
+
+        <a href="heap-allocation.html">
+            <h2>Heap Allocation</h2>
+        </a>
+        <p>This post adds support for heap allocation to our kernel. First, it gives an introduction to dynamic memory and shows how the borrow checker prevents common allocation errors. It then implements the basic allocation interface of Rust, creates a heap memory region, and sets up an allocator crate. 
+        At the end of this post, all the allocation and collection types of the built-in <code>alloc</code> crate will be available to our kernel. <a href="heap-allocation.html" class="read-more">read more>></a>
+        </p>
+
+        <a href="allocator-designs.html">
+            <h2>Allocator Designs</h2>
+        </a>
+        <p>This post explains how to implement heap allocators from scratch. It presents and discusses different allocator designs, including bump allocation, linked list allocation and fixed-size block allocation. 
+            For each of th three designs, we will create a basic implementation that can be used for our kernel. <a href="allocator-designs.html" class="read-more">read more>></a>
+        </p>
+    </div>
+
+    <div class="post-container multitasking">
+        <a href="async-await.html">
+            <h2>Async/Await</h2>
+        </a>
+        <p>In this post, we explore <i>cooperative multitasking</i> and the <i>async/await</i> feature of Rust. We take a detailed look at how async/await works in Rust, including the design of the <code> Future </code> trait, the state machine transformation, and <i>pinning</i>. 
+        We then add basic support for async/await to our kernel by creating  an asynchronous keyboard task and a basic executor. <a href="async-await.html" class="read-more">read more >></a></p>
+    </div>
+</body>
+</html>
