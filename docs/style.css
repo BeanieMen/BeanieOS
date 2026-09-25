@@ -1,63 +1,68 @@
-.hero{
-    height: 100vh;
+body{margin: 0;
+
+    font-family: "Roboto", sans-serif;
+    font-optical-sizing: auto;
+    font-weight: 300;
+    font-style: normal;
+    font-variation-settings:
+        "wdth" 100;
 }
 
-.hero-content{
-    display: flex;
-    height: 30vh;
+main{
+    margin-left: 60px;
+    margin-right: 60px;
 }
 
-.hero-text{
+.nav-bar{
+    height: 10vh;
+    margin: 0 !important;
+    background-color: rgb(44, 42, 42);
+
     display: flex;
-    flex-direction: column;
+    gap: 800px;
+
+    padding-left: 1.5vw;
+    padding-right: 1.5vw;
+
     align-items: center;
-    gap: 2vw;
-    position: absolute;
-    width: 30vw;
-    top: 20vh;
-    left: 52vw;
 }
 
-#logo{
-    position: absolute;
-    top: 15vh;
-    left: 18vw;
-    width: 30vw;
+.nav-bar .title{
+    display: flex;
+    gap: 1px;
+    text-decoration: none;
+    color: white;
+    align-items: center;
 }
 
-#title{
-    font-size: 5vw;
+.nav-bar h1{
+    font-size: 2vw;
 }
 
-#download{
-    left: 53vw;
-    width: 25vw;
-    border-radius: 14px;
+.nav-bar img{
+    height: 3.2vw;
+    width: auto;
 }
 
-#corner-design{
-    position: absolute;
-    height: 50vh;
-    top: 40vh;
-    left: 4vw;
+.nav-links{
+    display: flex;
+    gap: 100px;
 }
 
-#right-corner-design{
-    position: absolute;
-    height: 50vh;
-    top: 40vh;
-    right: 4vw;
+.nav-links a{
+    color: rgba(255, 255, 255, 0.782);
+    text-decoration: none;
+    font-size: 17px;
 }
 
-#leaves{
-    position: absolute;
-    height: 36vh;
-
+.nav-links a:hover{
+    color: white;
+    text-decoration: underline;
 }
 
-#leaves2{
-    position: absolute;
-    height: 36vh;
-    right: 0;
-    top: 60;
+
+section{
+    margin-top: 6vh;
+    margin-bottom: 6vh;
 }
+
