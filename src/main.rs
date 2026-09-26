@@ -31,6 +31,19 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         crate::graphics::framebuffer::Color::Red.to_rgb(),
     );
 
+    for device in arch::pci::scan() {
+        println!(
+            "PCI {:02x}:{:02x}.{} {:04x}:{:04x} class={:02x} subclass={:02x} interface={:02x}",
+            device.address.bus(),
+            device.address.device(),
+            device.address.function(),
+            device.vendor_id,
+            device.device_id,
+            device.class,
+            device.subclass,
+            device.interface,
+        );
+    }
 
     loop {
         x86_64::instructions::hlt();

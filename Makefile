@@ -1,4 +1,4 @@
-.PHONY: all setup kernel boot limine disk run clean fmt fmt-check clippy lint check
+.PHONY: all setup kernel boot limine disk run clean fmt fmt-check clippy lint check file
 
 KERNEL_TARGET := x86_64.json
 KERNEL := target/x86_64/release/beanieos
@@ -12,7 +12,9 @@ OUT := out
 
 DISK := $(OUT)/beanieos.img
 TEST_FILE := $(OUT)/test.txt
+
 ESP_OFFSET := 1048576
+ROOT_OFFSET := 33554432
 
 OVMF_CODE := OVMF_CODE.4m.fd
 OVMF_VARS := OVMF_VARS.4m.fd
@@ -32,6 +34,7 @@ $(BOOT_OBJ): src/arch/boot.s
 	as --64 src/arch/boot.s -o $(BOOT_OBJ)
 
 file:
+	mkdir -p $(OUT)
 	printf "This is a test file for BeanieOS.\n" > $(TEST_FILE)
 
 kernel: boot linker.ld
@@ -53,10 +56,14 @@ $(DISK): kernel limine file
 	truncate -s 128M $(DISK)
 
 	parted -s $(DISK) mklabel gpt
-	parted -s $(DISK) mkpart ESP fat32 1MiB 100%
+
+	parted -s $(DISK) mkpart ESP fat32 1MiB 32MiB
 	parted -s $(DISK) set 1 esp on
 
+	parted -s $(DISK) mkpart BEANIEOS fat32 32MiB 100%
+
 	mkfs.fat -F 32 --offset 2048 $(DISK)
+	mkfs.fat -F 32 --offset 65536 $(DISK)
 
 	mmd -i $(DISK)@@$(ESP_OFFSET) ::EFI
 	mmd -i $(DISK)@@$(ESP_OFFSET) ::EFI/BOOT
@@ -66,16 +73,18 @@ $(DISK): kernel limine file
 		::EFI/BOOT/BOOTX64.EFI
 
 	mcopy -i $(DISK)@@$(ESP_OFFSET) \
-		$(KERNEL).stripped \
-		::kernel
+		$(LIMINE_DIR)/limine.conf \
+		::limine.conf
 
-	mcopy -i $(DISK)@@$(ESP_OFFSET) \
+	mmd -i $(DISK)@@$(ROOT_OFFSET) ::boot
+
+	mcopy -i $(DISK)@@$(ROOT_OFFSET) \
+		$(KERNEL).stripped \
+		::boot/kernel
+
+	mcopy -i $(DISK)@@$(ROOT_OFFSET) \
 		$(TEST_FILE) \
 		::test.txt
-		
-	mcopy -i $(DISK)@@$(ESP_OFFSET) \
-		${LIMINE_DIR}/limine.conf \
-		::limine.conf
 
 run: $(DISK)
 	mkdir -p $(OUT)

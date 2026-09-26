@@ -12,6 +12,7 @@ dependencies = [
  "linked_list_allocator",
  "multiboot2",
  "pc-keyboard",
+ "pci_types",
  "spin 0.10.1",
  "x86_64",
 ]
@@ -127,6 +128,16 @@ name = "pc-keyboard"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed089a1fbffe3337a1a345501c981f1eb1e47e69de5a40e852433e12953c3174"
+
+[[package]]
+name = "pci_types"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0c2a105c657261a938ff68ee231c199a3d80eef33976004829de761ef5b1a9b"
+dependencies = [
+ "bit_field",
+ "bitflags",
+]
 
 [[package]]
 name = "proc-macro2"
