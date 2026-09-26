@@ -1,7 +1,7 @@
 .PHONY: all setup kernel boot limine disk run clean fmt fmt-check clippy lint check
 
 KERNEL_TARGET := x86_64.json
-KERNEL := target/x86_64/debug/beanieos
+KERNEL := target/x86_64/release/beanieos
 
 BOOT_OBJ := target/boot.o
 
@@ -11,6 +11,7 @@ LIMINE_EFI := $(LIMINE_DIR)/BOOTX64.EFI
 OUT := out
 
 DISK := $(OUT)/beanieos.img
+TEST_FILE := $(OUT)/test.txt
 ESP_OFFSET := 1048576
 
 OVMF_CODE := OVMF_CODE.4m.fd
@@ -30,10 +31,13 @@ $(BOOT_OBJ): src/arch/boot.s
 	mkdir -p target
 	as --64 src/arch/boot.s -o $(BOOT_OBJ)
 
+file:
+	printf "This is a test file for BeanieOS.\n" > $(TEST_FILE)
+
 kernel: boot linker.ld
 	touch src/main.rs
 	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
-	cargo +nightly build \
+	cargo +nightly build --release \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)
@@ -41,7 +45,7 @@ kernel: boot linker.ld
 
 disk: $(DISK)
 
-$(DISK): kernel limine
+$(DISK): kernel limine file
 	mkdir -p $(OUT)
 
 	rm -f $(DISK)
@@ -65,6 +69,10 @@ $(DISK): kernel limine
 		$(KERNEL).stripped \
 		::kernel
 
+	mcopy -i $(DISK)@@$(ESP_OFFSET) \
+		$(TEST_FILE) \
+		::test.txt
+		
 	mcopy -i $(DISK)@@$(ESP_OFFSET) \
 		${LIMINE_DIR}/limine.conf \
 		::limine.conf
@@ -91,7 +99,7 @@ fmt-check:
 
 clippy: boot
 	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
-	cargo +nightly clippy \
+	cargo +nightly clippy --release \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET) \
@@ -101,7 +109,7 @@ lint: fmt-check clippy
 
 check: boot
 	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
-	cargo +nightly check \
+	cargo +nightly check --release \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)

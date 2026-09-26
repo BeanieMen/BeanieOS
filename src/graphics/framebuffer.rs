@@ -162,43 +162,123 @@ impl Writer {
         }
     }
 
+    /// Physical pixel row for a logical text row. The view is rigid:
+    /// logical row r is always at pixel row r * FONT_HEIGHT, which is why
+    /// scrolling has to move pixels (see `scroll`).
+    fn row_y(&self, row: u32) -> u32 {
+        row * FONT_HEIGHT
+    }
+
+    /// True when the 32bpp fast path can draw this glyph unclipped.
+    fn glyph_fits(&self, col: u32, row: u32) -> bool {
+        match self.framebuffer {
+            Some(ref fb) if fb.bpp == 32 => {
+                let x0 = col * FONT_WIDTH;
+                let y0 = self.row_y(row);
+                x0 + FONT_WIDTH <= fb.width && y0 + FONT_HEIGHT <= fb.height
+            }
+            _ => false,
+        }
+    }
+
+    /// Row-at-a-time glyph blit. bpp, pitch and the row base pointer are
+    /// resolved once instead of once per pixel.
     fn draw_char(&mut self, col: u32, row: u32, c: u8, fg: u32, bg: u32) {
-        if self.framebuffer.is_some() {
-            let glyph_offset = (c as usize) * FONT_HEIGHT as usize;
-            let x_start = col * FONT_WIDTH;
-            let y_start = row * FONT_HEIGHT;
+        if !self.glyph_fits(col, row) {
+            return self.draw_char_generic(col, row, c, fg, bg);
+        }
 
-            for y in 0..FONT_HEIGHT {
-                let byte = FONT[glyph_offset + y as usize];
+        let Some(ref fb) = self.framebuffer else {
+            return;
+        };
+        let x0 = col * FONT_WIDTH;
+        let y0 = self.row_y(row);
+        let bpp = (fb.bpp / 8) as usize;
+        let glyph = &FONT[c as usize * FONT_HEIGHT as usize..][..FONT_HEIGHT as usize];
+        let mut base = unsafe {
+            fb.addr
+                .add(y0 as usize * fb.pitch as usize + x0 as usize * bpp)
+        };
 
-                for x in 0..FONT_WIDTH {
-                    let color = if (byte & (0x80 >> x)) != 0 { fg } else { bg };
-
-                    self.put_pixel(x_start + x, y_start + y, color);
+        for &bits in glyph {
+            let mut x = 0usize;
+            while x < FONT_WIDTH as usize {
+                if bits & (0x80 >> x) != 0 {
+                    unsafe { (base.add(x * bpp) as *mut u32).write(fg) };
+                    x += 1;
+                } else {
+                    // Walk the whole background run without re-testing the bit.
+                    while x < FONT_WIDTH as usize && bits & (0x80 >> x) == 0 {
+                        unsafe { (base.add(x * bpp) as *mut u32).write(bg) };
+                        x += 1;
+                    }
                 }
+            }
+            base = unsafe { base.add(fb.pitch as usize) };
+        }
+    }
+
+    /// Per-pixel fallback for non-32bpp depths and glyphs clipped at a
+    /// screen edge.
+    fn draw_char_generic(&mut self, col: u32, row: u32, c: u8, fg: u32, bg: u32) {
+        if self.framebuffer.is_none() {
+            return;
+        }
+        let glyph_offset = (c as usize) * FONT_HEIGHT as usize;
+        let x_start = col * FONT_WIDTH;
+        let y_start = self.row_y(row);
+
+        for y in 0..FONT_HEIGHT {
+            let byte = FONT[glyph_offset + y as usize];
+
+            for x in 0..FONT_WIDTH {
+                let color = if (byte & (0x80 >> x)) != 0 { fg } else { bg };
+
+                self.put_pixel(x_start + x, y_start + y, color);
             }
         }
     }
 
+    /// Scroll the text area up by one row.
+    ///
+    /// Only the `rows() * FONT_HEIGHT` pixel rows that actually hold text
+    /// are moved, so a framebuffer height that is not a multiple of
+    /// FONT_HEIGHT does not drag the last partial row along.
     fn scroll(&mut self) {
-        if let Some(ref fb) = self.framebuffer {
-            let bytes_per_line = fb.pitch;
-            let shift = FONT_HEIGHT * bytes_per_line;
-            let total_bytes = fb.height * bytes_per_line;
+        let Some(ref fb) = self.framebuffer else {
+            return;
+        };
+        let rows = self.rows();
+        if rows <= 1 {
+            return;
+        }
 
-            if total_bytes > shift {
-                unsafe {
-                    core::ptr::copy(
-                        fb.addr.add(shift as usize),
-                        fb.addr,
-                        (total_bytes - shift) as usize,
-                    );
+        let text_bytes = rows as usize * FONT_HEIGHT as usize * fb.pitch as usize;
+        let shift = FONT_HEIGHT as usize * fb.pitch as usize;
+        if text_bytes <= shift {
+            return;
+        }
 
-                    let bottom_start = fb.addr.add((total_bytes - shift) as usize);
+        unsafe {
+            core::ptr::copy(fb.addr.add(shift), fb.addr, text_bytes - shift);
+            core::ptr::write_bytes(fb.addr.add(text_bytes - shift), 0, shift);
+        }
+    }
 
-                    core::ptr::write_bytes(bottom_start, 0, shift as usize);
-                }
-            }
+    /// Zero one physical pixel row.
+    fn clear_row(&self, y: u32) {
+        let Some(ref fb) = self.framebuffer else {
+            return;
+        };
+        if y >= fb.height {
+            return;
+        }
+        unsafe {
+            core::ptr::write_bytes(
+                fb.addr.add(y as usize * fb.pitch as usize),
+                0,
+                fb.pitch as usize,
+            )
         }
     }
 
@@ -264,20 +344,39 @@ impl Writer {
     }
 
     #[allow(dead_code)]
-    pub fn clear(&self, color: u32) {
-        if let Some(ref fb) = self.framebuffer {
-            for y in 0..fb.height {
-                for x in 0..fb.width {
-                    self.put_pixel(x, y, color);
-                }
-            }
+    pub fn clear(&self, _color: u32) {
+        let Some(ref fb) = self.framebuffer else {
+            return;
+        };
+        for y in 0..fb.height {
+            self.clear_row(y);
         }
     }
 
     pub fn fill_rect(&self, x: u32, y: u32, width: u32, height: u32, color: u32) {
-        for dy in 0..height {
-            for dx in 0..width {
-                self.put_pixel(x + dx, y + dy, color);
+        let Some(ref fb) = self.framebuffer else {
+            return;
+        };
+        if x >= fb.width || y >= fb.height {
+            return;
+        }
+
+        let w = core::cmp::min(width, fb.width - x);
+        let h = core::cmp::min(height, fb.height - y);
+        let bpp = (fb.bpp / 8) as usize;
+
+        if bpp == 4 {
+            for dy in 0..h {
+                let off = (y + dy) as usize * fb.pitch as usize + x as usize * bpp;
+                for dx in 0..w {
+                    unsafe { (fb.addr.add(off + dx as usize * 4) as *mut u32).write(color) }
+                }
+            }
+        } else {
+            for dy in 0..h {
+                for dx in 0..w {
+                    self.put_pixel(x + dx, y + dy, color)
+                }
             }
         }
     }

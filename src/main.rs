@@ -7,11 +7,10 @@ use core::panic::PanicInfo;
 use multiboot2::BootInformation;
 use x86_64::VirtAddr;
 
-use crate::{graphics::framebuffer::WRITER, task::executor};
-
 extern crate alloc;
 
 mod arch;
+mod fs;
 mod graphics;
 mod mem;
 mod memory;
@@ -24,16 +23,22 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     println!("heap ready");
     println!("framebuffer ready");
 
-    WRITER.lock().fill_rect(
+    graphics::framebuffer::WRITER.lock().fill_rect(
         100,
         100,
         50,
         50,
         crate::graphics::framebuffer::Color::Red.to_rgb(),
     );
-    let mut executor = executor::Executor::new();
-    executor.spawn(executor::Task::new(testlol()));
-    executor.run();
+
+
+    loop {
+        x86_64::instructions::hlt();
+    }
+    // let mut executor = executor::Executor::new();
+    // executor aint needed for now
+    // executor.spawn(executor::Task::new(testlol()));
+    // executor.run();
 }
 
 pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
