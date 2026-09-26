@@ -1,5 +1,6 @@
 pub mod ioapic;
 pub mod lapic;
+pub mod madt;
 
 use super::consts::{LEGACY_PIC0_MASK, LEGACY_PIC1_MASK};
 
@@ -17,14 +18,14 @@ fn disable_legacy_pic() {
 }
 
 pub unsafe fn init(acpi_root_addr: usize) {
-    let madt = unsafe { ioapic::find_madt(acpi_root_addr) };
-    let (ioapic, keyboard_gsi) = unsafe { ioapic::parse_madt(madt) };
-
+    unsafe {
+        madt::init(acpi_root_addr);
+    }
     unsafe {
         lapic::init();
     }
     unsafe {
-        ioapic::init(ioapic, keyboard_gsi);
+        ioapic::init();
     }
 
     disable_legacy_pic();

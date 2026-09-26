@@ -54,6 +54,16 @@ make # sets up everything required
 make run # builds an image with separate esp and runs the image with qemu
 ```
 
+or alternatively you can use the img and ovmf files i provide in 
+```
+qemu-system-x86_64 \
+	-drive if=pflash,format=raw,readonly=on,file=OVMF_CODE.4m.fd \
+	-drive if=pflash,format=raw,file=OVMF_VARS.4m.fd \
+	-drive format=raw,file=beanieos.img \
+	-m 512 \
+	-display sdl
+```
+
 it might ask for installing toolchains. this project ONLY works with `cargo +nightly` so ig youre planning to run install all toolchains with cargo nightly please
 
 # Contributors
