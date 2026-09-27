@@ -147,6 +147,5 @@ pub extern "C" fn rust_entry(magic: u32, mbi_addr: u32) -> ! {
         }
     };
 
-
     kernel_main(boot_info, mbi_addr, mbi_total_size);
 }

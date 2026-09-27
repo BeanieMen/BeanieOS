@@ -79,7 +79,7 @@ impl Device {
 
         let (base, _) = self.bar5_info()?;
 
-        if base >= 8 * 1024 * 1024 * 1024 {
+        if base == 0 || base >= 8 * 1024 * 1024 * 1024 {
             return None;
         }
 

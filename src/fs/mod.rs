@@ -1,10 +1,3 @@
-//! FAT32 over the AHCI driver.
-//!
-//! The volume is discovered at runtime rather than assumed. Partition table
-//! entries are tried first, then mebibyte-aligned offsets, because a volume
-//! does not need a partition entry to be readable. Nothing here assumes a
-//! partition type, a table layout, or a particular offset.
-
 use alloc::vec::Vec;
 
 use fatfs::{FileSystem, FsOptions, IoBase, Read, Seek, Write};
@@ -13,25 +6,35 @@ use crate::arch::ahci::AhciController;
 use crate::println;
 
 const SECTOR: u64 = 512;
-const SCAN_STEP: u64 = 1024 * 1024;
+
+struct Volume {
+    first: u64,
+    sectors: u64,
+}
 
 pub struct Disk {
     controller: AhciController,
     base: u64,
+    length: u64,
     position: u64,
 }
 
 impl Disk {
-    fn new(controller: AhciController, base: u64) -> Self {
+    fn new(controller: AhciController, volume: &Volume) -> Self {
         Self {
             controller,
-            base,
+            base: volume.first,
+            length: volume.sectors * SECTOR,
             position: 0,
         }
     }
 
     fn at(&self) -> u64 {
         self.base * SECTOR + self.position
+    }
+
+    fn fits(&self, len: usize) -> bool {
+        self.position + len as u64 <= self.length
     }
 }
 
@@ -41,6 +44,10 @@ impl IoBase for Disk {
 
 impl Read for Disk {
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+        if !self.fits(buffer.len()) {
+            return Err(fatfs::Error::Io(()));
+        }
+
         let at = self.at();
         self.controller
             .read_at(at, buffer)
@@ -52,6 +59,10 @@ impl Read for Disk {
 
 impl Write for Disk {
     fn write(&mut self, buffer: &[u8]) -> Result<usize, Self::Error> {
+        if !self.fits(buffer.len()) {
+            return Err(fatfs::Error::Io(()));
+        }
+
         let at = self.at();
         self.controller
             .write_at(at, buffer)
@@ -69,11 +80,11 @@ impl Seek for Disk {
     fn seek(&mut self, from: fatfs::SeekFrom) -> Result<u64, Self::Error> {
         let target = match from {
             fatfs::SeekFrom::Start(at) => at as i64,
-            fatfs::SeekFrom::End(at) => self.controller.size() as i64 + at,
+            fatfs::SeekFrom::End(at) => self.length as i64 + at,
             fatfs::SeekFrom::Current(at) => self.position as i64 + at,
         };
 
-        if target < 0 {
+        if target < 0 || target as u64 > self.length {
             return Err(fatfs::Error::Io(()));
         }
 
@@ -82,11 +93,8 @@ impl Seek for Disk {
     }
 }
 
-/// Does this sector start a FAT volume?
-///
-/// The signature alone is not enough: sector 0 of a partitioned disk carries
-/// `0x55AA` with nothing behind it, and would be a false positive. The file
-/// system type string is what actually identifies a volume.
+/// `0x55AA` alone is a false positive: sector 0 of a partitioned disk carries
+/// it with nothing behind it. The type string is what identifies a volume.
 fn is_volume(sector: &[u8]) -> bool {
     let bytes_per_sector = u16::from_le_bytes([sector[0x0b], sector[0x0c]]);
     let signature = u16::from_le_bytes([sector[510], sector[511]]);
@@ -94,8 +102,7 @@ fn is_volume(sector: &[u8]) -> bool {
     bytes_per_sector == SECTOR as u16 && signature == 0xaa55 && &sector[0x52..0x55] == b"FAT"
 }
 
-/// Start sectors named by a partition table, if there is one.
-fn from_partition_table(disk: &mut AhciController) -> Vec<u64> {
+fn from_partition_table(disk: &mut AhciController) -> Vec<Volume> {
     let mut out = Vec::new();
     let mut header = [0u8; 512];
 
@@ -123,42 +130,26 @@ fn from_partition_table(disk: &mut AhciController) -> Vec<u64> {
         }
 
         let first = u64::from_le_bytes(entry[32..40].try_into().unwrap());
-        if first != 0 {
-            out.push(first);
+        let last = u64::from_le_bytes(entry[40..48].try_into().unwrap());
+
+        if first != 0 && last >= first {
+            out.push(Volume {
+                first,
+                sectors: last - first + 1,
+            });
         }
     }
 
     out
 }
 
-/// Every mebibyte-aligned offset in the disk.
-fn by_alignment(disk: &AhciController) -> Vec<u64> {
-    let mut out = Vec::new();
-    let mut at = SCAN_STEP;
-
-    while at < disk.size() / SECTOR {
-        out.push(at);
-        at += SCAN_STEP;
-    }
-
-    out
-}
-
-/// Find the first sector that starts a volume. Done before mounting, because
-/// mounting consumes the controller and this borrows it.
-fn find_volume(disk: &mut AhciController) -> Option<u64> {
-    let mut candidates = from_partition_table(disk);
-
-    for at in by_alignment(disk) {
-        if !candidates.contains(&at) {
-            candidates.push(at);
-        }
-    }
-
-    for first in candidates {
+/// Done before mounting, because mounting consumes the controller and this
+/// borrows it.
+fn find_volume(disk: &mut AhciController) -> Option<Volume> {
+    for volume in from_partition_table(disk) {
         let mut sector = [0u8; 512];
-        if disk.read_at(first * SECTOR, &mut sector).is_ok() && is_volume(&sector) {
-            return Some(first);
+        if disk.read_at(volume.first * SECTOR, &mut sector).is_ok() && is_volume(&sector) {
+            return Some(volume);
         }
     }
 
@@ -166,8 +157,14 @@ fn find_volume(disk: &mut AhciController) -> Option<u64> {
 }
 
 pub fn mount(mut controller: AhciController) -> Result<FileSystem<Disk>, &'static str> {
-    let first = find_volume(&mut controller).ok_or("no FAT volume found")?;
-    println!("volume at sector {first} (byte {:#x})", first * SECTOR);
+    let volume = find_volume(&mut controller).ok_or("no FAT volume found")?;
+    println!(
+        "volume at sector {} ({} sectors, byte {:#x})",
+        volume.first,
+        volume.sectors,
+        volume.first * SECTOR
+    );
 
-    FileSystem::new(Disk::new(controller, first), FsOptions::new()).map_err(|_| "volume is not FAT")
+    FileSystem::new(Disk::new(controller, &volume), FsOptions::new())
+        .map_err(|_| "volume is not FAT")
 }

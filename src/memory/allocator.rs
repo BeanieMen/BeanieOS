@@ -1,6 +1,8 @@
 use x86_64::{
     PhysAddr, VirtAddr,
-    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
+    structures::paging::{
+        FrameAllocator, OffsetPageTable, PageSize, PageTable, PhysFrame, Size4KiB,
+    },
 };
 
 use multiboot2::{MemoryArea, MemoryAreaType, MemoryMapTag};
@@ -9,6 +11,12 @@ use multiboot2::{MemoryArea, MemoryAreaType, MemoryMapTag};
 unsafe extern "C" {
     static kernel_start: u8;
     static kernel_end: u8;
+}
+
+const PAGE: u64 = Size4KiB::SIZE as u64;
+
+fn align_up(addr: u64) -> u64 {
+    (addr + PAGE - 1) & !(PAGE - 1)
 }
 
 fn kernel_range() -> (u64, u64) {
@@ -20,7 +28,7 @@ fn kernel_range() -> (u64, u64) {
 }
 
 fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end: u64) -> bool {
-    let frame_end = addr + 4096;
+    let frame_end = addr + PAGE;
     // 1 mib range is reserved for firmware
     if addr < 0x10_0000 {
         return true;
@@ -36,11 +44,7 @@ fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end:
     false
 }
 
-/// Frame allocator over the Multiboot2 memory map that never hands out
-/// frames belonging to:
-/// - the kernel ELF itself (kernel_start..kernel_end)
-/// - the Multiboot2 boot information (mbi_start..mbi_end)
-/// - low memory below 1 MiB (BIOS / real-mode / VGA hole)
+/// Never hands out the kernel image, the boot information, or low memory.
 pub struct Multiboot2FrameAllocator<'a> {
     areas: &'a [MemoryArea],
     area_idx: usize,
@@ -62,9 +66,8 @@ impl<'a> Multiboot2FrameAllocator<'a> {
             if area.typ() != MemoryAreaType::Available {
                 continue;
             }
-            let mut addr = area.start_address();
-            addr = (addr + 0xfff) & !0xfff;
-            if addr + 4096 <= area.end_address() {
+            let addr = align_up(area.start_address());
+            if addr + PAGE <= area.end_address() {
                 area_idx = i;
                 curr_addr = addr;
                 break;
@@ -80,6 +83,19 @@ impl<'a> Multiboot2FrameAllocator<'a> {
             mbi_end,
         }
     }
+
+    /// Point the cursor at the start of the area after the current one, and
+    /// say whether there was one.
+    fn advance_area(&mut self) -> bool {
+        self.area_idx += 1;
+
+        let Some(area) = self.areas.get(self.area_idx) else {
+            return false;
+        };
+
+        self.curr_addr = align_up(area.start_address());
+        true
+    }
 }
 
 unsafe impl FrameAllocator<Size4KiB> for Multiboot2FrameAllocator<'_> {
@@ -87,34 +103,25 @@ unsafe impl FrameAllocator<Size4KiB> for Multiboot2FrameAllocator<'_> {
         while self.area_idx < self.areas.len() {
             let area = &self.areas[self.area_idx];
             if area.typ() != MemoryAreaType::Available {
-                self.area_idx += 1;
-                if self.area_idx < self.areas.len() {
-                    let mut addr = self.areas[self.area_idx].start_address();
-                    addr = (addr + 0xfff) & !0xfff;
-                    self.curr_addr = addr;
-                }
+                self.advance_area();
                 continue;
             }
             let area_end = area.end_address();
             // Align cursor to area start if we just entered it.
-            let mut area_start = area.start_address();
-            area_start = (area_start + 0xfff) & !0xfff;
+            let area_start = align_up(area.start_address());
             if self.curr_addr < area_start {
                 self.curr_addr = area_start;
             }
-            while self.curr_addr + 4096 <= area_end {
+            while self.curr_addr + PAGE <= area_end {
                 let addr = self.curr_addr;
-                self.curr_addr += 4096;
+                self.curr_addr += PAGE;
                 if frame_is_reserved(addr, self.kstart, self.kend, self.mbi_start, self.mbi_end) {
                     continue;
                 }
                 return Some(PhysFrame::containing_address(PhysAddr::new(addr)));
             }
-            self.area_idx += 1;
-            if self.area_idx < self.areas.len() {
-                let mut addr = self.areas[self.area_idx].start_address();
-                addr = (addr + 0xfff) & !0xfff;
-                self.curr_addr = addr;
+            if !self.advance_area() {
+                break;
             }
         }
         None

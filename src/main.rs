@@ -4,10 +4,9 @@
 
 use core::panic::PanicInfo;
 
-use fatfs::{FileSystem, Read as _};
+use fatfs::FileSystem;
 
 use multiboot2::BootInformation;
-use spin::{Mutex, Once};
 use x86_64::VirtAddr;
 
 use crate::{fs::Disk, shell::Shell};
@@ -22,8 +21,6 @@ mod memory;
 mod shell;
 mod task;
 
-pub static SHELL: Once<Mutex<Shell>> = Once::new();
-
 fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -> ! {
     init(&boot_info, mbi_addr, mbi_size);
 
@@ -32,14 +29,17 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     println!("framebuffer ready");
 
     let disk = boot_disk().unwrap();
-    SHELL.call_once(|| Mutex::new(Shell::new(disk)));
+    let mut shell = Shell::new(disk);
     print!("> ");
+
     loop {
-        x86_64::instructions::hlt();
+        match shell::pop_key() {
+            Some(key) => shell.shell_input(key),
+            None => x86_64::instructions::hlt(),
+        }
     }
 }
 
-/// Enumerate the controller, mount the filesystem and print a file from it.
 fn boot_disk() -> Result<FileSystem<Disk>, &'static str> {
     let devices = arch::pci::find_ahci();
     if devices.is_empty() {
@@ -60,8 +60,7 @@ fn boot_disk() -> Result<FileSystem<Disk>, &'static str> {
         controller.sector_size()
     );
 
-    // Sector 0 is the protective master boot record, so read sector 1 to prove
-    // the path works before involving FAT.
+    // Sector 0 is the MBR, so sector 1 proves the path before involving FAT.
     let mut first = [0u8; 512];
     controller.read_at(512, &mut first)?;
     println!("sector 1 starts {:02x?}", &first[..4]);
@@ -122,8 +121,4 @@ fn panic(info: &PanicInfo) -> ! {
     loop {
         x86_64::instructions::hlt();
     }
-}
-
-pub async fn testlol() {
-    println!("testlol");
 }

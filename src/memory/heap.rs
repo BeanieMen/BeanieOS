@@ -10,7 +10,6 @@ use x86_64::structures::paging::mapper::MapToError;
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 1000 * 1024; // 1000 KiB
 
-// init a page->frame mapping (heap) of size HEAP_SIZE at HEAP_START using the provided mapper and frame allocator
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,

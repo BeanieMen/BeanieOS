@@ -162,14 +162,12 @@ impl Writer {
         }
     }
 
-    /// Physical pixel row for a logical text row. The view is rigid:
-    /// logical row r is always at pixel row r * FONT_HEIGHT, which is why
+    /// Logical row r is always at pixel row r * FONT_HEIGHT, which is why
     /// scrolling has to move pixels (see `scroll`).
     fn row_y(&self, row: u32) -> u32 {
         row * FONT_HEIGHT
     }
 
-    /// True when the 32bpp fast path can draw this glyph unclipped.
     fn glyph_fits(&self, col: u32, row: u32) -> bool {
         match self.framebuffer {
             Some(ref fb) if fb.bpp == 32 => {
@@ -181,8 +179,7 @@ impl Writer {
         }
     }
 
-    /// Row-at-a-time glyph blit. bpp, pitch and the row base pointer are
-    /// resolved once instead of once per pixel.
+    /// bpp, pitch and the row base pointer are resolved once, not per pixel.
     fn draw_char(&mut self, col: u32, row: u32, c: u8, fg: u32, bg: u32) {
         if !self.glyph_fits(col, row) {
             return self.draw_char_generic(col, row, c, fg, bg);
@@ -207,7 +204,6 @@ impl Writer {
                     unsafe { (base.add(x * bpp) as *mut u32).write(fg) };
                     x += 1;
                 } else {
-                    // Walk the whole background run without re-testing the bit.
                     while x < FONT_WIDTH as usize && bits & (0x80 >> x) == 0 {
                         unsafe { (base.add(x * bpp) as *mut u32).write(bg) };
                         x += 1;
@@ -218,8 +214,7 @@ impl Writer {
         }
     }
 
-    /// Per-pixel fallback for non-32bpp depths and glyphs clipped at a
-    /// screen edge.
+    /// For non-32bpp depths and glyphs clipped at a screen edge.
     fn draw_char_generic(&mut self, col: u32, row: u32, c: u8, fg: u32, bg: u32) {
         if self.framebuffer.is_none() {
             return;
@@ -239,11 +234,9 @@ impl Writer {
         }
     }
 
-    /// Scroll the text area up by one row.
-    ///
-    /// Only the `rows() * FONT_HEIGHT` pixel rows that actually hold text
-    /// are moved, so a framebuffer height that is not a multiple of
-    /// FONT_HEIGHT does not drag the last partial row along.
+    /// Only the `rows() * FONT_HEIGHT` pixel rows that hold text are moved,
+    /// so a height that is not a multiple of FONT_HEIGHT does not drag the
+    /// last partial row along.
     fn scroll(&mut self) {
         let Some(ref fb) = self.framebuffer else {
             return;
@@ -265,7 +258,6 @@ impl Writer {
         }
     }
 
-    /// Zero one physical pixel row.
     fn clear_row(&self, y: u32) {
         let Some(ref fb) = self.framebuffer else {
             return;
@@ -329,8 +321,8 @@ impl Writer {
         }
     }
 
-    pub fn write_string(&mut self, s: &str) {
-        for byte in s.bytes() {
+    pub fn write_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
             match byte {
                 0x20..=0x7e | b'\n' | b'\r' | 0x08 => {
                     self.write_byte(byte);
@@ -341,6 +333,10 @@ impl Writer {
                 }
             }
         }
+    }
+
+    pub fn write_string(&mut self, s: &str) {
+        self.write_bytes(s.as_bytes());
     }
 
     #[allow(dead_code)]

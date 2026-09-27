@@ -34,9 +34,8 @@ const PxCI: usize = 0x38;
 const GHC_HR: u32 = 1 << 0;
 const GHC_AE: u32 = 1 << 1;
 
-// Port command register: 0 ST, 1 SRE, 4 FRE. 2, 3, 14 and 15 are read-only
-// and only ever polled. The specification reports the engines running on 2
-// and 3, the emulator on 14 and 15, so either pair counts.
+// 0 ST, 1 SRE, 4 FRE. 2, 3, 14 and 15 are read-only: the spec reports the
+// engines running on 2 and 3, the emulator on 14 and 15, so either counts.
 const CMD_ST: u32 = 1 << 0;
 const CMD_SRE: u32 = 1 << 1;
 const CMD_FRE: u32 = 1 << 4;
@@ -89,7 +88,6 @@ fn set_reg(base: usize, offset: usize, value: u32) {
     unsafe { write_volatile((base + offset) as *mut u32, value) }
 }
 
-/// Read-modify-write, because the read-only running bits share the register.
 fn set_bits(base: usize, offset: usize, bits: u32) {
     set_reg(base, offset, reg(base, offset) | bits);
 }
@@ -98,8 +96,8 @@ fn write_u32(buffer: *mut u8, offset: usize, value: u32) {
     unsafe { write_volatile(buffer.add(offset) as *mut u32, value) }
 }
 
-/// Bounded poll. Counting iterations rather than milliseconds keeps this
-/// independent of any timer, and a missing device cannot hang the kernel.
+/// Iterations, not milliseconds, so this needs no timer and a missing device
+/// cannot hang the kernel.
 fn wait_for(rounds: u64, mut condition: impl FnMut() -> bool) -> bool {
     for _ in 0..rounds {
         if condition() {
@@ -187,7 +185,9 @@ impl AhciController {
 
         // The staggered spin-up bit is read-only in the emulator, so the link
         // is the only usable evidence. 3 means present and physical layer up.
-        if !wait_for(50_000_000, || reg(base, PxSSTS) & SSTS_DET_MASK == SSTS_DET_PHY_UP) {
+        if !wait_for(50_000_000, || {
+            reg(base, PxSSTS) & SSTS_DET_MASK == SSTS_DET_PHY_UP
+        }) {
             return Err(match reg(base, PxSSTS) & SSTS_DET_MASK {
                 0 => "no device",
                 _ => "link did not come up",
@@ -224,7 +224,13 @@ impl AhciController {
     }
 
     /// Issue one command through slot 0 and wait for it to retire.
-    fn execute(&mut self, command: u8, write: bool, lba: u64, count: u16) -> Result<(), &'static str> {
+    fn execute(
+        &mut self,
+        command: u8,
+        write: bool,
+        lba: u64,
+        count: u16,
+    ) -> Result<(), &'static str> {
         let base = self.abar + PORT_BASE + self.port * PORT_STRIDE;
 
         if !wait_for(10_000_000, || reg(base, PxCI) & 1 == 0) {
@@ -308,7 +314,11 @@ impl AhciController {
 
         // Bit 10 of word 83 says whether 48 bit addressing is usable.
         self.lba48 = (word(83) & (1 << 10) != 0) && count_48 != 0;
-        self.sectors = if self.lba48 { count_48 } else { count_28 as u64 };
+        self.sectors = if self.lba48 {
+            count_48
+        } else {
+            count_28 as u64
+        };
 
         let block_size = if word(106) & 0xd000 == 0x5000 {
             (((word(118) as usize) << 16) | word(117) as usize) * 2
@@ -333,55 +343,54 @@ impl AhciController {
         Ok(())
     }
 
-    /// Total size of the disk in bytes.
     pub fn size(&self) -> u64 {
         self.sectors * self.block_size as u64
     }
 
-    /// Size of one sector in bytes.
     pub fn sector_size(&self) -> u64 {
         self.block_size as u64
     }
 
-    /// Read a byte range from a byte offset in the disk.
     pub fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str> {
-        let block = self.block_size;
         let mut done = 0;
 
         while done < buffer.len() {
-            // Absolute position each time. Decomposing offset once and adding
-            // done / block would not advance the sector until done reached a
-            // whole block, breaking any range that crosses a boundary.
             let at = offset as usize + done;
-            let mut scratch = [0u8; 512];
-            self.read_one((at / block) as u64, &mut scratch)?;
+            let (sector, start) = self.locate(at)?;
+            let count = self.batch(start, buffer.len() - done)?;
+            self.read_run(sector, count)?;
 
-            let start = at % block;
-            let chunk = (block - start).min(buffer.len() - done);
-            buffer[done..done + chunk].copy_from_slice(&scratch[start..start + chunk]);
+            // Straight out of the transfer buffer the device just filled,
+            // instead of a second copy through a scratch array.
+            let fresh = unsafe { &*(&raw const TRANSFER_BUFFER as *const [u8; BUF_SIZE]) };
+            let chunk = (self.block_size * count as usize - start).min(buffer.len() - done);
+            buffer[done..done + chunk].copy_from_slice(&fresh[start..start + chunk]);
             done += chunk;
         }
 
         Ok(())
     }
 
-    /// Write a byte range, keeping the rest of each sector it touches.
+    /// Keeps the rest of each sector it touches.
     pub fn write_at(&mut self, offset: u64, buffer: &[u8]) -> Result<(), &'static str> {
-        let block = self.block_size;
         let mut done = 0;
 
         while done < buffer.len() {
             let at = offset as usize + done;
-            let sector = (at / block) as u64;
-            let start = at % block;
-            let chunk = (block - start).min(buffer.len() - done);
+            let (sector, start) = self.locate(at)?;
+            let count = self.batch(start, buffer.len() - done)?;
+            let span = self.block_size * count as usize;
 
-            let mut scratch = [0u8; 512];
-            if chunk < block {
-                self.read_one(sector, &mut scratch)?;
+            // A whole-sector write needs no read first. A partial one has to
+            // pick up the surrounding bytes or the write would zero them.
+            if start != 0 || buffer.len() - done < span {
+                self.read_run(sector, count)?;
             }
-            scratch[start..start + chunk].copy_from_slice(&buffer[done..done + chunk]);
-            self.write_one(sector, &scratch)?;
+
+            let fresh = unsafe { &mut *(&raw mut TRANSFER_BUFFER as *mut [u8; BUF_SIZE]) };
+            let chunk = (span - start).min(buffer.len() - done);
+            fresh[start..start + chunk].copy_from_slice(&buffer[done..done + chunk]);
+            self.write_run(sector, count)?;
 
             done += chunk;
         }
@@ -389,7 +398,27 @@ impl AhciController {
         Ok(())
     }
 
-    fn read_one(&mut self, lba: u64, buffer: &mut [u8; 512]) -> Result<(), &'static str> {
+    fn locate(&self, at: usize) -> Result<(u64, usize), &'static str> {
+        let block = self.block_size;
+        let sector = (at / block) as u64;
+
+        if sector >= self.sectors {
+            return Err("offset is past the end of the disk");
+        }
+
+        Ok((sector, at % block))
+    }
+
+    /// Sectors one command should move: enough to cover `want` bytes from
+    /// `start`, bounded by the transfer buffer and by the disk.
+    fn batch(&self, start: usize, want: usize) -> Result<u16, &'static str> {
+        let needed = (want + start).div_ceil(self.block_size);
+        let room = BUF_SIZE / self.block_size;
+
+        Ok(needed.min(room).max(1) as u16)
+    }
+
+    fn read_run(&mut self, lba: u64, count: u16) -> Result<(), &'static str> {
         let command = if self.lba48 {
             ATA_READ_DMA_EXT
         } else {
@@ -399,16 +428,10 @@ impl AhciController {
             0xC8
         };
 
-        self.execute(command, false, lba, 1)?;
-        let scratch = unsafe { &*(&raw const TRANSFER_BUFFER as *const [u8; 512]) };
-        buffer.copy_from_slice(scratch);
-        Ok(())
+        self.execute(command, false, lba, count)
     }
 
-    fn write_one(&mut self, lba: u64, buffer: &[u8; 512]) -> Result<(), &'static str> {
-        let scratch = &raw mut TRANSFER_BUFFER as *mut [u8; 512];
-        unsafe { scratch.copy_from_nonoverlapping(buffer, 1) };
-
+    fn write_run(&mut self, lba: u64, count: u16) -> Result<(), &'static str> {
         let command = if self.lba48 {
             ATA_WRITE_DMA_EXT
         } else {
@@ -416,7 +439,7 @@ impl AhciController {
             0xCA
         };
 
-        self.execute(command, true, lba, 1)
+        self.execute(command, true, lba, count)
     }
 
     fn set_device_register(&mut self, lba: u64) {

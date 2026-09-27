@@ -20,7 +20,7 @@ pub(super) unsafe fn init() {
     // which is alo then calculated using keyboard gsi parsed from madt and gsi base of the I/O APIC.
     // demonic level of confusion caused by legacy stuff once again
 
-    // explanation 
+    // explanation
     // calculate low and high reg offsets for ioapic redirection table entry
     let low = 0x10 + index * 2;
     let high = low + 1;
@@ -28,7 +28,7 @@ pub(super) unsafe fn init() {
     let lapic_id = unsafe { lapic::id() };
 
     unsafe {
-        // lapic id is put into 24-31 bits of the high register 
+        // lapic id is put into 24-31 bits of the high register
         ioapic_write(address, high as u8, lapic_id << 24);
     }
     unsafe {

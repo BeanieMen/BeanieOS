@@ -1,326 +1,305 @@
-use alloc::vec;
-use fatfs::{FileSystem, Read, Write};
+use core::str;
 
-use crate::{fs::Disk, print, println};
+use fatfs::{DefaultTimeProvider, Dir, FileSystem, LossyOemCpConverter, Read, Write};
+use spin::Mutex;
+use x86_64::instructions::interrupts;
+
+use crate::fs::Disk;
+use crate::graphics::framebuffer::WRITER;
+use crate::{print, println};
+
+const INPUT_MAX: usize = 256;
+const PATH_MAX: usize = 256;
+
+/// Keys the keyboard has produced and nothing has read yet. The interrupt
+/// handler writes here and the main loop drains it, so no filesystem work or
+/// printing happens with interrupts off.
+const PENDING_MAX: usize = 64;
+
+static PENDING: Mutex<[char; PENDING_MAX]> = Mutex::new(['\0'; PENDING_MAX]);
+
+pub fn push_key(key: char) {
+    interrupts::without_interrupts(|| {
+        let mut ring = PENDING.lock();
+        if let Some(slot) = ring.iter_mut().find(|slot| **slot == '\0') {
+            *slot = key;
+        }
+    })
+}
+
+pub fn pop_key() -> Option<char> {
+    interrupts::without_interrupts(|| {
+        let mut ring = PENDING.lock();
+        let slot = ring.iter_mut().find(|slot| **slot != '\0')?;
+        let key = *slot;
+        *slot = '\0';
+        Some(key)
+    })
+}
+
+type FatDir<'a> = Dir<'a, Disk, DefaultTimeProvider, LossyOemCpConverter>;
+
+#[derive(Clone)]
+struct Path {
+    bytes: [u8; PATH_MAX],
+    len: usize,
+}
+
+impl Path {
+    const fn root() -> Self {
+        let mut bytes = [0; PATH_MAX];
+        bytes[0] = b'/';
+        Path { bytes, len: 1 }
+    }
+
+    fn as_str(&self) -> &str {
+        str::from_utf8(&self.bytes[..self.len]).unwrap_or("")
+    }
+
+    fn push(&mut self, more: &str) -> bool {
+        let add = more.as_bytes();
+
+        if self.len + add.len() > PATH_MAX {
+            return false;
+        }
+
+        self.bytes[self.len..self.len + add.len()].copy_from_slice(add);
+        self.len += add.len();
+        true
+    }
+}
 
 pub struct Shell {
-    input_buffer: [u8; 256],
+    input: [u8; INPUT_MAX],
     input_len: usize,
     fs: FileSystem<Disk>,
-    current_dir: [u8; 256],
-    current_dir_len: usize,
+    cwd: Path,
 }
 
 impl Shell {
     pub fn new(fs: FileSystem<Disk>) -> Self {
-        let mut current_dir = [0; 256];
-        current_dir[0] = b'/';
-
-        Self {
-            input_buffer: [0; 256],
+        Shell {
+            input: [0; INPUT_MAX],
             input_len: 0,
             fs,
-            current_dir,
-            current_dir_len: 1,
+            cwd: Path::root(),
         }
     }
 
-    pub fn shell_input(&mut self, inp: char) {
-        if inp == '\x08' {
-            if self.input_len > 0 {
-                self.input_len -= 1;
-                self.input_buffer[self.input_len] = 0;
-                print!("\x08 \x08");
-            }
-            return;
-        }
-
-        if inp == '\n' {
-            println!();
-
-            let input = self.input_buffer[..self.input_len].to_vec();
-            let input = input.trim_ascii();
-
-            if input == b"help" {
-                self.help();
-            } else if input == b"test-file" {
-                self.test_file();
-            } else if let Some(path) = input.strip_prefix(b"ls") {
-                let path = path.trim_ascii_start();
-
-                if path.is_empty() {
-                    self.ls_current();
-                } else if let Ok(path) = core::str::from_utf8(path) {
-                    self.ls(path);
-                } else {
-                    println!("Invalid path");
+    pub fn shell_input(&mut self, c: char) {
+        match c {
+            '\x08' => {
+                if self.input_len > 0 {
+                    self.input_len -= 1;
+                    print!("\x08");
                 }
-            } else if let Some(path) = input.strip_prefix(b"cd") {
-                let path = path.trim_ascii_start();
-
-                let path = if path.is_empty() {
-                    "/"
-                } else {
-                    match core::str::from_utf8(path) {
-                        Ok(path) => path,
-                        Err(_) => {
-                            println!("Invalid path");
-                            self.reset_input();
-                            print!("> ");
-                            return;
-                        }
-                    }
-                };
-
-                self.cd(path);
-            } else if let Some(path) = input.strip_prefix(b"cat") {
-                let path = path.trim_ascii_start();
-
-                if path.is_empty() {
-                    println!("Usage: cat <path>");
-                } else if let Ok(path) = core::str::from_utf8(path) {
-                    self.cat(path);
-                } else {
-                    println!("Invalid path");
-                }
-            } else if let Some(name) = input.strip_prefix(b"mkdir") {
-                let name = name.trim_ascii_start();
-
-                if name.is_empty() {
-                    println!("Usage: mkdir <name>");
-                } else if let Ok(name) = core::str::from_utf8(name) {
-                    self.mkdir(name);
-                } else {
-                    println!("Invalid name");
-                }
-            } else if let Some(name) = input.strip_prefix(b"touch") {
-                let name = name.trim_ascii_start();
-
-                if name.is_empty() {
-                    println!("Usage: touch <name>");
-                } else if let Ok(name) = core::str::from_utf8(name) {
-                    self.touch(name);
-                } else {
-                    println!("Invalid name");
-                }
-            } else if let Some(name) = input.strip_prefix(b"rm") {
-                let name = name.trim_ascii_start();
-
-                if name.is_empty() {
-                    println!("Usage: rm <name>");
-                } else if let Ok(name) = core::str::from_utf8(name) {
-                    self.rm(name);
-                } else {
-                    println!("Invalid name");
-                }
-            } else if let Some(name) = input.strip_prefix(b"rmdir") {
-                let name = name.trim_ascii_start();
-
-                if name.is_empty() {
-                    println!("Usage: rmdir <name>");
-                } else if let Ok(name) = core::str::from_utf8(name) {
-                    self.rmdir(name);
-                } else {
-                    println!("Invalid name");
-                }
-            } else if !input.is_empty() {
-                println!("Unknown command");
             }
 
-            self.reset_input();
-            print!("> ");
-        } else if self.input_len < self.input_buffer.len() {
-            print!("{inp}");
-            self.input_buffer[self.input_len] = inp as u8;
-            self.input_len += 1;
+            '\n' => {
+                println!();
+                self.submit();
+            }
+
+            _ if self.input_len < INPUT_MAX => {
+                print!("{c}");
+                self.input[self.input_len] = c as u8;
+                self.input_len += 1;
+            }
+
+            _ => {}
         }
     }
 
-    fn reset_input(&mut self) {
-        self.input_buffer = [0; 256];
+    fn submit(&mut self) {
+        let mut line = [0; INPUT_MAX];
+        line[..self.input_len].copy_from_slice(&self.input[..self.input_len]);
+        let line = str::from_utf8(&line[..self.input_len]).unwrap_or("");
+
+        let mut words = line.split_whitespace();
+        let command = words.next().unwrap_or("");
+        let arg = words.next().unwrap_or("");
+
+        self.run(command, arg);
+
         self.input_len = 0;
+        print!("> ");
     }
 
-    fn current_path(&self) -> &str {
-        core::str::from_utf8(&self.current_dir[..self.current_dir_len]).unwrap()
+    fn run(&mut self, command: &str, arg: &str) {
+        match command {
+            "" => {}
+
+            "help" => self.help(),
+
+            "ls" => self.ls(arg),
+
+            "cd" => self.cd(if arg.is_empty() { "/" } else { arg }),
+
+            "cat" => match arg.is_empty() {
+                true => println!("Usage: cat <path>"),
+                false => self.cat(arg),
+            },
+
+            "mkdir" => match arg.is_empty() {
+                true => println!("Usage: mkdir <name>"),
+                false => self.mkdir(arg),
+            },
+
+            "touch" => match arg.is_empty() {
+                true => println!("Usage: touch <name>"),
+                false => self.touch(arg),
+            },
+
+            "rm" => match arg.is_empty() {
+                true => println!("Usage: rm <name>"),
+                false => self.rm(arg),
+            },
+
+            "rmdir" => match arg.is_empty() {
+                true => println!("Usage: rmdir <name>"),
+                false => self.rmdir(arg),
+            },
+
+            "test-file" => self.test_file(),
+
+            other => println!("Unknown command: {other}"),
+        }
     }
 
-    fn resolve_path(&self, path: &str) -> Option<([u8; 256], usize)> {
-        let mut full_path = [0u8; 256];
-
-        if path.starts_with('/') {
-            let bytes = path.as_bytes();
-
-            if bytes.len() >= full_path.len() {
-                println!("Path too long");
-                return None;
-            }
-
-            full_path[..bytes.len()].copy_from_slice(bytes);
-
-            return Some((full_path, bytes.len()));
+    fn resolve(&self, path: &str) -> Option<Path> {
+        if path == "/" {
+            return Some(Path::root());
         }
 
-        let current = &self.current_dir[..self.current_dir_len];
-        let bytes = path.as_bytes();
+        let mut full = if path.starts_with('/') {
+            Path::root()
+        } else {
+            self.cwd.clone()
+        };
 
-        let mut len = self.current_dir_len;
-
-        full_path[..len].copy_from_slice(current);
-
-        if len > 1 {
-            full_path[len] = b'/';
-            len += 1;
-        }
-
-        if len + bytes.len() >= full_path.len() {
-            println!("Path too long");
+        if full.len > 1 && !full.push("/") {
             return None;
         }
 
-        full_path[len..len + bytes.len()].copy_from_slice(bytes);
-
-        Some((full_path, len + bytes.len()))
+        full.push(path).then_some(full)
     }
 
-    pub fn ls_current(&self) {
-        self.ls(self.current_path());
+    fn cwd_dir(&self) -> FatDir<'_> {
+        let root = self.fs.root_dir();
+        let path = self.cwd.as_str();
+
+        if path == "/" {
+            return root;
+        }
+
+        root.open_dir(path).unwrap_or(root)
     }
 
     pub fn ls(&self, path: &str) {
-        let root = self.fs.root_dir();
-
-        if path == "/" {
-            for file in root.iter() {
-                if let Ok(file) = file {
-                    println!("{}", file.file_name());
-                }
-            }
-
-            return;
-        }
-
-        let dir = match root.open_dir(path) {
-            Ok(dir) => dir,
-            Err(_) => {
-                println!("Dir not found: {}", path);
+        let dir = if path.is_empty() {
+            self.cwd_dir()
+        } else {
+            let Some(full) = self.resolve(path) else {
+                println!("Path too long");
                 return;
+            };
+
+            match self.fs.root_dir().open_dir(full.as_str()) {
+                Ok(dir) => dir,
+                Err(_) => {
+                    println!("Directory not found: {path}");
+                    return;
+                }
             }
         };
 
-        for file in dir.iter() {
-            if let Ok(file) = file {
-                println!("{}", file.file_name());
+        for entry in dir.iter() {
+            if let Ok(entry) = entry {
+                println!("{}", entry.file_name());
             }
         }
     }
 
     pub fn cd(&mut self, path: &str) {
-        if path == "/" {
-            self.current_dir = [0; 256];
-            self.current_dir[0] = b'/';
-            self.current_dir_len = 1;
+        let Some(full) = self.resolve(path) else {
+            println!("Path too long");
             return;
-        }
-
-        let (full_path, full_path_len) = match self.resolve_path(path) {
-            Some(path) => path,
-            None => return,
         };
 
-        let full_path_str =
-            core::str::from_utf8(&full_path[..full_path_len]).unwrap();
-
-        if self.fs.root_dir().open_dir(full_path_str).is_err() {
-            println!("Directory not found: {}", path);
+        if full.as_str() != "/" && self.fs.root_dir().open_dir(full.as_str()).is_err() {
+            println!("Directory not found: {path}");
             return;
         }
 
-        println!("Changed directory to {}", full_path_str);
-
-        self.current_dir = full_path;
-        self.current_dir_len = full_path_len;
+        println!("Changed directory to {}", full.as_str());
+        self.cwd = full;
     }
 
     pub fn cat(&self, path: &str) {
-        let (full_path, full_path_len) = match self.resolve_path(path) {
-            Some(path) => path,
-            None => return,
+        let Some(full) = self.resolve(path) else {
+            println!("Path too long");
+            return;
         };
 
-        let full_path_str =
-            core::str::from_utf8(&full_path[..full_path_len]).unwrap();
-
-        let root = self.fs.root_dir();
-
-        let mut file = match root.open_file(full_path_str) {
+        let mut file = match self.fs.root_dir().open_file(full.as_str()) {
             Ok(file) => file,
             Err(_) => {
-                println!("File not found: {}", path);
+                println!("File not found: {path}");
                 return;
             }
         };
 
-        let mut buffer = vec![0u8; 512];
+        let mut buffer = [0u8; 512];
 
         loop {
-            let bytes_read = match file.read(&mut buffer) {
-                Ok(n) => n,
+            match file.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    WRITER.lock().write_bytes(&buffer[..n]);
+                    println!();
+                }
                 Err(_) => {
                     println!("Read error");
                     return;
                 }
-            };
-
-            if bytes_read == 0 {
-                break;
-            }
-
-            for byte in &buffer[..bytes_read] {
-                print!("{}", *byte as char);
             }
         }
+    }
 
-        println!();
+    pub fn mkdir(&self, name: &str) {
+        if self.cwd_dir().create_dir(name).is_err() {
+            println!("Failed to create directory: {name}");
+        } else {
+            println!("Created directory: {name}");
+        }
+    }
+
+    pub fn touch(&self, name: &str) {
+        if self.cwd_dir().create_file(name).is_err() {
+            println!("Failed to create file: {name}");
+        } else {
+            println!("Created file: {name}");
+        }
+    }
+
+    pub fn rm(&self, name: &str) {
+        if self.cwd_dir().remove(name).is_err() {
+            println!("Failed to remove file: {name}");
+        } else {
+            println!("Removed file: {name}");
+        }
+    }
+
+    pub fn rmdir(&self, name: &str) {
+        if self.cwd_dir().remove(name).is_err() {
+            println!("Failed to remove directory: {name}");
+        } else {
+            println!("Removed directory: {name}");
+        }
     }
 
     pub fn test_file(&self) {
-        let root = self.fs.root_dir();
-
-        println!("Creating test file in {}", self.current_path());
-
-        if self.current_path() == "/" {
-            let mut file = match root.create_file("test.txt") {
-                Ok(file) => file,
-                Err(_) => {
-                    println!("Failed to create test.txt");
-                    return;
-                }
-            };
-
-            if file.write_all(b"meow").is_err() {
-                println!("Failed to write test.txt");
-                return;
-            }
-
-            if file.flush().is_err() {
-                println!("Failed to flush test.txt");
-                return;
-            }
-
-            println!("Created test.txt");
-            return;
-        }
-
-        let dir = match root.open_dir(self.current_path()) {
-            Ok(dir) => dir,
-            Err(_) => {
-                println!("Directory not found");
-                return;
-            }
-        };
-
-        let mut file = match dir.create_file("test.txt") {
+        let mut file = match self.cwd_dir().create_file("test.txt") {
             Ok(file) => file,
             Err(_) => {
                 println!("Failed to create test.txt");
@@ -328,133 +307,12 @@ impl Shell {
             }
         };
 
-        if file.write_all(b"meow").is_err() {
+        if file.write_all(b"meow").is_err() || file.flush().is_err() {
             println!("Failed to write test.txt");
             return;
         }
 
-        if file.flush().is_err() {
-            println!("Failed to flush test.txt");
-            return;
-        }
-
         println!("Created test.txt");
-    }
-
-    pub fn mkdir(&self, name: &str) {
-        let root = self.fs.root_dir();
-
-        if self.current_path() == "/" {
-            if root.create_dir(name).is_err() {
-                println!("Failed to create directory: {}", name);
-                return;
-            }
-
-            println!("Created directory: {}", name);
-            return;
-        }
-
-        let dir = match root.open_dir(self.current_path()) {
-            Ok(dir) => dir,
-            Err(_) => {
-                println!("Directory not found: {}", self.current_path());
-                return;
-            }
-        };
-
-        if dir.create_dir(name).is_err() {
-            println!("Failed to create directory: {}", name);
-            return;
-        }
-
-        println!("Created directory: {}", name);
-    }
-
-    pub fn touch(&self, name: &str) {
-        let root = self.fs.root_dir();
-
-        if self.current_path() == "/" {
-            if root.create_file(name).is_err() {
-                println!("Failed to create file: {}", name);
-                return;
-            }
-
-            println!("Created file: {}", name);
-            return;
-        }
-
-        let dir = match root.open_dir(self.current_path()) {
-            Ok(dir) => dir,
-            Err(_) => {
-                println!("Directory not found: {}", self.current_path());
-                return;
-            }
-        };
-
-        if dir.create_file(name).is_err() {
-            println!("Failed to create file: {}", name);
-            return;
-        }
-
-        println!("Created file: {}", name);
-    }
-
-    pub fn rm(&self, name: &str) {
-        let root = self.fs.root_dir();
-
-        if self.current_path() == "/" {
-            if root.remove(name).is_err() {
-                println!("Failed to remove file: {}", name);
-                return;
-            }
-
-            println!("Removed file: {}", name);
-            return;
-        }
-
-        let dir = match root.open_dir(self.current_path()) {
-            Ok(dir) => dir,
-            Err(_) => {
-                println!("Directory not found: {}", self.current_path());
-                return;
-            }
-        };
-
-        if dir.remove(name).is_err() {
-            println!("Failed to remove file: {}", name);
-            return;
-        }
-
-        println!("Removed file: {}", name);
-    }
-
-    pub fn rmdir(&self, name: &str) {
-        let root = self.fs.root_dir();
-
-        if self.current_path() == "/" {
-            if root.remove(name).is_err() {
-                println!("Failed to remove directory: {}", name);
-                return;
-            }
-
-            println!("Removed directory: {}", name);
-            return;
-        }
-
-        let dir = match root.open_dir(self.current_path()) {
-            Ok(dir) => dir,
-            Err(_) => {
-                println!("Directory not found: {}", self.current_path());
-                return;
-            }
-        };
-
-        if dir.remove(name).is_err() {
-            println!("Failed to remove directory: {}", name);
-            return;
-        }
-
-        println!("Removed directory: {}", name);
     }
 
     pub fn help(&self) {
