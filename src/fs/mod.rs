@@ -11,15 +11,15 @@ pub struct FileSystem<D: BlockDevice> {
 }
 
 impl<D: BlockDevice> FileSystem<D> {
-pub fn mount(device: D) -> Result<Self, fatfs::Error<()>> {
-    let storage = FatStorage::new(device);
+    pub fn mount(device: D) -> Result<Self, fatfs::Error<()>> {
+        let storage = FatStorage::new(device);
 
-    let Ok(inner) = FatFileSystem::new(storage, FsOptions::new()) else {
-        return Err(fatfs::Error::Io(()));
-    };
+        let Ok(inner) = FatFileSystem::new(storage, FsOptions::new()) else {
+            return Err(fatfs::Error::Io(()));
+        };
 
-    Ok(Self { inner })
-}
+        Ok(Self { inner })
+    }
 }
 
 pub struct FatStorage<D: BlockDevice> {

@@ -1,15 +1,13 @@
-.PHONY: all setup kernel boot limine disk run clean fmt fmt-check clippy lint check file
+.PHONY: all setup kernel boot disk run clean fmt fmt-check clippy lint check file
 
 KERNEL_TARGET := x86_64.json
 KERNEL := target/x86_64/release/beanieos
-
 BOOT_OBJ := target/boot.o
 
 LIMINE_DIR := limine
 LIMINE_EFI := $(LIMINE_DIR)/BOOTX64.EFI
 
 OUT := out
-
 DISK := $(OUT)/beanieos.img
 TEST_FILE := $(OUT)/test.txt
 
@@ -31,7 +29,7 @@ boot: $(BOOT_OBJ)
 
 $(BOOT_OBJ): src/arch/boot.s
 	mkdir -p target
-	as --64 src/arch/boot.s -o $(BOOT_OBJ)
+	as --64 $< -o $@
 
 file:
 	mkdir -p $(OUT)
@@ -44,6 +42,7 @@ kernel: boot linker.ld
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)
+
 	llvm-strip --strip-debug $(KERNEL) -o $(KERNEL).stripped
 
 disk: $(DISK)
@@ -56,14 +55,12 @@ $(DISK): kernel limine file
 	truncate -s 128M $(DISK)
 
 	parted -s $(DISK) mklabel gpt
-
 	parted -s $(DISK) mkpart ESP fat32 1MiB 32MiB
 	parted -s $(DISK) set 1 esp on
-
 	parted -s $(DISK) mkpart BEANIEOS fat32 32MiB 100%
 
-	mkfs.fat -F 32 --offset 2048 $(DISK)
-	mkfs.fat -F 32 --offset 65536 $(DISK)
+	mkfs.fat -F 32 --offset 2048 --invariant $(DISK)
+	mkfs.fat -F 32 --offset 65536 --invariant $(DISK)
 
 	mmd -i $(DISK)@@$(ESP_OFFSET) ::EFI
 	mmd -i $(DISK)@@$(ESP_OFFSET) ::EFI/BOOT
@@ -87,9 +84,8 @@ $(DISK): kernel limine file
 		::test.txt
 
 run: $(DISK)
-	mkdir -p $(OUT)
-
 	qemu-system-x86_64 \
+		-machine q35 \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
 		-drive format=raw,file=$(DISK) \

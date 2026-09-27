@@ -31,20 +31,59 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         crate::graphics::framebuffer::Color::Red.to_rgb(),
     );
 
-    for device in arch::pci::scan() {
+    for device in arch::pci::find_ahci() {
+        let Some((bar5, size)) = device.bar5_info() else {
+            println!("AHCI has no usable BAR5");
+            continue;
+        };
+
         println!(
-            "PCI {:02x}:{:02x}.{} {:04x}:{:04x} class={:02x} subclass={:02x} interface={:02x}",
+            "AHCI controller {:02x}:{:02x}.{}",
             device.address.bus(),
             device.address.device(),
-            device.address.function(),
-            device.vendor_id,
-            device.device_id,
-            device.class,
-            device.subclass,
-            device.interface,
+            device.address.function()
         );
-    }
 
+        println!("BAR5: {:#x}, size {:#x}", bar5, size);
+
+        if bar5 >= 8 * 1024 * 1024 * 1024 {
+            println!("BAR5 is outside identity-mapped range");
+            continue;
+        }
+
+        device.enable();
+
+        println!("PCI MMIO + bus mastering enabled");
+
+        if let Some(mut ahci) = arch::ahci::init(&device) {
+            println!("AHCI initialized");
+            println!("Block size: {}", ahci.block_size());
+            println!("Capacity: {} blocks", ahci.capacity());
+
+            if ahci.capacity() == 0 {
+                println!("No disk on this controller");
+                continue;
+            }
+
+            println!("Disk controller found");
+
+            let mut sector = [0u8; 512];
+
+            if ahci.read(0, &mut sector) {
+                println!("Sector 0:");
+
+                for byte in &sector[..16] {
+                    print!("{:02x} ", byte);
+                }
+
+                println!();
+            } else {
+                println!("Sector 0 read failed");
+            }
+
+            break;
+        }
+    }
     loop {
         x86_64::instructions::hlt();
     }

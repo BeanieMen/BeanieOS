@@ -1,8 +1,7 @@
 use alloc::vec::Vec;
-use pci_types::{ConfigRegionAccess, PciAddress, PciHeader};
+use pci_types::{Bar, CommandRegister, ConfigRegionAccess, EndpointHeader, PciAddress, PciHeader};
 use x86_64::instructions::port::Port;
 
-// ports
 const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
 
@@ -10,8 +9,7 @@ struct PciConfig;
 
 impl ConfigRegionAccess for PciConfig {
     unsafe fn read(&self, address: PciAddress, offset: u16) -> u32 {
-        let config_address =
-            0x8000_0000
+        let config_address = 0x8000_0000
             | ((address.bus() as u32) << 16)
             | ((address.device() as u32) << 11)
             | ((address.function() as u32) << 8)
@@ -25,8 +23,7 @@ impl ConfigRegionAccess for PciConfig {
     }
 
     unsafe fn write(&self, address: PciAddress, offset: u16, value: u32) {
-        let config_address =
-            0x8000_0000
+        let config_address = 0x8000_0000
             | ((address.bus() as u32) << 16)
             | ((address.device() as u32) << 11)
             | ((address.function() as u32) << 8)
@@ -50,6 +47,50 @@ pub struct Device {
     pub interface: u8,
 }
 
+impl Device {
+    pub fn bar5_info(&self) -> Option<(u64, u64)> {
+        match self.bar(5)? {
+            Bar::Memory32 { address, size, .. } => Some((address as u64, size as u64)),
+            Bar::Memory64 { address, size, .. } => Some((address, size)),
+            _ => None,
+        }
+    }
+    pub fn is_ahci(&self) -> bool {
+        self.class == 0x01 && self.subclass == 0x06 && self.interface == 0x01
+    }
+
+    pub fn bar(&self, index: u8) -> Option<Bar> {
+        let config = PciConfig;
+        let header = PciHeader::new(self.address);
+
+        let endpoint = EndpointHeader::from_header(header, &config)?;
+
+        endpoint.bar(index, &config)
+    }
+
+    pub fn ahci_base(&self) -> Option<usize> {
+        if !self.is_ahci() {
+            return None;
+        }
+
+        let (base, _) = self.bar5_info()?;
+
+        if base >= 8 * 1024 * 1024 * 1024 {
+            return None;
+        }
+
+        Some(base as usize)
+    }
+    pub fn enable(&self) {
+        let config = PciConfig;
+        let mut header = PciHeader::new(self.address);
+
+        header.update_command(&config, |mut command| {
+            command.insert(CommandRegister::MEMORY_ENABLE | CommandRegister::BUS_MASTER_ENABLE);
+            command
+        });
+    }
+}
 pub fn scan() -> Vec<Device> {
     let config = PciConfig;
     let mut devices = Vec::new();
@@ -66,8 +107,7 @@ pub fn scan() -> Vec<Device> {
                     continue;
                 }
 
-                let (_, class, subclass, interface) =
-                    header.revision_and_class(&config);
+                let (_, class, subclass, interface) = header.revision_and_class(&config);
 
                 devices.push(Device {
                     address,
@@ -82,4 +122,8 @@ pub fn scan() -> Vec<Device> {
     }
 
     devices
+}
+
+pub fn find_ahci() -> Vec<Device> {
+    scan().into_iter().filter(Device::is_ahci).collect()
 }
