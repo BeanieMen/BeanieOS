@@ -1,7 +1,13 @@
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use x86_64::structures::idt::InterruptDescriptorTable;
+
+use crate::arch::interrupts::consts::LAPIC_TIMER_VECTOR;
 
 use super::consts::{KEYBOARD_VECTOR, PS2_DATA_PORT, SPURIOUS_VECTOR};
 use super::pic;
+
+static TICKS: AtomicU64 = AtomicU64::new(0);
 
 extern "x86-interrupt" fn spurious_interrupt_handler(
     _stack_frame: x86_64::structures::idt::InterruptStackFrame,
@@ -25,9 +31,24 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
     }
 }
 
+extern "x86-interrupt" fn timer_interrupt_handler(
+    _stack_frame: x86_64::structures::idt::InterruptStackFrame,
+) {
+    TICKS.fetch_add(1, Ordering::Relaxed);
+
+    unsafe {
+        pic::eoi();
+    }
+}
+
+pub(crate) fn ticks() -> u64 {
+    TICKS.load(Ordering::Relaxed)
+}
+
 pub(crate) fn register_vectors(idt: &mut InterruptDescriptorTable) {
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_interrupt_handler);
     idt[SPURIOUS_VECTOR].set_handler_fn(spurious_interrupt_handler);
+    idt[LAPIC_TIMER_VECTOR].set_handler_fn(timer_interrupt_handler);
 }
 
 // evils map putting this piece of code here because i dont know where to put it right now
