@@ -14,8 +14,8 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
     let mut port = x86_64::instructions::port::Port::new(PS2_DATA_PORT);
     let scancode: u8 = unsafe { port.read() };
 
-    if let Some(c) = scancode_to_ascii(scancode) {
-        crate::print!("{}", c);
+    if let Some(inp) = scancode_to_ascii(scancode) {
+        crate::SHELL.get().unwrap().lock().shell_input(inp);
     }
 
     unsafe {

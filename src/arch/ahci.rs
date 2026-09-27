@@ -296,6 +296,10 @@ impl AhciController {
             return Err("device does not report LBA support");
         }
 
+        if word(83) & 0xc000 != 0x4000 {
+            return Err("device does not report a valid command set");
+        }
+
         let count_28 = (word(60) as u32) | ((word(61) as u32) << 16);
         let count_48 = (word(100) as u64)
             | ((word(101) as u64) << 16)
@@ -306,8 +310,15 @@ impl AhciController {
         self.lba48 = (word(83) & (1 << 10) != 0) && count_48 != 0;
         self.sectors = if self.lba48 { count_48 } else { count_28 as u64 };
 
-        let logical = word(106) as u32;
-        self.block_size = if logical == 0 { 512 } else { logical as usize * 512 };
+        let block_size = if word(106) & 0xd000 == 0x5000 {
+            (((word(118) as usize) << 16) | word(117) as usize) * 2
+        } else {
+            512
+        };
+        if block_size != 512 {
+            return Err("only 512 byte logical sectors are supported");
+        }
+        self.block_size = block_size;
 
         if self.sectors == 0 {
             return Err("device reports zero sectors");

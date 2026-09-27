@@ -76,7 +76,7 @@ pub struct Framebuffer {
 unsafe impl Send for Framebuffer {}
 
 pub struct Writer {
-    framebuffer: Option<Framebuffer>,
+    pub framebuffer: Option<Framebuffer>,
     cursor_col: u32,
     cursor_row: u32,
     color_code: ColorCode,
