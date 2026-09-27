@@ -18,8 +18,10 @@ impl ConfigRegionAccess for PciConfig {
         let mut address_port = Port::<u32>::new(CONFIG_ADDRESS);
         let mut data_port = Port::<u32>::new(CONFIG_DATA);
 
-        address_port.write(config_address);
-        data_port.read()
+        unsafe {
+            address_port.write(config_address);
+            data_port.read()
+        }
     }
 
     unsafe fn write(&self, address: PciAddress, offset: u16, value: u32) {
@@ -32,8 +34,10 @@ impl ConfigRegionAccess for PciConfig {
         let mut address_port = Port::<u32>::new(CONFIG_ADDRESS);
         let mut data_port = Port::<u32>::new(CONFIG_DATA);
 
-        address_port.write(config_address);
-        data_port.write(value);
+        unsafe {
+            address_port.write(config_address);
+            data_port.write(value);
+        }
     }
 }
 

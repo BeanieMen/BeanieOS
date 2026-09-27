@@ -4,6 +4,8 @@
 
 use core::panic::PanicInfo;
 
+use fatfs::Read as _;
+
 use multiboot2::BootInformation;
 use x86_64::VirtAddr;
 
@@ -31,66 +33,68 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         crate::graphics::framebuffer::Color::Red.to_rgb(),
     );
 
-    for device in arch::pci::find_ahci() {
-        let Some((bar5, size)) = device.bar5_info() else {
-            println!("AHCI has no usable BAR5");
-            continue;
-        };
-
-        println!(
-            "AHCI controller {:02x}:{:02x}.{}",
-            device.address.bus(),
-            device.address.device(),
-            device.address.function()
-        );
-
-        println!("BAR5: {:#x}, size {:#x}", bar5, size);
-
-        if bar5 >= 8 * 1024 * 1024 * 1024 {
-            println!("BAR5 is outside identity-mapped range");
-            continue;
-        }
-
-        device.enable();
-
-        println!("PCI MMIO + bus mastering enabled");
-
-        if let Some(mut ahci) = arch::ahci::init(&device) {
-            println!("AHCI initialized");
-            println!("Block size: {}", ahci.block_size());
-            println!("Capacity: {} blocks", ahci.capacity());
-
-            if ahci.capacity() == 0 {
-                println!("No disk on this controller");
-                continue;
-            }
-
-            println!("Disk controller found");
-
-            let mut sector = [0u8; 512];
-
-            if ahci.read(0, &mut sector) {
-                println!("Sector 0:");
-
-                for byte in &sector[..16] {
-                    print!("{:02x} ", byte);
-                }
-
-                println!();
-            } else {
-                println!("Sector 0 read failed");
-            }
-
-            break;
-        }
+    // Bring up the disk controller, then read the filesystem through it.
+    match boot_disk() {
+        Ok(()) => println!("done"),
+        Err(why) => println!("disk: {why}"),
     }
+
     loop {
         x86_64::instructions::hlt();
     }
-    // let mut executor = executor::Executor::new();
-    // executor aint needed for now
-    // executor.spawn(executor::Task::new(testlol()));
-    // executor.run();
+}
+
+/// Enumerate the controller, mount the filesystem and print a file from it.
+fn boot_disk() -> Result<(), &'static str> {
+    let devices = arch::pci::find_ahci();
+    if devices.is_empty() {
+        return Err("no AHCI controller found");
+    }
+
+    let device = &devices[0];
+    let (bar5, size) = device.bar5_info().ok_or("no usable BAR5")?;
+    let bus = device.address.bus();
+    let slot = device.address.device();
+    let function = device.address.function();
+    println!("controller {bus:02x}:{slot:02x}.{function} BAR5={bar5:#x} size {size:#x}");
+
+    let mut controller = arch::ahci::AhciController::new(device)?;
+    let total = controller.size();
+    println!("disk ready: {total} bytes, {} byte sectors", controller.sector_size());
+
+    // Sector 0 is the protective master boot record, so read sector 1 to prove
+    // the path works before involving FAT.
+    let mut first = [0u8; 512];
+    controller.read_at(512, &mut first)?;
+    println!("sector 1 starts {:02x?}", &first[..4]);
+
+    let filesystem = fs::mount(controller)?;
+    let root = filesystem.root_dir();
+
+    println!("root directory:");
+    let mut files = 0;
+    for entry in root.iter() {
+        let entry = entry.map_err(|_| "directory read failed")?;
+        let name = entry.file_name();
+        let kind = if entry.is_dir() { "dir " } else { "file" };
+        println!("  {kind} {name} ({} bytes)", entry.len());
+
+        if !entry.is_file() {
+            continue;
+        }
+        files += 1;
+        let mut file = root.open_file(&name).map_err(|_| "could not open file")?;
+        let mut text = [0u8; 256];
+        let read = file.read(&mut text).map_err(|_| "file read failed")?;
+        match core::str::from_utf8(&text[..read.min(text.len())]) {
+            Ok(body) => println!("      {body}"),
+            Err(_) => println!("      <{read} bytes of binary data>"),
+        }
+    }
+
+    println!("{files} file(s)");
+
+    Ok(())
 }
 
 pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
@@ -108,19 +112,11 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         memory::allocator::Multiboot2FrameAllocator::init(
             memory_map,
             mbi_addr as u64,
-            mbi_addr as u64 + mbi_size as u64,
+            mbi_addr as u64 + mbi_size as usize as u64,
         )
     };
 
     let mut mapper = unsafe { memory::allocator::init(VirtAddr::new(0)) };
-
-    let acpi_root_addr = if let Some(rsdp) = boot_info.rsdp_v2_tag() {
-        rsdp.xsdt_address()
-    } else if let Some(rsdp) = boot_info.rsdp_v1_tag() {
-        rsdp.rsdt_address()
-    } else {
-        panic!("No ACPI RSDP");
-    };
 
     memory::heap::init_heap(&mut mapper, &mut frame_alloc).expect("heap initialization failed");
 
@@ -133,15 +129,22 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
     );
 
     arch::gdt::init();
-    arch::interrupts::init_idt(acpi_root_addr);
+    arch::interrupts::init_idt(acpi_root_addr_from(boot_info));
+}
 
-    x86_64::instructions::interrupts::enable();
+fn acpi_root_addr_from(boot_info: &BootInformation<'_>) -> usize {
+    if let Some(rsdp) = boot_info.rsdp_v2_tag() {
+        rsdp.xsdt_address()
+    } else if let Some(rsdp) = boot_info.rsdp_v1_tag() {
+        rsdp.rsdt_address()
+    } else {
+        panic!("No ACPI RSDP")
+    }
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    println!("{}", info);
-
+    println!("{info}");
     loop {
         x86_64::instructions::hlt();
     }

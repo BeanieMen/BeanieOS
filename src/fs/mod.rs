@@ -1,95 +1,63 @@
-pub mod directory;
-pub mod file;
-pub mod storage;
+//! FAT32 over the AHCI driver.
+//!
+//! The volume is discovered at runtime rather than assumed. Partition table
+//! entries are tried first, then mebibyte-aligned offsets, because a volume
+//! does not need a partition entry to be readable. Nothing here assumes a
+//! partition type, a table layout, or a particular offset.
 
-use fatfs::{FileSystem as FatFileSystem, FsOptions};
+use alloc::vec::Vec;
 
-use crate::fs::storage::block::BlockDevice;
+use fatfs::{FileSystem, FsOptions, IoBase, Read, Seek, Write};
 
-pub struct FileSystem<D: BlockDevice> {
-    inner: FatFileSystem<FatStorage<D>>,
-}
+use crate::arch::ahci::AhciController;
+use crate::println;
 
-impl<D: BlockDevice> FileSystem<D> {
-    pub fn mount(device: D) -> Result<Self, fatfs::Error<()>> {
-        let storage = FatStorage::new(device);
+const SECTOR: u64 = 512;
+const SCAN_STEP: u64 = 1024 * 1024;
 
-        let Ok(inner) = FatFileSystem::new(storage, FsOptions::new()) else {
-            return Err(fatfs::Error::Io(()));
-        };
-
-        Ok(Self { inner })
-    }
-}
-
-pub struct FatStorage<D: BlockDevice> {
-    device: D,
+pub struct Disk {
+    controller: AhciController,
+    base: u64,
     position: u64,
 }
 
-impl<D: BlockDevice> FatStorage<D> {
-    pub fn new(device: D) -> Self {
+impl Disk {
+    fn new(controller: AhciController, base: u64) -> Self {
         Self {
-            device,
+            controller,
+            base,
             position: 0,
         }
     }
-}
 
-impl<D: BlockDevice> fatfs::IoBase for FatStorage<D> {
-    type Error = fatfs::Error<()>;
-}
-
-impl<D: BlockDevice> fatfs::Read for FatStorage<D> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let mut total = 0;
-
-        while total < buf.len() {
-            let sector = self.position / storage::block::SECTOR_SIZE as u64;
-            let offset = (self.position % storage::block::SECTOR_SIZE as u64) as usize;
-            let mut sector_buf = [0u8; storage::block::SECTOR_SIZE];
-            self.device
-                .read_sector(sector, &mut sector_buf)
-                .map_err(|_| fatfs::Error::Io(()))?;
-
-            let count = (storage::block::SECTOR_SIZE - offset).min(buf.len() - total);
-
-            buf[total..total + count].copy_from_slice(&sector_buf[offset..offset + count]);
-            total += count;
-            self.position += count as u64;
-        }
-
-        Ok(total)
+    fn at(&self) -> u64 {
+        self.base * SECTOR + self.position
     }
 }
 
-impl<D: BlockDevice> fatfs::Write for FatStorage<D> {
+impl IoBase for Disk {
+    type Error = fatfs::Error<()>;
+}
+
+impl Read for Disk {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+        let at = self.at();
+        self.controller
+            .read_at(at, buffer)
+            .map_err(|_| fatfs::Error::Io(()))?;
+        self.position += buffer.len() as u64;
+        Ok(buffer.len())
+    }
+}
+
+impl Write for Disk {
     fn write(&mut self, buffer: &[u8]) -> Result<usize, Self::Error> {
-        let mut total = 0;
-
-        while total < buffer.len() {
-            let sector = self.position / storage::block::SECTOR_SIZE as u64;
-            let offset = self.position as usize % storage::block::SECTOR_SIZE;
-
-            let mut sector_buffer = [0u8; storage::block::SECTOR_SIZE];
-
-            self.device
-                .read_sector(sector, &mut sector_buffer)
-                .map_err(|_| fatfs::Error::Io(()))?;
-
-            let count = (storage::block::SECTOR_SIZE - offset).min(buffer.len() - total);
-
-            sector_buffer[offset..offset + count].copy_from_slice(&buffer[total..total + count]);
-
-            self.device
-                .write_sector(sector, &sector_buffer)
-                .map_err(|_| fatfs::Error::Io(()))?;
-
-            total += count;
-            self.position += count as u64;
-        }
-
-        Ok(total)
+        let at = self.at();
+        self.controller
+            .write_at(at, buffer)
+            .map_err(|_| fatfs::Error::Io(()))?;
+        self.position += buffer.len() as u64;
+        Ok(buffer.len())
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
@@ -97,34 +65,109 @@ impl<D: BlockDevice> fatfs::Write for FatStorage<D> {
     }
 }
 
-impl<D: BlockDevice> fatfs::Seek for FatStorage<D> {
-    fn seek(&mut self, pos: fatfs::SeekFrom) -> Result<u64, Self::Error> {
-        let new_position = match pos {
-            fatfs::SeekFrom::Start(offset) => offset,
-            fatfs::SeekFrom::End(offset) => {
-                let size = self.device.sector_count() * storage::block::SECTOR_SIZE as u64;
-                if offset < 0 {
-                    size.checked_sub((-offset) as u64)
-                        .ok_or(fatfs::Error::Io(()))?
-                } else {
-                    size.checked_add(offset as u64)
-                        .ok_or(fatfs::Error::Io(()))?
-                }
-            }
-            fatfs::SeekFrom::Current(offset) => {
-                if offset < 0 {
-                    self.position
-                        .checked_sub((-offset) as u64)
-                        .ok_or(fatfs::Error::Io(()))?
-                } else {
-                    self.position
-                        .checked_add(offset as u64)
-                        .ok_or(fatfs::Error::Io(()))?
-                }
-            }
+impl Seek for Disk {
+    fn seek(&mut self, from: fatfs::SeekFrom) -> Result<u64, Self::Error> {
+        let target = match from {
+            fatfs::SeekFrom::Start(at) => at as i64,
+            fatfs::SeekFrom::End(at) => self.controller.size() as i64 + at,
+            fatfs::SeekFrom::Current(at) => self.position as i64 + at,
         };
 
-        self.position = new_position;
-        Ok(new_position)
+        if target < 0 {
+            return Err(fatfs::Error::Io(()));
+        }
+
+        self.position = target as u64;
+        Ok(self.position)
     }
+}
+
+/// Does this sector start a FAT volume?
+///
+/// The signature alone is not enough: sector 0 of a partitioned disk carries
+/// `0x55AA` with nothing behind it, and would be a false positive. The file
+/// system type string is what actually identifies a volume.
+fn is_volume(sector: &[u8]) -> bool {
+    let bytes_per_sector = u16::from_le_bytes([sector[0x0b], sector[0x0c]]);
+    let signature = u16::from_le_bytes([sector[510], sector[511]]);
+
+    bytes_per_sector == SECTOR as u16 && signature == 0xaa55 && &sector[0x52..0x55] == b"FAT"
+}
+
+/// Start sectors named by a partition table, if there is one.
+fn from_partition_table(disk: &mut AhciController) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut header = [0u8; 512];
+
+    if disk.read_at(SECTOR, &mut header).is_err() || &header[..8] != b"EFI PART" {
+        return out;
+    }
+
+    let table = u64::from_le_bytes(header[72..80].try_into().unwrap());
+    let count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as usize;
+    let size = u32::from_le_bytes(header[84..88].try_into().unwrap()) as usize;
+
+    if size < 128 || count == 0 || count > 256 {
+        return out;
+    }
+
+    for index in 0..count {
+        let mut entry = [0u8; 128];
+        let at = (table + index as u64) * SECTOR;
+
+        if disk.read_at(at, &mut entry).is_err() {
+            break;
+        }
+        if entry[..16] == [0u8; 16] {
+            continue;
+        }
+
+        let first = u64::from_le_bytes(entry[32..40].try_into().unwrap());
+        if first != 0 {
+            out.push(first);
+        }
+    }
+
+    out
+}
+
+/// Every mebibyte-aligned offset in the disk.
+fn by_alignment(disk: &AhciController) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut at = SCAN_STEP;
+
+    while at < disk.size() / SECTOR {
+        out.push(at);
+        at += SCAN_STEP;
+    }
+
+    out
+}
+
+/// Find the first sector that starts a volume. Done before mounting, because
+/// mounting consumes the controller and this borrows it.
+fn find_volume(disk: &mut AhciController) -> Option<u64> {
+    let mut candidates = from_partition_table(disk);
+
+    for at in by_alignment(disk) {
+        if !candidates.contains(&at) {
+            candidates.push(at);
+        }
+    }
+
+    for first in candidates {
+        let mut sector = [0u8; 512];
+        if disk.read_at(first * SECTOR, &mut sector).is_ok() && is_volume(&sector) {
+            return Some(first);
+        }
+    }
+
+    None
+}
+
+pub fn mount(mut controller: AhciController) -> Result<FileSystem<Disk>, &'static str> {
+    let first = find_volume(&mut controller).ok_or("no FAT volume found")?;
+    println!("volume at sector {first} (byte {:#x})", first * SECTOR);
+
+    FileSystem::new(Disk::new(controller, first), FsOptions::new()).map_err(|_| "volume is not FAT")
 }
