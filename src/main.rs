@@ -7,9 +7,11 @@ use core::panic::PanicInfo;
 use fatfs::FileSystem;
 
 use multiboot2::BootInformation;
+use spin::{Mutex, Once};
 use x86_64::VirtAddr;
+use x86_64::instructions::port::Port;
 
-use crate::{fs::Disk, shell::Shell};
+use crate::{fs::Disk, graphics::framebuffer::WRITER, shell::Shell};
 
 extern crate alloc;
 
@@ -21,6 +23,8 @@ mod memory;
 mod shell;
 mod task;
 
+static SHELL: Once<Mutex<Shell>> = Once::new();
+
 fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -> ! {
     init(&boot_info, mbi_addr, mbi_size);
 
@@ -29,14 +33,64 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     println!("framebuffer ready");
 
     let disk = boot_disk().unwrap();
-    let mut shell = Shell::new(disk);
+    SHELL.call_once(|| Mutex::new(Shell::new(disk)));
+
     print!("> ");
 
+    let shell_pid = task::process::create_process("shell", "/");
+
+    task::scheduler::spawn_in_process(
+        shell_pid,
+        "shell",
+        shell_task,
+        task::scheduler::Priority::Normal,
+    );
+
+    let rgb_pid = task::process::create_process("rgb_square", "/");
+    task::scheduler::spawn_in_process(
+        rgb_pid,
+        "rgb_square",
+        rgb_square_task,
+        task::scheduler::Priority::Normal,
+    );
+
     loop {
-        match shell::pop_key() {
-            Some(key) => shell.shell_input(key),
-            None => x86_64::instructions::hlt(),
+        task::scheduler::yield_now();
+        x86_64::instructions::hlt();
+    }
+}
+
+extern "C" fn shell_task() {
+    let shell = SHELL.get().expect("Shell not initialized");
+    loop {
+        if let Some(key) = shell::pop_key() {
+            shell.lock().shell_input(key);
+        } else {
+            task::scheduler::yield_now();
         }
+    }
+}
+
+static RGB_TICKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+extern "C" fn rgb_square_task() {
+    loop {
+        let tick = RGB_TICKS.fetch_add(8, core::sync::atomic::Ordering::Relaxed) % 1536;
+
+        let (r, g, b) = match tick {
+            0..=255 => (255, tick, 0),
+            256..=511 => (511 - tick, 255, 0),
+            512..=767 => (0, 255, tick - 512),
+            768..=1023 => (0, 1023 - tick, 255),
+            1024..=1279 => (tick - 1024, 0, 255),
+            _ => (255, 0, 1535 - tick),
+        };
+
+        let color = (r << 16) | (g << 8) | b;
+
+        WRITER.lock().fill_rect(500, 500, 100, 100, color);
+
+        task::scheduler::yield_now();
     }
 }
 
@@ -103,6 +157,9 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
     arch::gdt::init();
     arch::interrupts::init_idt(acpi_root_addr_from(boot_info));
     x86_64::instructions::interrupts::enable();
+
+    task::process::init();
+    task::scheduler::init();
 }
 
 fn acpi_root_addr_from(boot_info: &BootInformation<'_>) -> usize {

@@ -25,6 +25,9 @@ pub unsafe fn init(acpi_root_addr: usize) {
         lapic::init();
     }
     unsafe {
+        lapic::init_timer(0x100_000);
+    }
+    unsafe {
         ioapic::init();
     }
 
