@@ -63,3 +63,52 @@ h1{
         margin-right: 30px;
     }
 }
+
+
+nav-bar{
+    height: 9vh;
+    margin: 0 !important;
+    background-color: rgb(44, 42, 42);
+
+    display: flex;
+    gap: 800px;
+
+    padding-left: 1.5vw;
+    padding-right: 1.5vw;
+
+    align-items: center;
+}
+
+.nav-bar .title{
+    display: flex;
+    gap: 1px;
+    text-decoration: none;
+    color: white;
+    align-items: center;
+}
+
+.nav-bar h1{
+    font-size: 2vw;
+}
+
+.nav-bar img{
+    height: 3.2vw;
+    width: auto;
+}
+
+.nav-links{
+    display: flex;
+    gap: 100px;
+}
+
+.nav-links a{
+    color: rgba(255, 255, 255, 0.782);
+    text-decoration: none;
+    font-size: 17px;
+}
+
+.nav-links a:hover{
+    color: white;
+    text-decoration: underline;
+    font-weight: 700;
+}
