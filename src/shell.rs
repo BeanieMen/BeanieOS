@@ -171,19 +171,20 @@ impl Shell {
             return Some(Path::root());
         }
 
-        let mut full = if path.starts_with('/') {
-            Path::root()
+        let (base, rest) = if let Some(rest) = path.strip_prefix('/') {
+            (Path::root(), rest)
         } else {
-            self.cwd.clone()
+            (self.cwd.clone(), path)
         };
 
+        let mut full = base;
         if full.len > 1 && !full.push("/") {
             return None;
         }
 
-        full.push(path).then_some(full)
+        full.push(rest).then_some(full)
     }
-
+    
     fn cwd_dir(&self) -> FatDir<'_> {
         let root = self.fs.root_dir();
         let path = self.cwd.as_str();
