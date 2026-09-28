@@ -1,7 +1,7 @@
 pub mod consts;
 mod faults;
 pub mod pic;
-mod vectors;
+pub mod vectors;
 
 use lazy_static::lazy_static;
 use x86_64::structures::idt::InterruptDescriptorTable;

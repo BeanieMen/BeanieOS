@@ -28,7 +28,8 @@ pub const SPURIOUS_VECTOR: u8 = 0xFF;
 // LAPIC timer.
 
 pub const LAPIC_TIMER_PERIODIC: u32 = 1 << 17;
-pub const LAPIC_TIMER_DIVIDE_16: u32 = 0b1011;
+
+pub const LAPIC_TIMER_DIVIDE_16: u32 = 0b0011;
 
 // PS/2 keyboard data port.
 
