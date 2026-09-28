@@ -6,6 +6,8 @@ we wanna make it easier for future rust devs to make an os. there arent that man
 
 the docs + guide + download website will guide users on how to start on osdev and build on this os itself or they can just use an iso and run it (will make one after this is in a usable state)
 
+demo link : https://beanie-os.vercel.app/
+
 we are still currrently in the ring 0 (kernel ring). this readme will be updated whenever me and pranjal make progress on this
 
 # Note
