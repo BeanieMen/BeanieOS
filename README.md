@@ -14,11 +14,6 @@ the first week was a little hectic due to website and team finding issues i hope
 pranjal is a beginner and i am teaching him how stuff works so it might be a bit slower 
 
 
-# Demo
-<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
-
-<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/0db947a8-66b3-4c51-a578-b283195dd930" />
-
 
 # Demo
 <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
