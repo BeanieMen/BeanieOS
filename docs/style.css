@@ -107,3 +107,14 @@ h3{
 .status{
     color: rgb(220, 37, 37);
 }
+
+#welcome{
+    position: absolute;
+    top: 60px;
+    left: 30px;
+    height: 1500px;
+    width: auto;
+
+    pointer-events: none;
+    user-select: none;
+}

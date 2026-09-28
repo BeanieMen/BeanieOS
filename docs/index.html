@@ -39,9 +39,24 @@
 
         </section>
 
+
         <section class="current-status">
 
             <h3>Current Status</h3>
+
+            <p>BeanieOS is under active development. The core foundations of the operating system are now functional, with development moving towards processes, 
+                storage, userspace, and eventually a more complete system environment.
+            </p>
+
+        </section>
+
+
+        <img src="https://cdn.hackclub.com/01a0e5b6-1309-740b-99eb-bc1c73e37b2d/beanie_one_eye.avif" alt="beanie-welcome" id="welcome">
+
+
+        <section class="core-system">
+
+            <h3>Core System</h3>
 
             <div>
                 <span>Bootloader -</span>
@@ -49,26 +64,96 @@
             </div>
 
             <div>
-                <span>Interrupts -</span>
-                <span class="status">Done</span>
+                <span>Kernel -</span>
+                <span class="status">Functional</span>
             </div>
 
             <div>
-                <span>Memory management -</span>
-                <span class="status">In Progress</span>
+                <span>Interrupt Handling -</span>
+                <span class="status">Functional</span>
             </div>
 
             <div>
-                <span>File system -</span>
-                <span class="status">Not Started</span>
+                <span>Memory Management -</span>
+                <span class="status">Functional</span>
             </div>
 
             <div>
-                <span>Networking -</span>
-                <span class="status">Not Started</span>
+                <span>Basic Process System -</span>
+                <span class="status">Working, currently non-standard</span>
+            </div>
+
+            <div>
+                <span>Shell -</span>
+                <span class="status">Basic commands working</span>
             </div>
 
         </section>
+
+
+        <section class="graphics">
+
+            <h3>Graphics</h3>
+
+            <div>
+                <span>Native Graphical Framebuffer -</span>
+                <span class="status">Working</span>
+            </div>
+
+            <div>
+                <span>Graphics Driver -</span>
+                <span class="status">Non-VESA implementation working</span>
+            </div>
+
+        </section>
+
+
+        <section class="storage">
+
+            <h3>Storage & File System</h3>
+
+            <div>
+                <span>Storage Drivers -</span>
+                <span class="status">Read/Write working</span>
+            </div>
+
+            <div>
+                <span>FAT32 Filesystem -</span>
+                <span class="status">Read/Write working</span>
+            </div>
+
+        </section>
+
+
+        <section class="architecture">
+
+            <h3>Architecture</h3>
+
+            <div>
+                <span>x86-62 -</span>
+                <span class="status">Current target</span>
+            </div>
+
+            <div>
+                <span>Monolithic Kernel -</span>
+                <span class="status">Current architecture</span>
+            </div>
+
+        </section>
+
+
+        <section class="next">
+
+            <h3>Next Up</h3>
+
+            <p>- Standardize the process system <br>
+                - Expand shell commands <br>
+                - Improve filesystem support and reliability <br>
+                - Build out userspace <br>
+                - Continue hardware/driver support</p>
+
+        </section>
+
 
         <section class="documentation">
 
@@ -76,7 +161,8 @@
 
             <p>Explore the documentation, understand the architecture, build the project and follow its development. <br>
 
-            <a href="docs.html">Explore Documentation</a> </p>
+            <a href="docs.html">Explore Documentation</a> <br>
+            It's not complete yet. We will implement the docs next week.</p>
 
         </section>
     </main>
