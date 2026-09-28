@@ -12,15 +12,22 @@ we are still currrently in the ring 0 (kernel ring). this readme will be updated
 
 # Note
 
-the first week was a little hectic due to website and team finding issues i hope you guys understand
 pranjal is a beginner and i am teaching him how stuff works so it might be a bit slower 
 
+# Week2
 
+beanie man : we have a functioning kernel now with a semi proper process system (non standard will make it standard). a shell with basic commands. a proper graphical non vesa framebuffer (yes this is VERY distinct).
+and the biggest task of this week. the fat32 filesystem + drivers to rw storage
+
+pranjal : chaged the theme of the website, designed a bunny emoticon, continued to write docs.
 
 # Demo
 <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
 
-<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/0db947a8-66b3-4c51-a578-b283195dd930" />
+<img width="2880" height="1800" alt="image" src="https://cdn.hackclub.com/01a0e5f6-27a4-76de-b3a3-b6c8b90f4841/WhatsApp%20Image%202026-09-28%20at%2006.06.57.jpeg" />
+
+<img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
+
 
 
 # Features
