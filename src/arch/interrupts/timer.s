@@ -20,10 +20,7 @@ timer_interrupt_entry:
     push %r14
     push %r15
 
-    mov %rsp, %rdi
     call timer_interrupt_rust
-
-    mov %rax, %rsp
 
     pop %r15
     pop %r14

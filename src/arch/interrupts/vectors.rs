@@ -30,14 +30,12 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn timer_interrupt_rust(saved_rsp: usize) -> usize {
+extern "C" fn timer_interrupt_rust() {
     TICKS.fetch_add(1, Ordering::Relaxed);
 
     unsafe {
         pic::eoi();
     }
-
-    crate::task::scheduler::tick_from_interrupt(saved_rsp)
 }
 
 unsafe extern "C" {

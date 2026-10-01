@@ -1,43 +1,27 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use alloc::{
-    collections::BTreeMap,
-    string::String,
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 
 use spin::Mutex;
-use x86_64::structures::paging::PhysFrame;
 
-use crate::{
-    arch::interrupts::vectors::ticks,
-    task::{scheduler, thread::ThreadId},
-};
+use crate::{arch::interrupts::vectors::ticks, task::thread::ThreadId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ProcessId {
-    pub id: u64,
-}
+pub struct ProcessId(u64);
 
 impl ProcessId {
-    pub const KERNEL: ProcessId = ProcessId { id: 0 };
+    pub const KERNEL: ProcessId = ProcessId(0);
 
     pub fn new() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        ProcessId {
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-        }
+
+        ProcessId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStatus {
-    Created,
-    Ready,
     Running,
-    Sleeping(u64),
-    Waiting(ProcessId),
     Zombie(i32),
     Dead,
 }
@@ -59,7 +43,6 @@ pub struct Process {
     pub name: String,
     pub status: ProcessStatus,
     pub cwd: String,
-    pub page_table: Option<PhysFrame>,
     pub threads: Vec<ThreadId>,
     pub exit_code: Option<i32>,
     pub created_at: u64,
@@ -73,7 +56,6 @@ impl Process {
             name: String::from("kernel"),
             status: ProcessStatus::Running,
             cwd: String::from("/"),
-            page_table: None,
             threads: Vec::new(),
             exit_code: None,
             created_at: ticks(),
@@ -85,9 +67,8 @@ impl Process {
             pid: ProcessId::new(),
             ppid,
             name: String::from(name),
-            status: ProcessStatus::Created,
+            status: ProcessStatus::Running,
             cwd: String::from(cwd),
-            page_table: None,
             threads: Vec::new(),
             exit_code: None,
             created_at: ticks(),
@@ -106,10 +87,13 @@ impl Process {
         }
     }
 
+    fn live_threads(&self) -> usize {
+        self.threads.len()
+    }
 }
 
 pub struct ProcessManager {
-    pub processes: BTreeMap<ProcessId, Arc<Mutex<Process>>>,
+    processes: BTreeMap<ProcessId, Arc<Mutex<Process>>>,
     current_pid: ProcessId,
     initialized: bool,
 }
@@ -135,7 +119,7 @@ impl ProcessManager {
         self.initialized = true;
     }
 
-    pub fn create_process(&mut self, name: &str, cwd: &str) -> ProcessId {
+    pub fn create(&mut self, name: &str, cwd: &str) -> ProcessId {
         if !self.initialized {
             self.init();
         }
@@ -148,15 +132,48 @@ impl ProcessManager {
         pid
     }
 
-    pub fn exit_process(&mut self, pid: ProcessId, exit_code: i32) {
-        if let Some(process) = self.processes.get(&pid) {
-            let mut process = process.lock();
+    pub fn exit(&mut self, pid: ProcessId, exit_code: i32) {
+        let Some(process) = self.processes.get(&pid) else {
+            return;
+        };
 
-            process.status = ProcessStatus::Zombie(exit_code);
-            process.exit_code = Some(exit_code);
+        let mut process = process.lock();
+
+        process.status = ProcessStatus::Zombie(exit_code);
+        process.exit_code = Some(exit_code);
+    }
+
+    pub fn reap(&mut self, pid: ProcessId) -> Option<i32> {
+        let process = self.processes.get(&pid)?;
+
+        let code = match process.lock().status {
+            ProcessStatus::Zombie(code) => code,
+            ProcessStatus::Dead => return None,
+            ProcessStatus::Running => return None,
+        };
+
+        drop(process);
+        self.processes.remove(&pid);
+
+        Some(code)
+    }
+
+    pub fn wait(&mut self, target: ProcessId) -> Option<i32> {
+        let current = self.current_pid;
+
+        loop {
+            if let Some(code) = self.reap(target) {
+                return Some(code);
+            }
+
+            let process = self.processes.get(&target)?;
+
+            if process.lock().ppid != Some(current) {
+                return None;
+            }
+
+            crate::task::scheduler::sleep(1);
         }
-
-        self.wake_waiting_parents(pid);
     }
 
     pub fn kill(&mut self, pid: ProcessId) -> Result<(), &'static str> {
@@ -182,7 +199,7 @@ impl ProcessManager {
         self.current_pid = pid;
     }
 
-    pub fn list_processes(&self) -> Vec<ProcessInfo> {
+    pub fn list(&self) -> Vec<ProcessInfo> {
         let now = ticks();
 
         self.processes
@@ -196,21 +213,11 @@ impl ProcessManager {
                     name: process.name.clone(),
                     status: process.status,
                     cwd: process.cwd.clone(),
-                    threads_count: process.threads.len(),
+                    threads_count: process.live_threads(),
                     uptime_ticks: now.saturating_sub(process.created_at),
                 }
             })
             .collect()
-    }
-
-    fn wake_waiting_parents(&mut self, child: ProcessId) {
-        for process in self.processes.values() {
-            let mut process = process.lock();
-
-            if process.status == ProcessStatus::Waiting(child) {
-                process.status = ProcessStatus::Ready;
-            }
-        }
     }
 }
 
@@ -220,65 +227,34 @@ pub fn init() {
     PROCESS_MANAGER.lock().init();
 }
 
-pub fn create_process(name: &str, cwd: &str) -> ProcessId {
-    PROCESS_MANAGER.lock().create_process(name, cwd)
+pub fn create(name: &str, cwd: &str) -> ProcessId {
+    PROCESS_MANAGER.lock().create(name, cwd)
 }
 
-pub fn exit_current(exit_code: i32) {
-    let pid = PROCESS_MANAGER.lock().current_pid();
-
-    PROCESS_MANAGER.lock().exit_process(pid, exit_code);
-
-    scheduler::exit()
+pub fn exit(pid: ProcessId, code: i32) {
+    PROCESS_MANAGER.lock().exit(pid, code);
 }
 
-pub fn wait_pid(target: ProcessId) -> Result<i32, &'static str> {
-    loop {
-        match try_reap(target) {
-            Reap::Found(result) => return result,
-            Reap::NotChild => return Err("Not a child of the current process"),
-            Reap::NotFound => return Err("Process not found"),
-            Reap::StillRunning => scheduler::yield_now(),
-        }
-    }
+pub fn reap(pid: ProcessId) -> Option<i32> {
+    PROCESS_MANAGER.lock().reap(pid)
 }
 
-enum Reap {
-    Found(Result<i32, &'static str>),
-    NotChild,
-    NotFound,
-    StillRunning,
+pub fn wait(target: ProcessId) -> Option<i32> {
+    PROCESS_MANAGER.lock().wait(target)
 }
 
-fn try_reap(target: ProcessId) -> Reap {
-    let mut manager = PROCESS_MANAGER.lock();
-    let current = manager.current_pid;
+pub fn kill(pid: ProcessId) -> Result<(), &'static str> {
+    PROCESS_MANAGER.lock().kill(pid)
+}
 
-    let Some(process) = manager.processes.get(&target) else {
-        return Reap::NotFound;
-    };
+pub fn current_pid() -> ProcessId {
+    PROCESS_MANAGER.lock().current_pid()
+}
 
-    if process.lock().ppid != Some(current) {
-        return Reap::NotChild;
-    }
-
-    let code = match process.lock().status {
-        ProcessStatus::Zombie(code) => code,
-        ProcessStatus::Dead => -1,
-        _ => {
-            if let Some(parent) = manager.processes.get(&current) {
-                parent.lock().status = ProcessStatus::Waiting(target);
-            }
-
-            return Reap::StillRunning;
-        }
-    };
-
-    manager.processes.remove(&target);
-
-    Reap::Found(Ok(code))
+pub fn set_current_pid(pid: ProcessId) {
+    PROCESS_MANAGER.lock().set_current_pid(pid);
 }
 
 pub fn list() -> Vec<ProcessInfo> {
-    PROCESS_MANAGER.lock().list_processes()
+    PROCESS_MANAGER.lock().list()
 }
