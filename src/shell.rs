@@ -67,6 +67,20 @@ impl Path {
         self.len += add.len();
         true
     }
+
+    fn pop_component(&mut self) {
+        if self.len <= 1 {
+            return;
+        }
+
+        while self.len > 1 && self.bytes[self.len - 1] != b'/' {
+            self.len -= 1;
+        }
+
+        if self.len > 1 {
+            self.len -= 1;
+        }
+    }
 }
 
 pub struct Shell {
@@ -178,11 +192,24 @@ impl Shell {
         };
 
         let mut full = base;
-        if full.len > 1 && !full.push("/") {
-            return None;
+
+        for part in rest.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => full.pop_component(),
+                name => {
+                    if full.len > 1 && !full.push("/") {
+                        return None;
+                    }
+
+                    if !full.push(name) {
+                        return None;
+                    }
+                }
+            }
         }
 
-        full.push(rest).then_some(full)
+        Some(full)
     }
     
     fn cwd_dir(&self) -> FatDir<'_> {
