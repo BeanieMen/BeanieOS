@@ -1,11 +1,11 @@
 body{margin: 0;
 
-    font-family: "Roboto", sans-serif;
+    font-family: "Google Sans Code", monospace;
     font-optical-sizing: auto;
-    font-weight: 300;
+    font-weight: 100;
     font-style: normal;
     font-variation-settings:
-        "wdth" 100;
+        "MONO" 1;
 }
 
 main{
@@ -14,7 +14,7 @@ main{
 }
 
 .nav-bar{
-    height: 10vh;
+    height: 9vh;
     margin: 0 !important;
     background-color: rgb(44, 42, 42);
 
@@ -58,6 +58,7 @@ main{
 .nav-links a:hover{
     color: white;
     text-decoration: underline;
+    font-weight: 700;
 }
 
 
@@ -66,3 +67,54 @@ section{
     margin-bottom: 6vh;
 }
 
+.intro{
+    border: black 1px solid;
+    padding: 0px 15px 0px 15px;
+    background-color: rgb(98, 165, 252);
+}
+
+.bodered-heading{
+    border-bottom: 1px solid white;
+    padding-bottom: 8px;
+    margin-bottom: 15px;
+}
+
+.margined-lines{
+    margin-top: 0;
+    margin-bottom: 9px;
+}
+
+p{
+    font-size: 15px;
+}
+
+h3{
+    font-weight: 500;
+    color: black;
+}
+
+.documentation a{
+    text-decoration: none;
+    color: rgb(29, 21, 247);
+}
+
+.documentation a:hover{
+    text-decoration: underline;
+    color: rgb(21, 145, 247);
+    font-weight: 700;
+}
+
+.status{
+    color: rgb(220, 37, 37);
+}
+
+#welcome{
+    position: absolute;
+    top: 60px;
+    left: 30px;
+    height: 1500px;
+    width: auto;
+
+    pointer-events: none;
+    user-select: none;
+}

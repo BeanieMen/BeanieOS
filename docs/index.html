@@ -6,6 +6,10 @@
     <title>BeanieOS</title>
 
     <link rel="stylesheet" href="style.css">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Code:ital,wght,MONO@0,300..800,1;1,300..800,1&display=swap" rel="stylesheet">
 </head>
 
 
@@ -27,52 +31,138 @@
 
         <section class="intro">
 
-            <h3>An operating system written in Rust</h3>
+            <h3 class="bodered-heading">An operating system written in Rust</h3>
 
-            <p>You've reached the website for BeanieOS - a lightweight, experimental operating system built with Rust. <br> <br>
-            Currently targeting x86-64 architecture. <br> <br>
-            Follow the project as we explore operating system development from scratch!</p>
+            <p class="margined-lines">You've reached the website for BeanieOS - a lightweight, experimental operating system built with Rust. </p>
+            <p class="margined-lines">Currently targeting x86-64 architecture. </p>
+            <p class="margined-lines">Follow the project as we explore operating system development from scratch!</p>
 
         </section>
 
-        <section class="status">
+
+        <section class="current-status">
 
             <h3>Current Status</h3>
 
+            <p>BeanieOS is under active development. The core foundations of the operating system are now functional, with development moving towards processes, 
+                storage, userspace, and eventually a more complete system environment.
+            </p>
+
+        </section>
+
+
+        <img src="https://cdn.hackclub.com/01a0e5b6-1309-740b-99eb-bc1c73e37b2d/beanie_one_eye.avif" alt="beanie-welcome" id="welcome">
+
+
+        <section class="core-system">
+
+            <h3>Core System</h3>
+
             <div>
-                <span>Bootloader</span> 
-                <span>Done</span> <br>
+                <span>Bootloader -</span>
+                <span class="status">Done</span>
             </div>
 
             <div>
-                <span>Interrupts</span>
-                <span>Done</span>
+                <span>Kernel -</span>
+                <span class="status">Functional</span>
             </div>
 
             <div>
-                <span>Memory management</span>
-                <span>In Progress</span>
+                <span>Interrupt Handling -</span>
+                <span class="status">Functional</span>
             </div>
 
             <div>
-                <span>File system</span>
-                <span>Not Started</span>
+                <span>Memory Management -</span>
+                <span class="status">Functional</span>
             </div>
 
             <div>
-                <span>Networking</span>
-                <span>Not Started</span>
+                <span>Basic Process System -</span>
+                <span class="status">Working, currently non-standard</span>
+            </div>
+
+            <div>
+                <span>Shell -</span>
+                <span class="status">Basic commands working</span>
             </div>
 
         </section>
+
+
+        <section class="graphics">
+
+            <h3>Graphics</h3>
+
+            <div>
+                <span>Native Graphical Framebuffer -</span>
+                <span class="status">Working</span>
+            </div>
+
+            <div>
+                <span>Graphics Driver -</span>
+                <span class="status">Non-VESA implementation working</span>
+            </div>
+
+        </section>
+
+
+        <section class="storage">
+
+            <h3>Storage & File System</h3>
+
+            <div>
+                <span>Storage Drivers -</span>
+                <span class="status">Read/Write working</span>
+            </div>
+
+            <div>
+                <span>FAT32 Filesystem -</span>
+                <span class="status">Read/Write working</span>
+            </div>
+
+        </section>
+
+
+        <section class="architecture">
+
+            <h3>Architecture</h3>
+
+            <div>
+                <span>x86-62 -</span>
+                <span class="status">Current target</span>
+            </div>
+
+            <div>
+                <span>Monolithic Kernel -</span>
+                <span class="status">Current architecture</span>
+            </div>
+
+        </section>
+
+
+        <section class="next">
+
+            <h3>Next Up</h3>
+
+            <p>- Standardize the process system <br>
+                - Expand shell commands <br>
+                - Improve filesystem support and reliability <br>
+                - Build out userspace <br>
+                - Continue hardware/driver support</p>
+
+        </section>
+
 
         <section class="documentation">
 
             <h3>Learn BeanieOS</h3>
 
-            <p>Explore the documentation, understand the architecture, build the project and follow its development.</p>
+            <p>Explore the documentation, understand the architecture, build the project and follow its development. <br>
 
-            <a href="docs.html">Explore Documentation</a>
+            <a href="docs.html">Explore Documentation</a> <br>
+            It's not complete yet. We will implement the docs next week.</p>
 
         </section>
     </main>
