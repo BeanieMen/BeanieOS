@@ -3,7 +3,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::structures::idt::InterruptDescriptorTable;
 
 use crate::arch::interrupts::consts::LAPIC_TIMER_VECTOR;
-use crate::println;
 
 use super::consts::{KEYBOARD_VECTOR, PS2_DATA_PORT, SPURIOUS_VECTOR};
 use super::pic;
@@ -39,6 +38,7 @@ extern "x86-interrupt" fn timer_interrupt_handler(
     unsafe {
         pic::eoi();
     }
+    crate::task::scheduler::tick();
 }
 
 pub(crate) fn ticks() -> u64 {
