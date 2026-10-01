@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use x86_64::structures::idt::InterruptDescriptorTable;
+use x86_64::{VirtAddr, structures::idt::InterruptDescriptorTable};
 
 use crate::arch::interrupts::consts::LAPIC_TIMER_VECTOR;
 
@@ -20,8 +20,6 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
     let mut port = x86_64::instructions::port::Port::new(PS2_DATA_PORT);
     let scancode: u8 = unsafe { port.read() };
 
-    // The shell drains this outside interrupt context: a command can read
-    // the disk and print.
     if let Some(inp) = scancode_to_ascii(scancode) {
         crate::shell::push_key(inp);
     }
@@ -31,14 +29,19 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
     }
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(
-    _stack_frame: x86_64::structures::idt::InterruptStackFrame,
-) {
+#[unsafe(no_mangle)]
+extern "C" fn timer_interrupt_rust(saved_rsp: usize) -> usize {
     TICKS.fetch_add(1, Ordering::Relaxed);
+
     unsafe {
         pic::eoi();
     }
-    crate::task::scheduler::tick();
+
+    crate::task::scheduler::tick_from_interrupt(saved_rsp)
+}
+
+unsafe extern "C" {
+    fn timer_interrupt_entry();
 }
 
 pub(crate) fn ticks() -> u64 {
@@ -48,7 +51,11 @@ pub(crate) fn ticks() -> u64 {
 pub(crate) fn register_vectors(idt: &mut InterruptDescriptorTable) {
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_interrupt_handler);
     idt[SPURIOUS_VECTOR].set_handler_fn(spurious_interrupt_handler);
-    idt[LAPIC_TIMER_VECTOR].set_handler_fn(timer_interrupt_handler);
+
+    unsafe {
+        idt[LAPIC_TIMER_VECTOR]
+            .set_handler_addr(VirtAddr::from_ptr(timer_interrupt_entry as *const ()));
+    }
 }
 
 // evils map putting this piece of code here because i dont know where to put it right now

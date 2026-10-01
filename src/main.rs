@@ -43,16 +43,17 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         shell_pid,
         "shell",
         shell_task,
-        task::scheduler::Priority::Normal,
+        task::thread::Priority::Normal,
     );
 
-    let rgb_pid = task::process::create_process("rgb_square", "/");
+    // let rgb_pid = task::process::create_process("rgb_square", "/");
     task::scheduler::spawn_in_process(
-        rgb_pid,
+        shell_pid,
         "rgb_square",
         rgb_square_task,
-        task::scheduler::Priority::Normal,
+        task::thread::Priority::Normal,
     );
+
 
     loop {
         task::scheduler::yield_now();

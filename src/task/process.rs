@@ -1,10 +1,19 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
+use alloc::{
+    collections::BTreeMap,
+    string::String,
+    sync::Arc,
+    vec::Vec,
+};
+
 use spin::Mutex;
 use x86_64::structures::paging::PhysFrame;
 
-use crate::{arch::interrupts::vectors::ticks, task::scheduler::ThreadId};
+use crate::{
+    arch::interrupts::vectors::ticks,
+    task::{scheduler, thread::ThreadId},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProcessId {
@@ -13,6 +22,7 @@ pub struct ProcessId {
 
 impl ProcessId {
     pub const KERNEL: ProcessId = ProcessId { id: 0 };
+
     pub fn new() -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         ProcessId {
@@ -26,9 +36,9 @@ pub enum ProcessStatus {
     Created,
     Ready,
     Running,
-    Sleeping(u64),      // ticks remaining till wakeup
-    Waiting(ProcessId), // waiting for a child to exit
-    Zomibie(i32),       // exited, but not reaped by parent
+    Sleeping(u64),
+    Waiting(ProcessId),
+    Zombie(i32),
     Dead,
 }
 
@@ -43,8 +53,6 @@ pub struct ProcessInfo {
     pub uptime_ticks: u64,
 }
 
-/// A Process represents an isolated execution container with its own
-/// metadata, page table (CR3), threads, and resource tables.
 pub struct Process {
     pub pid: ProcessId,
     pub ppid: Option<ProcessId>,
@@ -58,7 +66,7 @@ pub struct Process {
 }
 
 impl Process {
-    pub fn new_kernel() -> Self {
+    fn boot() -> Self {
         Process {
             pid: ProcessId::KERNEL,
             ppid: None,
@@ -71,7 +79,8 @@ impl Process {
             created_at: ticks(),
         }
     }
-    pub fn new(name: &str, ppid: Option<ProcessId>, cwd: &str) -> Self {
+
+    fn new(name: &str, ppid: Option<ProcessId>, cwd: &str) -> Self {
         Process {
             pid: ProcessId::new(),
             ppid,
@@ -85,23 +94,26 @@ impl Process {
         }
     }
 
-    pub fn attach_thread(&mut self, thread_id: ThreadId) {
-        if (!self.threads.contains(&thread_id)) {
-            self.threads.push(thread_id);
+    pub fn attach_thread(&mut self, id: ThreadId) {
+        if !self.threads.contains(&id) {
+            self.threads.push(id);
         }
     }
 
-    pub fn detach_thread(&mut self, thread_id: ThreadId) {
-        if let Some(pos) = self.threads.iter().position(|&id| id == thread_id) {
-            self.threads.remove(pos);
+    pub fn detach_thread(&mut self, id: ThreadId) {
+        if let Some(index) = self.threads.iter().position(|&thread| thread == id) {
+            self.threads.remove(index);
         }
     }
+
 }
+
 pub struct ProcessManager {
     pub processes: BTreeMap<ProcessId, Arc<Mutex<Process>>>,
     current_pid: ProcessId,
     initialized: bool,
 }
+
 impl ProcessManager {
     const fn new() -> Self {
         ProcessManager {
@@ -116,8 +128,9 @@ impl ProcessManager {
             return;
         }
 
-        let kernel_proc = Arc::new(Mutex::new(Process::new_kernel()));
-        self.processes.insert(ProcessId::KERNEL, kernel_proc);
+        let kernel = Arc::new(Mutex::new(Process::boot()));
+
+        self.processes.insert(ProcessId::KERNEL, kernel);
         self.current_pid = ProcessId::KERNEL;
         self.initialized = true;
     }
@@ -127,41 +140,40 @@ impl ProcessManager {
             self.init();
         }
 
-        let parent = Some(self.current_pid);
-        let proc = Process::new(name, parent, cwd);
-        let pid = proc.pid;
-        self.processes.insert(pid, Arc::new(Mutex::new(proc)));
+        let process = Process::new(name, Some(self.current_pid), cwd);
+        let pid = process.pid;
+
+        self.processes.insert(pid, Arc::new(Mutex::new(process)));
+
         pid
     }
 
     pub fn exit_process(&mut self, pid: ProcessId, exit_code: i32) {
-        if let Some(proc_arc) = self.processes.get(&pid) {
-            let mut proc = proc_arc.lock();
-            proc.status = ProcessStatus::Zomibie(exit_code);
-            proc.exit_code = Some(exit_code);
+        if let Some(process) = self.processes.get(&pid) {
+            let mut process = process.lock();
+
+            process.status = ProcessStatus::Zombie(exit_code);
+            process.exit_code = Some(exit_code);
         }
 
-        // wake any parent waiting on this child
-        for proc_arc in self.processes.values() {
-            let mut p = proc_arc.lock();
-            if p.status == ProcessStatus::Waiting(pid) {
-                p.status = ProcessStatus::Ready;
-            }
-        }
+        self.wake_waiting_parents(pid);
     }
 
     pub fn kill(&mut self, pid: ProcessId) -> Result<(), &'static str> {
         if pid == ProcessId::KERNEL {
             return Err("Cannot kill kernel process");
         }
-        if let Some(proc_arc) = self.processes.get(&pid) {
-            proc_arc.lock().status = ProcessStatus::Dead;
-            self.processes.remove(&pid);
-            Ok(())
-        } else {
-            Err("PID not found")
+
+        match self.processes.get(&pid) {
+            Some(process) => {
+                process.lock().status = ProcessStatus::Dead;
+                self.processes.remove(&pid);
+                Ok(())
+            }
+            None => Err("PID not found"),
         }
     }
+
     pub fn current_pid(&self) -> ProcessId {
         self.current_pid
     }
@@ -175,20 +187,30 @@ impl ProcessManager {
 
         self.processes
             .values()
-            .map(|arc| {
-                let p = arc.lock();
+            .map(|process| {
+                let process = process.lock();
 
                 ProcessInfo {
-                    pid: p.pid,
-                    ppid: p.ppid,
-                    name: p.name.clone(),
-                    status: p.status,
-                    cwd: p.cwd.clone(),
-                    threads_count: p.threads.len(),
-                    uptime_ticks: now.saturating_sub(p.created_at),
+                    pid: process.pid,
+                    ppid: process.ppid,
+                    name: process.name.clone(),
+                    status: process.status,
+                    cwd: process.cwd.clone(),
+                    threads_count: process.threads.len(),
+                    uptime_ticks: now.saturating_sub(process.created_at),
                 }
             })
             .collect()
+    }
+
+    fn wake_waiting_parents(&mut self, child: ProcessId) {
+        for process in self.processes.values() {
+            let mut process = process.lock();
+
+            if process.status == ProcessStatus::Waiting(child) {
+                process.status = ProcessStatus::Ready;
+            }
+        }
     }
 }
 
@@ -204,44 +226,57 @@ pub fn create_process(name: &str, cwd: &str) -> ProcessId {
 
 pub fn exit_current(exit_code: i32) {
     let pid = PROCESS_MANAGER.lock().current_pid();
+
     PROCESS_MANAGER.lock().exit_process(pid, exit_code);
-    crate::task::scheduler::exit();
+
+    scheduler::exit()
 }
-pub fn wait_pid(target_pid: ProcessId) -> Result<i32, &'static str> {
+
+pub fn wait_pid(target: ProcessId) -> Result<i32, &'static str> {
     loop {
-        {
-            let mut pm = PROCESS_MANAGER.lock();
-            let current = pm.current_pid;
-            let proc_arc = match pm.processes.get(&target_pid) {
-                Some(p) => p,
-                None => return Err("Process not found"),
-            };
-            let proc = proc_arc.lock();
-            if proc.ppid != Some(current) {
-                return Err("Not a child of the current process");
-            }
-            match proc.status {
-                ProcessStatus::Zomibie(code) => {
-                    drop(proc);
-                    drop(proc_arc);
-                    pm.processes.remove(&target_pid);
-                    return Ok(code);
-                }
-                ProcessStatus::Dead => {
-                    drop(proc);
-                    drop(proc_arc);
-                    pm.processes.remove(&target_pid);
-                    return Ok(-1);
-                }
-                _ => {
-                    if let Some(current_arc) = pm.processes.get(&current) {
-                        current_arc.lock().status = ProcessStatus::Waiting(target_pid);
-                    }
-                }
-            }
+        match try_reap(target) {
+            Reap::Found(result) => return result,
+            Reap::NotChild => return Err("Not a child of the current process"),
+            Reap::NotFound => return Err("Process not found"),
+            Reap::StillRunning => scheduler::yield_now(),
         }
-        crate::task::scheduler::yield_now();
     }
+}
+
+enum Reap {
+    Found(Result<i32, &'static str>),
+    NotChild,
+    NotFound,
+    StillRunning,
+}
+
+fn try_reap(target: ProcessId) -> Reap {
+    let mut manager = PROCESS_MANAGER.lock();
+    let current = manager.current_pid;
+
+    let Some(process) = manager.processes.get(&target) else {
+        return Reap::NotFound;
+    };
+
+    if process.lock().ppid != Some(current) {
+        return Reap::NotChild;
+    }
+
+    let code = match process.lock().status {
+        ProcessStatus::Zombie(code) => code,
+        ProcessStatus::Dead => -1,
+        _ => {
+            if let Some(parent) = manager.processes.get(&current) {
+                parent.lock().status = ProcessStatus::Waiting(target);
+            }
+
+            return Reap::StillRunning;
+        }
+    };
+
+    manager.processes.remove(&target);
+
+    Reap::Found(Ok(code))
 }
 
 pub fn list() -> Vec<ProcessInfo> {

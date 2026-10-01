@@ -3,6 +3,7 @@
 KERNEL_TARGET := x86_64.json
 KERNEL := target/x86_64/release/beanieos
 BOOT_OBJ := target/boot.o
+TIMER_OBJ := target/timer.o
 
 LIMINE_DIR := limine
 LIMINE_EFI := $(LIMINE_DIR)/BOOTX64.EFI
@@ -31,13 +32,19 @@ $(BOOT_OBJ): src/arch/boot.s
 	mkdir -p target
 	as --64 $< -o $@
 
+timer: $(TIMER_OBJ)
+
+$(TIMER_OBJ): src/arch/interrupts/timer.s
+	mkdir -p target
+	as --64 $< -o $@
+
 file:
 	mkdir -p $(OUT)
 	printf "This is a test file for BeanieOS.\n" > $(TEST_FILE)
 
-kernel: boot linker.ld
+kernel: boot timer linker.ld
 	touch src/main.rs
-	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
+	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld" \
 	cargo +nightly build --release \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \

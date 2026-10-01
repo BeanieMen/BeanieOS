@@ -1,11 +1,3 @@
-//! AHCI (Serial ATA) driver, written from scratch against AHCI 1.3.
-//!
-//! Every structure the controller fetches over the bus is a `static` below.
-//! They live in the kernel image, which loads around 1 MiB and is inside the
-//! 0..8 GiB window the boot page tables identity map, so virtual and physical
-//! addresses are the same number. No address translation is needed, and no
-//! contiguity requirement is placed on the heap.
-
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::arch::pci::Device;

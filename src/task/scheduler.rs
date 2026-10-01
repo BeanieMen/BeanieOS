@@ -1,126 +1,15 @@
-use core::{
-    arch::naked_asm,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc};
 
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, VecDeque},
-    string::String,
-    sync::Arc,
-    vec,
-};
 use spin::Mutex;
 
-use core::ops::Add;
-
-use crate::{
-    arch::interrupts::vectors::ticks,
-    task::process::{ProcessId, PROCESS_MANAGER},
+use crate::arch::interrupts::vectors::ticks;
+use crate::task::{
+    context::switch_context,
+    process::{ProcessId, PROCESS_MANAGER},
+    thread::{self, Priority, Thread, ThreadId, ThreadState},
 };
 
-
-
-const STACK_SIZE: usize = 4096 * 16;
 const NUM_PRIORITIES: usize = 4;
-const TIMESLICE_TICKS: u64 = 10;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ThreadId(u64);
-
-impl ThreadId {
-    pub const MAIN: ThreadId = ThreadId(0);
-
-    pub fn new() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        ThreadId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Priority {
-    High = 0,
-    Normal = 1,
-    Low = 2,
-    Idle = 3,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ThreadState {
-    Ready,
-    Running,
-    Sleeping(u64),
-    Blocked,
-    Dead,
-}
-
-pub struct Thread {
-    pub id: ThreadId,
-    pub pid: ProcessId,
-    pub name: String,
-    pub state: ThreadState,
-    pub priority: Priority,
-    pub rsp: usize,
-    pub stack: Option<Box<[u8]>>,
-    pub timeslice: u64,
-}
-
-impl Thread {
-    pub fn new_main() -> Self {
-        Thread {
-            id: ThreadId::MAIN,
-            pid: ProcessId::KERNEL,
-            name: String::from("main"),
-            state: ThreadState::Running,
-            priority: Priority::Normal,
-            rsp: 0,
-            stack: None,
-            timeslice: TIMESLICE_TICKS,
-        }
-    }
-
-    pub fn new(
-        pid: ProcessId,
-        name: &str,
-        entry: extern "C" fn(),
-        priority: Priority,
-    ) -> Self {
-        let id = ThreadId::new();
-        let stack = vec![0u8; STACK_SIZE].into_boxed_slice();
-        let stack_top = stack.as_ptr() as usize + STACK_SIZE;
-
-        let mut sp = stack_top & !0xf;
-
-        sp -= 8;
-        unsafe {
-            *(sp as *mut usize) = thread_trampoline_exit as usize;
-        }
-
-        sp -= 8;
-        unsafe {
-            *(sp as *mut usize) = entry as usize;
-        }
-
-        sp -= 7 * 8;
-        unsafe {
-            core::ptr::write_bytes(sp as *mut u8, 0, 7 * 8);
-
-            let rflags_ptr = sp.add(6 * 8) as *mut usize;
-            *rflags_ptr = 0x200;
-        }
-
-        Thread {
-            id,
-            pid,
-            name: String::from(name),
-            state: ThreadState::Ready,
-            priority,
-            rsp: sp,
-            stack: Some(stack),
-            timeslice: TIMESLICE_TICKS,
-        }
-    }
-}
 
 pub struct Scheduler {
     threads: BTreeMap<ThreadId, Arc<Mutex<Thread>>>,
@@ -131,11 +20,11 @@ pub struct Scheduler {
 
 impl Scheduler {
     const fn new() -> Self {
-        const EMPTY_QUEUE: VecDeque<ThreadId> = VecDeque::new();
+        const EMPTY: VecDeque<ThreadId> = VecDeque::new();
 
         Scheduler {
             threads: BTreeMap::new(),
-            ready_queues: [EMPTY_QUEUE; NUM_PRIORITIES],
+            ready_queues: [EMPTY; NUM_PRIORITIES],
             current: ThreadId::MAIN,
             initialized: false,
         }
@@ -146,9 +35,9 @@ impl Scheduler {
             return;
         }
 
-        let main = Arc::new(Mutex::new(Thread::new_main()));
+        let boot = Arc::new(Mutex::new(Thread::boot()));
 
-        self.threads.insert(ThreadId::MAIN, main);
+        self.threads.insert(ThreadId::MAIN, boot);
         self.current = ThreadId::MAIN;
         self.initialized = true;
     }
@@ -165,218 +54,183 @@ impl Scheduler {
         }
 
         let thread = Thread::new(pid, name, entry, priority);
-        let tid = thread.id;
-        let prio_idx = priority as usize;
-        let arc = Arc::new(Mutex::new(thread));
+        let id = thread.id;
 
-        self.threads.insert(tid, arc);
-        self.ready_queues[prio_idx].push_back(tid);
+        self.threads.insert(id, Arc::new(Mutex::new(thread)));
+        self.ready_queues[priority.index()].push_back(id);
 
-        if let Some(proc_arc) = PROCESS_MANAGER.lock().processes.get(&pid) {
-            proc_arc.lock().attach_thread(tid);
+        if let Some(process) = PROCESS_MANAGER.lock().processes.get(&pid) {
+            process.lock().attach_thread(id);
         }
 
-        tid
-    }
-
-    pub fn ticks(&self) -> u64 {
-        ticks()
-    }
-
-    pub fn tick(&mut self) -> Option<(*mut usize, usize)> {
-        let current = self
-            .threads
-            .get(&self.current)
-            .expect("scheduler current thread does not exist");
-
-        let mut thread = current.lock();
-
-        if thread.timeslice > 0 {
-            thread.timeslice -= 1;
-        }
-
-        if thread.timeslice != 0 {
-            return None;
-        }
-
-        thread.timeslice = TIMESLICE_TICKS;
-
-        drop(thread);
-
-        self.pick_next()
-    }
-
-    pub fn pick_next(&mut self) -> Option<(*mut usize, usize)> {
-        if !self.initialized || self.threads.len() <= 1 {
-            return None;
-        }
-
-        let now = self.ticks();
-
-        for arc in self.threads.values() {
-            let mut th = arc.lock();
-
-            if let ThreadState::Sleeping(wake_tick) = th.state {
-                if now >= wake_tick {
-                    th.state = ThreadState::Ready;
-
-                    let prio = th.priority as usize;
-                    self.ready_queues[prio].push_back(th.id);
-                }
-            }
-        }
-
-        let mut next_tid = None;
-
-        for queue in &mut self.ready_queues {
-            if let Some(tid) = queue.pop_front() {
-                next_tid = Some(tid);
-                break;
-            }
-        }
-
-        let next_tid = match next_tid {
-            Some(id) => id,
-            None => return None,
-        };
-
-        if next_tid == self.current {
-            let prio = self
-                .threads
-                .get(&next_tid)
-                .map(|t| t.lock().priority as usize);
-
-            if let Some(prio) = prio {
-                self.ready_queues[prio].push_back(next_tid);
-            }
-
-            return None;
-        }
-
-        let mut prev_rsp_ptr: *mut usize = core::ptr::null_mut();
-        let mut next_rsp = 0;
-        let mut next_pid = ProcessId::KERNEL;
-
-        if let Some(curr_arc) = self.threads.get(&self.current) {
-            let mut curr = curr_arc.lock();
-
-            if curr.state == ThreadState::Running {
-                curr.state = ThreadState::Ready;
-
-                let prio = curr.priority as usize;
-                self.ready_queues[prio].push_back(curr.id);
-            }
-
-            curr.timeslice = TIMESLICE_TICKS;
-
-            prev_rsp_ptr = &mut curr.rsp as *mut usize;
-        }
-
-        if let Some(next_arc) = self.threads.get(&next_tid) {
-            let mut next = next_arc.lock();
-
-            next.state = ThreadState::Running;
-            next.timeslice = TIMESLICE_TICKS;
-
-            next_rsp = next.rsp;
-            next_pid = next.pid;
-        }
-
-        self.current = next_tid;
-        PROCESS_MANAGER.lock().set_current_pid(next_pid);
-
-        if !prev_rsp_ptr.is_null() && next_rsp != 0 {
-            Some((prev_rsp_ptr, next_rsp))
-        } else {
-            None
-        }
-    }
-
-    pub fn sleep_for(
-        &mut self,
-        duration_ticks: u64,
-    ) -> Option<(*mut usize, usize)> {
-        let deadline = self.ticks().saturating_add(duration_ticks);
-
-        if let Some(curr_arc) = self.threads.get(&self.current) {
-            curr_arc.lock().state = ThreadState::Sleeping(deadline);
-        }
-
-        self.pick_next()
-    }
-
-    pub fn mark_dead_and_pick_next(
-        &mut self,
-    ) -> Option<(*mut usize, usize)> {
-        let tid = self.current;
-
-        if let Some(arc) = self.threads.get(&tid) {
-            let mut th = arc.lock();
-
-            th.state = ThreadState::Dead;
-
-            let pid = th.pid;
-
-            drop(th);
-
-            if let Some(proc_arc) = PROCESS_MANAGER.lock().processes.get(&pid) {
-                proc_arc.lock().detach_thread(tid);
-            }
-        }
-
-        self.pick_next()
+        id
     }
 
     pub fn current_id(&self) -> ThreadId {
         self.current
     }
+
+    pub fn tick_from_interrupt(&mut self, saved_rsp: usize) -> usize {
+        self.store_current_rsp(saved_rsp);
+
+        match self.schedule() {
+            Some(ContextSwitch { next_rsp, .. }) => next_rsp,
+            None => saved_rsp,
+        }
+    }
+
+    pub fn yield_to(&mut self) -> Option<ContextSwitch> {
+        self.schedule()
+    }
+
+    pub fn sleep_for(&mut self, duration_ticks: u64) -> Option<ContextSwitch> {
+        if self.threads.len() <= 1 {
+            return None;
+        }
+
+        let deadline = self.ticks().saturating_add(duration_ticks);
+
+        if let Some(current) = self.threads.get(&self.current) {
+            current.lock().state = ThreadState::Sleeping(deadline);
+        }
+
+        self.schedule()
+    }
+
+    pub fn retire_current(&mut self) -> Option<ContextSwitch> {
+        let id = self.current;
+
+        if let Some(thread) = self.threads.get(&id) {
+            let pid = {
+                let mut thread = thread.lock();
+
+                thread.state = ThreadState::Dead;
+                thread.pid
+            };
+
+            if let Some(process) = PROCESS_MANAGER.lock().processes.get(&pid) {
+                process.lock().detach_thread(id);
+            }
+        }
+
+        self.schedule()
+    }
+
+    fn store_current_rsp(&mut self, saved_rsp: usize) {
+        if let Some(current) = self.threads.get(&self.current) {
+            current.lock().store_rsp(saved_rsp);
+        }
+    }
+
+    fn schedule(&mut self) -> Option<ContextSwitch> {
+        if !self.initialized || self.threads.len() <= 1 {
+            return None;
+        }
+
+        self.wake_sleeping_threads();
+        self.expire_timeslice()?;
+
+        let next_id = self.take_next_ready()?;
+        let previous_id = self.current;
+
+        if next_id == previous_id {
+            self.requeue(next_id);
+            return None;
+        }
+
+        self.activate(next_id, previous_id)
+    }
+
+    fn wake_sleeping_threads(&mut self) {
+        let now = self.ticks();
+
+        for thread in self.threads.values() {
+            let mut thread = thread.lock();
+
+            if let ThreadState::Sleeping(deadline) = thread.state {
+                if now >= deadline {
+                    thread.state = ThreadState::Ready;
+                    self.ready_queues[thread.priority.index()].push_back(thread.id);
+                }
+            }
+        }
+    }
+
+    fn expire_timeslice(&mut self) -> Option<()> {
+        let current = self.threads.get(&self.current)?;
+
+        let expired = {
+            let mut current = current.lock();
+
+            current.timeslice = current.timeslice.saturating_sub(1);
+
+            if current.timeslice == 0 {
+                current.requeue();
+                true
+            } else {
+                false
+            }
+        };
+
+        expired.then_some(())
+    }
+
+    fn take_next_ready(&mut self) -> Option<ThreadId> {
+        let id = self
+            .ready_queues
+            .iter_mut()
+            .find_map(|queue| queue.pop_front())?;
+
+        self.requeue(id);
+
+        Some(id)
+    }
+
+    fn requeue(&mut self, id: ThreadId) {
+        if let Some(thread) = self.threads.get(&id) {
+            let thread = thread.lock();
+
+            if thread.state != ThreadState::Dead {
+                self.ready_queues[thread.priority.index()].push_back(id);
+            }
+        }
+    }
+
+    fn activate(&mut self, next_id: ThreadId, previous_id: ThreadId) -> Option<ContextSwitch> {
+        let previous_rsp = {
+            let previous = self.threads.get(&previous_id)?;
+            previous.lock().saved_rsp()
+        };
+
+        let (next_rsp, next_pid) = {
+            let next = self.threads.get(&next_id)?;
+            let mut next = next.lock();
+
+            next.begin_running();
+
+            (next.saved_rsp(), next.pid)
+        };
+
+        self.current = next_id;
+        PROCESS_MANAGER.lock().set_current_pid(next_pid);
+
+        (previous_rsp != 0 && next_rsp != 0).then_some(ContextSwitch {
+            previous_rsp,
+            next_rsp,
+        })
+    }
+
+    fn ticks(&self) -> u64 {
+        ticks()
+    }
+}
+
+pub struct ContextSwitch {
+    pub previous_rsp: usize,
+    pub next_rsp: usize,
 }
 
 pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
-
-#[unsafe(naked)]
-pub unsafe extern "C" fn switch_context(
-    old_rsp: *mut usize,
-    new_rsp: usize,
-) {
-    naked_asm!(
-        "pushfq",
-        "push r15",
-        "push r14",
-        "push r13",
-        "push r12",
-        "push rbx",
-        "push rbp",
-
-        "mov [rdi], rsp",
-
-        "mov rsp, rsi",
-
-        "pop rbp",
-        "pop rbx",
-        "pop r12",
-        "pop r13",
-        "pop r14",
-        "pop r15",
-        "popfq",
-
-        "ret",
-    );
-}
-
-extern "C" fn thread_trampoline_exit() {
-    exit()
-}
-
-fn switch_with_lock_dropped(
-    switch: Option<(*mut usize, usize)>,
-) {
-    if let Some((prev, next)) = switch {
-        unsafe {
-            switch_context(prev, next);
-        }
-    }
-}
 
 pub fn init() {
     SCHEDULER.lock().init();
@@ -389,9 +243,7 @@ pub fn spawn(
 ) -> ThreadId {
     let pid = PROCESS_MANAGER.lock().current_pid();
 
-    SCHEDULER
-        .lock()
-        .spawn(pid, name, entry, priority)
+    SCHEDULER.lock().spawn(pid, name, entry, priority)
 }
 
 pub fn spawn_in_process(
@@ -400,43 +252,49 @@ pub fn spawn_in_process(
     entry: extern "C" fn(),
     priority: Priority,
 ) -> ThreadId {
-    SCHEDULER
-        .lock()
-        .spawn(pid, name, entry, priority)
+    SCHEDULER.lock().spawn(pid, name, entry, priority)
 }
 
 pub fn yield_now() {
-    let switch = {
-        SCHEDULER.lock().pick_next()
-    };
+    let switch = SCHEDULER.lock().yield_to();
 
-    switch_with_lock_dropped(switch);
+    if let Some(ContextSwitch {
+        previous_rsp,
+        next_rsp,
+    }) = switch
+    {
+        unsafe { switch_context(previous_rsp as *mut usize, next_rsp) };
+    }
 }
 
 pub fn sleep(duration_ticks: u64) {
-    let switch = {
-        SCHEDULER.lock().sleep_for(duration_ticks)
-    };
+    let switch = SCHEDULER.lock().sleep_for(duration_ticks);
 
-    switch_with_lock_dropped(switch);
+    if let Some(ContextSwitch {
+        previous_rsp,
+        next_rsp,
+    }) = switch
+    {
+        unsafe { switch_context(previous_rsp as *mut usize, next_rsp) };
+    }
 }
 
 pub fn exit() -> ! {
-    let switch = {
-        SCHEDULER.lock().mark_dead_and_pick_next()
-    };
+    let switch = SCHEDULER.lock().retire_current();
 
-    switch_with_lock_dropped(switch);
+    if let Some(ContextSwitch {
+        previous_rsp,
+        next_rsp,
+    }) = switch
+    {
+        unsafe { switch_context(previous_rsp as *mut usize, next_rsp) };
+    }
 
     loop {
         x86_64::instructions::hlt();
     }
 }
 
-pub fn tick() {
-    let switch = {
-        SCHEDULER.lock().tick()
-    };
-
-    switch_with_lock_dropped(switch);
+pub fn tick_from_interrupt(saved_rsp: usize) -> usize {
+    SCHEDULER.lock().tick_from_interrupt(saved_rsp)
 }
