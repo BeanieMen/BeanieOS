@@ -45,7 +45,7 @@ fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end:
 }
 
 /// Never hands out the kernel image, the boot information, or low memory.
-pub struct Multiboot2FrameAllocator<'a> {
+pub struct BumpAllocator<'a> {
     areas: &'a [MemoryArea],
     area_idx: usize,
     curr_addr: u64,
@@ -55,7 +55,7 @@ pub struct Multiboot2FrameAllocator<'a> {
     mbi_end: u64,
 }
 
-impl<'a> Multiboot2FrameAllocator<'a> {
+impl<'a> BumpAllocator<'a> {
     pub unsafe fn init(memory_map: &'a MemoryMapTag, mbi_start: u64, mbi_end: u64) -> Self {
         let (kstart, kend) = kernel_range();
         let areas = memory_map.memory_areas();
@@ -98,7 +98,7 @@ impl<'a> Multiboot2FrameAllocator<'a> {
     }
 }
 
-unsafe impl FrameAllocator<Size4KiB> for Multiboot2FrameAllocator<'_> {
+unsafe impl FrameAllocator<Size4KiB> for BumpAllocator<'_> {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
         while self.area_idx < self.areas.len() {
             let area = &self.areas[self.area_idx];

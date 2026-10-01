@@ -135,7 +135,7 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
     };
 
     let mut frame_alloc = unsafe {
-        memory::allocator::Multiboot2FrameAllocator::init(
+        memory::allocator::BumpAllocator::init(
             memory_map,
             mbi_addr as u64,
             mbi_addr as u64 + mbi_size as usize as u64,

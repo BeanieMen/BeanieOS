@@ -60,9 +60,16 @@ _start:
     wrmsr
 
     mov %cr0, %eax
-    or $(1 << 31 | 1), %eax     # paging + protected mode
-    mov %eax, %cr0
-
+    and $-(1 << 2), %eax        # CR0.EM = 0
+    and $-(1 << 2), %eax        # CR0.EM = 0
+    or $(1 << 31), %eax         # paging
+    or $(1 << 0), %eax          # protected mode
+    
+    mov %cr4, %eax
+    or $(1 << 9), %eax          # CR4.OSFXSR
+    or $(1 << 10), %eax          # CR4.OSXMMEXCPT
+    mov %eax, %cr4
+    
     lgdt gdt64_pointer
 
     ljmp $0x08, $long_mode_start
