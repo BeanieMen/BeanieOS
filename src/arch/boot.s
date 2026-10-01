@@ -64,6 +64,7 @@ _start:
     and $-(1 << 2), %eax        # CR0.EM = 0
     or $(1 << 31), %eax         # paging
     or $(1 << 0), %eax          # protected mode
+    mov %eax, %cr0              
     
     mov %cr4, %eax
     or $(1 << 9), %eax          # CR4.OSFXSR
