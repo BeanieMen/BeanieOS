@@ -19,7 +19,6 @@ mod graphics;
 mod hal;
 mod mem;
 mod memory;
-mod shell;
 mod syscall;
 mod task;
 mod userspace;
@@ -31,19 +30,9 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     println!("heap ready");
     println!("framebuffer ready");
 
-    let disk = boot_disk().unwrap();
-    userspace::install(disk);
-
-    print!("> ");
+    fs::fds::install(boot_disk().unwrap());
 
     let init = task::process::create("init", "/");
-
-    task::scheduler::spawn_in_process(
-        init,
-        "shell",
-        userspace::shell_task,
-        task::identity::Priority::Normal,
-    );
 
     task::scheduler::spawn_in_process(
         init,

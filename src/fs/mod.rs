@@ -1,3 +1,5 @@
+pub mod fds;
+
 use alloc::{boxed::Box, vec::Vec};
 
 use fatfs::{FileSystem, FsOptions, IoBase, Read, Seek, SeekFrom, Write};
