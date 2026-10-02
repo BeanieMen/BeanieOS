@@ -8,7 +8,6 @@ use crate::task::thread::Thread;
 pub const STACK_SIZE: usize = 4096 * 16;
 pub const TIMESLICE_TICKS: u64 = 10;
 
-
 #[inline]
 pub fn set_current_thread(thread: *mut Thread) {
     GsBase::write(VirtAddr::new(thread as u64));

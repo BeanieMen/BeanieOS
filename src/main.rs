@@ -14,12 +14,13 @@ extern crate alloc;
 
 mod arch;
 mod console;
-mod syscall;
 mod fs;
 mod graphics;
+mod hal;
 mod mem;
 mod memory;
 mod shell;
+mod syscall;
 mod task;
 mod userspace;
 
@@ -58,7 +59,7 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
 }
 
 fn boot_disk() -> Result<FileSystem<Box<dyn fs::BlockDevice>>, &'static str> {
-    let devices = arch::pci::find_ahci();
+    let devices = hal::hal().pci.find_ahci();
     if devices.is_empty() {
         return Err("no AHCI controller found");
     }
@@ -70,7 +71,17 @@ fn boot_disk() -> Result<FileSystem<Box<dyn fs::BlockDevice>>, &'static str> {
     let function = device.address.function();
     println!("controller {bus:02x}:{slot:02x}.{function} BAR5={bar5:#x} size {size:#x}");
 
+    println!(
+        "ticks before AHCI = {}",
+        crate::arch::interrupts::vectors::ticks()
+    );
+
     let mut controller = arch::ahci::AhciController::new(device)?;
+
+    println!(
+        "ticks after AHCI = {}",
+        crate::arch::interrupts::vectors::ticks()
+    );
     let total = controller.size();
     println!(
         "disk ready: {total} bytes, {} byte sectors",
@@ -105,9 +116,21 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         )
     };
 
-    let mut mapper = unsafe { memory::allocator::init(VirtAddr::new(0)) };
+    let routes = hal::discover();
+    memory::allocator::RESERVED.snapshot();
+    println!(
+        "  {} device range(s) reserved: {}",
+        memory::allocator::RESERVED.len(),
+        routes.count()
+    );
 
-    memory::heap::init_heap(&mut mapper, &mut frame_alloc).expect("heap initialization failed");
+    let mmio_mapper = unsafe { memory::allocator::mapper(VirtAddr::new(0)) };
+    let mut heap_mapper = unsafe { memory::allocator::mapper(VirtAddr::new(0)) };
+
+    memory::heap::init_heap(&mut heap_mapper, &mut frame_alloc)
+        .expect("heap initialization failed");
+
+    hal::init(mmio_mapper, &routes, &mut frame_alloc);
 
     graphics::framebuffer::init_framebuffer(
         fb_tag.address(),

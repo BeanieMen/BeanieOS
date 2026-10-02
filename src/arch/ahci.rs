@@ -1,7 +1,7 @@
 use core::cell::UnsafeCell;
 use core::ptr::{read_volatile, write_volatile};
 
-use crate::arch::pci::Device;
+use crate::hal::pci::Device;
 use crate::println;
 
 const CAP: usize = 0x00;
@@ -158,7 +158,12 @@ fn wait_for(rounds: u64, mut condition: impl FnMut() -> bool) -> bool {
 
 impl AhciController {
     pub fn new(device: &Device) -> Result<Self, &'static str> {
-        let abar = device.ahci_base().ok_or("no BAR5")?;
+        let (phys, _) = device.bar5_info().ok_or("no BAR5")?;
+        let abar = crate::hal::hal()
+            .mmio
+            .mapping_at(crate::hal::mmio::MMIO_BASE as usize + phys as usize)
+            .map(|m| m.va)
+            .unwrap_or(crate::hal::mmio::MMIO_BASE as usize + phys as usize);
 
         // The BAR is not decoded and the device cannot do bus mastering until
         // these bits are set. Reading the BAR to size it writes to the BAR, so
@@ -290,10 +295,6 @@ impl AhciController {
         let buffer = self.transfer_buffer() as u64;
         let ctba = self.command_table() as u64;
 
-        // 20 byte register FIS: type, port, command, features, the six LBA
-        // bytes, two count bytes, and control.
-        // 28 bit LBA puts the top four bits in the device register instead
-        // of the extended LBA bytes.
         let device = if self.lba48 {
             0x40
         } else {

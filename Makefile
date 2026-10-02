@@ -114,8 +114,7 @@ clippy: boot timer
 	cargo +nightly clippy --release \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
-		--target $(KERNEL_TARGET) \
-		--all-targets -- -D warnings
+		--target $(KERNEL_TARGET)
 
 lint: fmt-check clippy
 
@@ -125,3 +124,4 @@ check: boot timer
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)
+

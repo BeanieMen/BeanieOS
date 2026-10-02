@@ -147,7 +147,7 @@ impl Shell {
                 false => self.rmdir(arg),
             },
 
-            "clear" => self.clear(),
+            "clear" => WRITER.lock().clear(),
 
             "test-file" => self.test_file(),
 
@@ -314,11 +314,6 @@ impl Shell {
         }
 
         println!("Created test.txt");
-    }
-
-    pub fn clear(&mut self) {
-        WRITER.lock().clear();
-        print!("> ");
     }
 
     pub fn help(&self) {

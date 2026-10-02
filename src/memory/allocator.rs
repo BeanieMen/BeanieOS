@@ -44,7 +44,74 @@ fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end:
     false
 }
 
-/// Never hands out the kernel image, the boot information, or low memory.
+pub struct Reserved {
+    inner: spin::Mutex<ReservedList>,
+}
+
+struct ReservedList {
+    entries: [crate::hal::Region; MAX_RESERVED],
+    count: usize,
+}
+
+impl ReservedList {
+    const fn new() -> Self {
+        ReservedList {
+            entries: [crate::hal::Region::new(0, 0); MAX_RESERVED],
+            count: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.count = 0;
+    }
+
+    fn push(&mut self, region: crate::hal::Region) {
+        if self.count >= MAX_RESERVED {
+            return;
+        }
+
+        self.entries[self.count] = region;
+        self.count += 1;
+    }
+
+    fn contains(&self, addr: u64) -> bool {
+        self.entries[..self.count]
+            .iter()
+            .any(|region| region.contains(addr))
+    }
+}
+
+const MAX_RESERVED: usize = 32;
+
+impl Reserved {
+    pub const fn new() -> Self {
+        Reserved {
+            inner: spin::Mutex::new(ReservedList::new()),
+        }
+    }
+
+    pub fn snapshot(&self) {
+        let mut guard = self.inner.lock();
+        guard.reset();
+
+        crate::hal::hal()
+            .dma
+            .copy_reserved(|region| guard.push(region));
+    }
+
+    pub fn contains(&self, addr: u64) -> bool {
+        self.inner.lock().contains(addr)
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().count
+    }
+}
+
+pub static RESERVED: Reserved = Reserved::new();
+
+/// Never hands out the kernel image, the boot information, low memory, or a frame
+/// a device owns.
 pub struct BumpAllocator<'a> {
     areas: &'a [MemoryArea],
     area_idx: usize,
@@ -53,13 +120,13 @@ pub struct BumpAllocator<'a> {
     kend: u64,
     mbi_start: u64,
     mbi_end: u64,
+    reserved: &'static Reserved,
 }
 
 impl<'a> BumpAllocator<'a> {
     pub unsafe fn init(memory_map: &'a MemoryMapTag, mbi_start: u64, mbi_end: u64) -> Self {
         let (kstart, kend) = kernel_range();
         let areas = memory_map.memory_areas();
-        // Find first Available area to start from.
         let mut area_idx = 0;
         let mut curr_addr = 0;
         for (i, area) in areas.iter().enumerate() {
@@ -81,11 +148,10 @@ impl<'a> BumpAllocator<'a> {
             kend,
             mbi_start,
             mbi_end,
+            reserved: &RESERVED,
         }
     }
 
-    /// Point the cursor at the start of the area after the current one, and
-    /// say whether there was one.
     fn advance_area(&mut self) -> bool {
         self.area_idx += 1;
 
@@ -118,6 +184,9 @@ unsafe impl FrameAllocator<Size4KiB> for BumpAllocator<'_> {
                 if frame_is_reserved(addr, self.kstart, self.kend, self.mbi_start, self.mbi_end) {
                     continue;
                 }
+                if self.reserved.contains(addr) {
+                    continue;
+                }
                 return Some(PhysFrame::containing_address(PhysAddr::new(addr)));
             }
             if !self.advance_area() {
@@ -142,8 +211,7 @@ fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTa
     unsafe { &mut *page_table_ptr }
 }
 
-pub unsafe fn init(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
+pub unsafe fn mapper(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
     let level_4_table = active_level_4_table(physical_memory_offset);
-
     unsafe { OffsetPageTable::new(level_4_table, physical_memory_offset) }
 }

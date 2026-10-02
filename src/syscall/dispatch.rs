@@ -4,7 +4,7 @@ use super::numbers::*;
 
 pub fn dispatch(number: u64, args: [u64; 6]) -> u64 {
     match Syscall::try_from(number) {
-        _ => {0} // todo
+        _ => 0, // todo
     }
 }
 // fn sys_exit(code: u64) -> ! {
