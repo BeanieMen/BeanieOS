@@ -1,22 +1,23 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
-pub const STACK_SIZE: usize = 4096 * 16;
-pub const TIMESLICE_TICKS: u64 = 10;
-
-static CURRENT_THREAD: AtomicU64 = AtomicU64::new(0);
-
+use x86_64::VirtAddr;
 use x86_64::registers::model_specific::GsBase;
 
 use crate::task::thread::Thread;
 
+pub const STACK_SIZE: usize = 4096 * 16;
+pub const TIMESLICE_TICKS: u64 = 10;
+
+
+#[inline]
 pub fn set_current_thread(thread: *mut Thread) {
-    GsBase::write(x86_64::VirtAddr::new(thread as u64));
+    GsBase::write(VirtAddr::new(thread as u64));
 }
 
+#[inline]
 pub fn current_thread() -> *mut Thread {
     GsBase::read().as_u64() as *mut Thread
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProcessId(pub u64);

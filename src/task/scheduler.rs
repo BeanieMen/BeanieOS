@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc};
+use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc, vec::Vec};
 
 use spin::Mutex;
 
@@ -44,7 +44,37 @@ impl Scheduler {
 
         self.threads.insert(ThreadId::MAIN, boot);
         self.current = ThreadId::MAIN;
+
+        // The boot context was entered by `kernel_main` without a context switch,
+        // so no `activate` call will run for it. Publish its pointer here, or
+        // `current_thread` stays null until the first switch away from here.
+        self.publish_current();
+
         self.initialized = true;
+    }
+
+    fn thread_ptr(&self, id: ThreadId) -> Option<*mut Thread> {
+        let thread = self.threads.get(&id)?;
+
+        let thread_ptr = {
+            let mut thread = thread.lock();
+            &mut *thread as *mut Thread
+        };
+
+        Some(thread_ptr)
+    }
+
+    /// add current scheduler thread to gs base
+    fn publish_current(&mut self) {
+        if let Some(current_ptr) = self.thread_ptr(self.current) {
+            identity::set_current_thread(current_ptr);
+        }
+    }
+
+    /// check if the current thread pointer in gs base matches the scheduler's current thread
+    pub fn gs_base_agrees(&self) -> bool {
+        self.thread_ptr(self.current)
+            .is_some_and(|current_ptr| identity::current_thread() == current_ptr)
     }
 
     pub fn spawn(
@@ -187,7 +217,11 @@ impl Scheduler {
         let previous_id = self.current;
 
         if next_id == previous_id {
+            // The only runnable thread is the one already running: nothing
+            // switches, and GS base already names it. `activate` is skipped, so
+            // this path would otherwise leave the pointer untouched.
             self.requeue(next_id);
+
             return None;
         }
 
@@ -200,26 +234,53 @@ impl Scheduler {
             previous.lock().rsp_slot()
         };
 
-        let (next_rsp, next_pid, next_thread_ptr) = {
+        let (next_rsp, next_pid) = {
             let next = self.threads.get(&next_id)?;
             let mut next = next.lock();
 
             next.begin_running();
 
-            (next.saved_rsp(), next.pid, &mut *next as *mut Thread)
+            (next.saved_rsp(), next.pid)
         };
-
-  
 
         self.current = next_id;
         self.requeue(previous_id);
         identity::set_current_pid(next_pid);
-        identity::set_current_thread(next_thread_ptr);
+
+        // Published before returning, so it lands before `apply` runs
+        // `switch_context` and before anything can drop the outgoing thread: the
+        // pointer must name the incoming thread, never the outgoing one.
+        self.publish_current();
 
         (next_rsp != 0).then_some(ContextSwitch {
             previous_slot,
             next_rsp,
         })
+    }
+
+    fn remove(&mut self, id: ThreadId) -> bool {
+        let Some(thread_ptr) = self.thread_ptr(id) else {
+            return false;
+        };
+
+        if identity::current_thread() == thread_ptr {
+            return false;
+        }
+
+        self.threads.remove(&id).is_some()
+    }
+
+    pub fn reap_dead(&mut self) {
+        let dead: Vec<ThreadId> = self
+            .threads
+            .iter()
+            .filter(|(_, thread)| thread.lock().state == ThreadState::Dead)
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in dead {
+            self.remove(id);
+        }
     }
 
     fn wake_sleeping_threads(&mut self) {
@@ -321,6 +382,10 @@ pub fn exit() -> ! {
 
 pub fn account_tick() {
     SCHEDULER.lock().account_tick();
+}
+
+pub fn reap_dead() {
+    SCHEDULER.lock().reap_dead();
 }
 
 fn apply(switch: Option<ContextSwitch>) {

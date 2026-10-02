@@ -7,6 +7,7 @@ use crate::println;
 
 const SECTOR: u64 = 512;
 
+// blanket impl for block dev
 pub trait BlockDevice: Read<Error = fatfs::Error<()>> + Write + Seek + Send {}
 impl<T: Read<Error = fatfs::Error<()>> + Write + Seek + Send> BlockDevice for T {}
 
