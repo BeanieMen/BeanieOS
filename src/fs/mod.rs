@@ -1,11 +1,40 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
-use fatfs::{FileSystem, FsOptions, IoBase, Read, Seek, Write};
+use fatfs::{FileSystem, FsOptions, IoBase, Read, Seek, SeekFrom, Write};
 
 use crate::arch::ahci::AhciController;
 use crate::println;
 
 const SECTOR: u64 = 512;
+
+pub trait BlockDevice: Read<Error = fatfs::Error<()>> + Write + Seek + Send {}
+impl<T: Read<Error = fatfs::Error<()>> + Write + Seek + Send> BlockDevice for T {}
+
+impl IoBase for Box<dyn BlockDevice> {
+    type Error = fatfs::Error<()>;
+}
+
+impl Read for Box<dyn BlockDevice> {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+        (**self).read(buffer)
+    }
+}
+
+impl Write for Box<dyn BlockDevice> {
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, Self::Error> {
+        (**self).write(buffer)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        (**self).flush()
+    }
+}
+
+impl Seek for Box<dyn BlockDevice> {
+    fn seek(&mut self, from: SeekFrom) -> Result<u64, Self::Error> {
+        (**self).seek(from)
+    }
+}
 
 struct Volume {
     first: u64,
@@ -156,7 +185,9 @@ fn find_volume(disk: &mut AhciController) -> Option<Volume> {
     None
 }
 
-pub fn mount(mut controller: AhciController) -> Result<FileSystem<Disk>, &'static str> {
+pub fn mount(
+    mut controller: AhciController,
+) -> Result<FileSystem<Box<dyn BlockDevice>>, &'static str> {
     let volume = find_volume(&mut controller).ok_or("no FAT volume found")?;
     println!(
         "volume at sector {} ({} sectors, byte {:#x})",
@@ -165,6 +196,7 @@ pub fn mount(mut controller: AhciController) -> Result<FileSystem<Disk>, &'stati
         volume.first * SECTOR
     );
 
-    FileSystem::new(Disk::new(controller, &volume), FsOptions::new())
-        .map_err(|_| "volume is not FAT")
+    let disk: Box<dyn BlockDevice> = Box::new(Disk::new(controller, &volume));
+
+    FileSystem::new(disk, FsOptions::new()).map_err(|_| "volume is not FAT")
 }

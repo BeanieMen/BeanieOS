@@ -1,18 +1,22 @@
-use core::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::{arch::naked_asm, cell::UnsafeCell};
 
 use alloc::{boxed::Box, string::String, vec};
 
-pub const STACK_SIZE: usize = 4096 * 16;
-pub const TIMESLICE_TICKS: u64 = 10;
+use crate::task::identity::{
+    Priority, ProcessId, STACK_SIZE, TIMESLICE_TICKS, ThreadId, ThreadState,
+};
 
+#[allow(dead_code)]
 const RBP_WORD: usize = 0;
+#[allow(dead_code)]
 const RBX_WORD: usize = 1;
+#[allow(dead_code)]
 const R12_WORD: usize = 2;
+#[allow(dead_code)]
 const R13_WORD: usize = 3;
+#[allow(dead_code)]
 const R14_WORD: usize = 4;
+#[allow(dead_code)]
 const R15_WORD: usize = 5;
 const RFLAGS_WORD: usize = 6;
 const RIP_WORD: usize = 7;
@@ -23,47 +27,14 @@ const FRAME_BYTES: usize = FRAME_WORDS * 8;
 
 const RFLAGS_IF: usize = 0x202;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ThreadId(pub u64);
-
-impl ThreadId {
-    pub const MAIN: ThreadId = ThreadId(0);
-
-    pub fn new() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        ThreadId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Priority {
-    High = 0,
-    Normal = 1,
-    Low = 2,
-    Idle = 3,
-}
-
-impl Priority {
-    pub fn index(self) -> usize {
-        self as usize
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ThreadState {
-    Ready,
-    Running,
-    Sleeping(u64),
-    Blocked,
-    Dead,
-}
-
 pub struct Thread {
     pub id: ThreadId,
-    pub pid: crate::task::process::ProcessId,
+    pub pid: ProcessId,
+    #[allow(dead_code)]
     pub name: String,
     pub state: ThreadState,
     pub priority: Priority,
+    #[allow(dead_code)]
     pub stack: Option<Box<[u8]>>,
     pub timeslice: u64,
     rsp: UnsafeCell<usize>,
@@ -73,7 +44,7 @@ impl Thread {
     pub fn boot() -> Self {
         Thread {
             id: ThreadId::MAIN,
-            pid: crate::task::process::ProcessId::KERNEL,
+            pid: ProcessId::KERNEL,
             name: String::from("main"),
             state: ThreadState::Running,
             priority: Priority::Normal,
@@ -83,12 +54,7 @@ impl Thread {
         }
     }
 
-    pub fn new(
-        pid: crate::task::process::ProcessId,
-        name: &str,
-        entry: extern "C" fn(),
-        priority: Priority,
-    ) -> Self {
+    pub fn new(pid: ProcessId, name: &str, entry: extern "C" fn(), priority: Priority) -> Self {
         let stack = vec![0u8; STACK_SIZE].into_boxed_slice();
         let stack_top = (stack.as_ptr() as usize + STACK_SIZE) & !0xf;
         let sp = stack_top - FRAME_BYTES;
@@ -137,6 +103,35 @@ fn build_initial_frame(sp: usize, entry: extern "C" fn()) {
 
         frame.add(RFLAGS_WORD).write(RFLAGS_IF);
         frame.add(RIP_WORD).write(entry as usize);
-        frame.add(RETURN_WORD).write(crate::task::context::thread_trampoline_exit() as usize);
+
+        let exit: fn() -> ! = thread_trampoline_exit;
+        frame.add(RETURN_WORD).write(exit as usize);
     }
+}
+
+pub fn thread_trampoline_exit() -> ! {
+    crate::task::scheduler::exit()
+}
+
+#[unsafe(naked)]
+pub unsafe extern "C" fn switch_context(old_rsp: *mut usize, new_rsp: usize) {
+    naked_asm!(
+        "pushfq",
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push rbx",
+        "push rbp",
+        "mov [rdi], rsp",
+        "mov rsp, rsi",
+        "pop rbp",
+        "pop rbx",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+        "popfq",
+        "ret",
+    );
 }

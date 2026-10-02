@@ -2,28 +2,26 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+use alloc::boxed::Box;
 use core::panic::PanicInfo;
 
 use fatfs::FileSystem;
 
 use multiboot2::BootInformation;
-use spin::{Mutex, Once};
 use x86_64::VirtAddr;
-use x86_64::instructions::port::Port;
-
-use crate::{fs::Disk, graphics::framebuffer::WRITER, shell::Shell};
 
 extern crate alloc;
 
 mod arch;
+mod console;
+mod syscall;
 mod fs;
 mod graphics;
 mod mem;
 mod memory;
 mod shell;
 mod task;
-
-static SHELL: Once<Mutex<Shell>> = Once::new();
+mod userspace;
 
 fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -> ! {
     init(&boot_info, mbi_addr, mbi_size);
@@ -33,27 +31,25 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     println!("framebuffer ready");
 
     let disk = boot_disk().unwrap();
-    SHELL.call_once(|| Mutex::new(Shell::new(disk)));
+    userspace::install(disk);
 
     print!("> ");
 
-    let shell_pid = task::process::create_process("shell", "/");
+    let init = task::process::create("init", "/");
 
     task::scheduler::spawn_in_process(
-        shell_pid,
+        init,
         "shell",
-        shell_task,
-        task::thread::Priority::Normal,
+        userspace::shell_task,
+        task::identity::Priority::Normal,
     );
 
-    // let rgb_pid = task::process::create_process("rgb_square", "/");
     task::scheduler::spawn_in_process(
-        shell_pid,
+        init,
         "rgb_square",
-        rgb_square_task,
-        task::thread::Priority::Normal,
+        userspace::rgb_square_task,
+        task::identity::Priority::Normal,
     );
-
 
     loop {
         task::scheduler::yield_now();
@@ -61,41 +57,7 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     }
 }
 
-extern "C" fn shell_task() {
-    let shell = SHELL.get().expect("Shell not initialized");
-    loop {
-        if let Some(key) = shell::pop_key() {
-            shell.lock().shell_input(key);
-        } else {
-            task::scheduler::yield_now();
-        }
-    }
-}
-
-static RGB_TICKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
-extern "C" fn rgb_square_task() {
-    loop {
-        let tick = RGB_TICKS.fetch_add(8, core::sync::atomic::Ordering::Relaxed) % 1536;
-
-        let (r, g, b) = match tick {
-            0..=255 => (255, tick, 0),
-            256..=511 => (511 - tick, 255, 0),
-            512..=767 => (0, 255, tick - 512),
-            768..=1023 => (0, 1023 - tick, 255),
-            1024..=1279 => (tick - 1024, 0, 255),
-            _ => (255, 0, 1535 - tick),
-        };
-
-        let color = (r << 16) | (g << 8) | b;
-
-        WRITER.lock().fill_rect(500, 500, 100, 100, color);
-
-        task::scheduler::yield_now();
-    }
-}
-
-fn boot_disk() -> Result<FileSystem<Disk>, &'static str> {
+fn boot_disk() -> Result<FileSystem<Box<dyn fs::BlockDevice>>, &'static str> {
     let devices = arch::pci::find_ahci();
     if devices.is_empty() {
         return Err("no AHCI controller found");
@@ -139,7 +101,7 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         memory::allocator::BumpAllocator::init(
             memory_map,
             mbi_addr as u64,
-            mbi_addr as u64 + mbi_size as usize as u64,
+            mbi_addr as u64 + mbi_size as u64,
         )
     };
 

@@ -1,12 +1,13 @@
+#![allow(dead_code)]
+
 use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc};
 
 use spin::Mutex;
 
 use crate::arch::interrupts::vectors::ticks;
 use crate::task::{
-    context::switch_context,
-    process::ProcessId,
-    thread::{Priority, Thread, ThreadId, ThreadState, TIMESLICE_TICKS},
+    identity::{self, Priority, ProcessId, TIMESLICE_TICKS, ThreadId, ThreadState},
+    thread::{Thread, switch_context},
 };
 
 const NUM_PRIORITIES: usize = 4;
@@ -63,7 +64,7 @@ impl Scheduler {
         self.threads.insert(id, Arc::new(Mutex::new(thread)));
         self.ready_queues[priority.index()].push_back(id);
 
-        crate::task::process::set_current_pid(pid);
+        identity::set_current_pid(pid);
 
         id
     }
@@ -199,18 +200,21 @@ impl Scheduler {
             previous.lock().rsp_slot()
         };
 
-        let (next_rsp, next_pid) = {
+        let (next_rsp, next_pid, next_thread_ptr) = {
             let next = self.threads.get(&next_id)?;
             let mut next = next.lock();
 
             next.begin_running();
 
-            (next.saved_rsp(), next.pid)
+            (next.saved_rsp(), next.pid, &mut *next as *mut Thread)
         };
+
+  
 
         self.current = next_id;
         self.requeue(previous_id);
-        crate::task::process::set_current_pid(next_pid);
+        identity::set_current_pid(next_pid);
+        identity::set_current_thread(next_thread_ptr);
 
         (next_rsp != 0).then_some(ContextSwitch {
             previous_slot,
@@ -224,11 +228,11 @@ impl Scheduler {
         for thread in self.threads.values() {
             let mut thread = thread.lock();
 
-            if let ThreadState::Sleeping(deadline) = thread.state {
-                if now >= deadline {
-                    thread.state = ThreadState::Ready;
-                    self.ready_queues[thread.priority.index()].push_back(thread.id);
-                }
+            if let ThreadState::Sleeping(deadline) = thread.state
+                && now >= deadline
+            {
+                thread.state = ThreadState::Ready;
+                self.ready_queues[thread.priority.index()].push_back(thread.id);
             }
         }
     }
@@ -278,12 +282,8 @@ pub fn init() {
     SCHEDULER.lock().init();
 }
 
-pub fn spawn(
-    name: &str,
-    entry: extern "C" fn(),
-    priority: Priority,
-) -> ThreadId {
-    let pid = crate::task::process::current_pid();
+pub fn spawn(name: &str, entry: extern "C" fn(), priority: Priority) -> ThreadId {
+    let pid = identity::current_pid();
 
     SCHEDULER.lock().spawn(pid, name, entry, priority)
 }

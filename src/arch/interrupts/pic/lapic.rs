@@ -1,7 +1,38 @@
 use crate::arch::interrupts::consts::{
-    LAPIC_SVR_ENABLE, LAPIC_TIMER_PERIODIC, LAPIC_TIMER_VECTOR, LAPIC_TIMER_DIVIDE_16, SPURIOUS_VECTOR, lapic_eoi_reg,
-    lapic_id_reg, lapic_svr_reg, lapic_timer_divide_reg, lapic_timer_initial_reg, lapic_timer_reg,
+    LAPIC_EOI_OFFSET, LAPIC_ID_OFFSET, LAPIC_SVR_ENABLE, LAPIC_SVR_OFFSET, LAPIC_TIMER_DIVIDE_16,
+    LAPIC_TIMER_DIVIDE_OFFSET, LAPIC_TIMER_INITIAL_OFFSET, LAPIC_TIMER_OFFSET,
+    LAPIC_TIMER_PERIODIC, LAPIC_TIMER_VECTOR, SPURIOUS_VECTOR,
 };
+
+use super::madt;
+
+fn lapic_base() -> usize {
+    madt::get().lapic_address
+}
+
+fn lapic_svr_reg() -> usize {
+    lapic_base() + LAPIC_SVR_OFFSET
+}
+
+fn lapic_id_reg() -> usize {
+    lapic_base() + LAPIC_ID_OFFSET
+}
+
+fn lapic_eoi_reg() -> usize {
+    lapic_base() + LAPIC_EOI_OFFSET
+}
+
+fn lapic_timer_reg() -> usize {
+    lapic_base() + LAPIC_TIMER_OFFSET
+}
+
+fn lapic_timer_initial_reg() -> usize {
+    lapic_base() + LAPIC_TIMER_INITIAL_OFFSET
+}
+
+fn lapic_timer_divide_reg() -> usize {
+    lapic_base() + LAPIC_TIMER_DIVIDE_OFFSET
+}
 
 pub(super) unsafe fn init() {
     let svr = lapic_svr_reg() as *mut u32;

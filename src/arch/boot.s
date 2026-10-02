@@ -13,7 +13,7 @@ _start:
     mov %eax, %ebp              # multiboot magic -> callee-saved for later
     mov %ebx, %esi              # multiboot info addr -> later 2nd arg
 
-    mov $BOOT_STACK+65536, %esp
+    mov $BOOT_STACK+1048576, %esp
 
     # P4/P3 live in .bss link P4[0] -> P3 and P3[i] -> P2_TABLES[i].
     # (P2 entries are identity addresses fully initialized by Rust.)
@@ -86,7 +86,7 @@ long_mode_start:
     mov %ax, %gs
     mov %ax, %ss
 
-    mov $BOOT_STACK+65536, %rsp
+    mov $BOOT_STACK+1048576, %rsp
 
     mov %ebp, %edi              # magic -> 1st arg (zero-extends)
     mov %esi, %esi              # mbi addr -> 2nd arg (zero-extends)

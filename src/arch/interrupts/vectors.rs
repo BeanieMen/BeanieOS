@@ -21,7 +21,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
     let scancode: u8 = unsafe { port.read() };
 
     if let Some(inp) = scancode_to_ascii(scancode) {
-        crate::shell::push_key(inp);
+        crate::arch::input::push_key(inp);
     }
 
     unsafe {

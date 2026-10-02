@@ -1,3 +1,4 @@
+use core::cell::UnsafeCell;
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::arch::pci::Device;
@@ -11,17 +12,17 @@ const VS: usize = 0x10;
 const PORT_BASE: usize = 0x100;
 const PORT_STRIDE: usize = 0x80;
 
-const PxCLB: usize = 0x00;
-const PxCLBU: usize = 0x04;
-const PxFB: usize = 0x08;
-const PxFBU: usize = 0x0c;
-const PxIS: usize = 0x10;
-const PxIE: usize = 0x14;
-const PxCMD: usize = 0x18;
-const PxTFD: usize = 0x20;
-const PxSSTS: usize = 0x28;
-const PxSERR: usize = 0x30;
-const PxCI: usize = 0x38;
+const PX_CLB: usize = 0x00;
+const PX_CLBU: usize = 0x04;
+const PX_FB: usize = 0x08;
+const PX_FBU: usize = 0x0c;
+const PX_IS: usize = 0x10;
+const PX_IE: usize = 0x14;
+const PX_CMD: usize = 0x18;
+const PX_TFD: usize = 0x20;
+const PX_SSTS: usize = 0x28;
+const PX_SERR: usize = 0x30;
+const PX_CI: usize = 0x38;
 
 const GHC_HR: u32 = 1 << 0;
 const GHC_AE: u32 = 1 << 1;
@@ -59,17 +60,72 @@ struct ReceiveArea([u8; FB_SIZE]);
 #[repr(C, align(4096))]
 struct TransferBuffer([u8; BUF_SIZE]);
 
-static mut COMMAND_LIST: CommandList = CommandList([0; CLB_SIZE]);
-static mut COMMAND_TABLE: CommandTable = CommandTable([0; CMD_TBL_HDR + 16]);
-static mut RECEIVE_AREA: ReceiveArea = ReceiveArea([0; FB_SIZE]);
-static mut TRANSFER_BUFFER: TransferBuffer = TransferBuffer([0; BUF_SIZE]);
+#[repr(C, align(4096))]
+struct Dma {
+    command_list: UnsafeCell<CommandList>,
+    command_table: UnsafeCell<CommandTable>,
+    receive_area: UnsafeCell<ReceiveArea>,
+    transfer_buffer: UnsafeCell<TransferBuffer>,
+}
+
+unsafe impl Sync for Dma {}
+
+static DMA: Dma = Dma {
+    command_list: UnsafeCell::new(CommandList([0; CLB_SIZE])),
+    command_table: UnsafeCell::new(CommandTable([0; CMD_TBL_HDR + 16])),
+    receive_area: UnsafeCell::new(ReceiveArea([0; FB_SIZE])),
+    transfer_buffer: UnsafeCell::new(TransferBuffer([0; BUF_SIZE])),
+};
 
 pub struct AhciController {
+    dma: &'static Dma,
     abar: usize,
     port: usize,
     sectors: u64,
     block_size: usize,
     lba48: bool,
+}
+
+impl AhciController {
+    fn command_list(&self) -> *mut CommandList {
+        self.dma.command_list.get()
+    }
+
+    fn command_table(&self) -> *mut CommandTable {
+        self.dma.command_table.get()
+    }
+
+    fn transfer_buffer(&self) -> *mut TransferBuffer {
+        self.dma.transfer_buffer.get()
+    }
+}
+
+fn take_signature_error(base: usize) -> Option<&'static str> {
+    let raw = reg(base, PX_SERR);
+
+    if raw == 0 {
+        return None;
+    }
+
+    set_reg(base, PX_SERR, raw);
+
+    let named = if raw & (1 << 0) != 0 {
+        "host rejected the command FIS"
+    } else if raw & (1 << 1) != 0 {
+        "host rejected the command table"
+    } else if raw & (1 << 2) != 0 {
+        "host rejected the data region"
+    } else if raw & (1 << 3) != 0 {
+        "host rejected the FIS receive area"
+    } else if raw & (1 << 4) != 0 {
+        "host bus data error"
+    } else {
+        "host reported an unrecognised error"
+    };
+
+    println!("    PxSERR={raw:#x}: {named}");
+
+    Some(named)
 }
 
 fn reg(base: usize, offset: usize) -> u32 {
@@ -137,9 +193,9 @@ impl AhciController {
 
         // The boot page tables do not clear .bss for us.
         for (buffer, size) in [
-            (&raw const COMMAND_LIST as *mut u8, CLB_SIZE),
-            (&raw const COMMAND_TABLE as *mut u8, CMD_TBL_HDR + 16),
-            (&raw const RECEIVE_AREA as *mut u8, FB_SIZE),
+            (DMA.command_list.get() as *mut u8, CLB_SIZE),
+            (DMA.command_table.get() as *mut u8, CMD_TBL_HDR + 16),
+            (DMA.receive_area.get() as *mut u8, FB_SIZE),
         ] {
             unsafe { core::ptr::write_bytes(buffer, 0, size) };
         }
@@ -160,51 +216,52 @@ impl AhciController {
     fn attach(abar: usize, port: usize) -> Result<Self, &'static str> {
         let base = abar + PORT_BASE + port * PORT_STRIDE;
 
-        set_reg(base, PxCMD, 0);
-        if !wait_for(10_000_000, || reg(base, PxCMD) & CMD_RUNNING_ANY == 0) {
+        set_reg(base, PX_CMD, 0);
+        if !wait_for(10_000_000, || reg(base, PX_CMD) & CMD_RUNNING_ANY == 0) {
             return Err("did not stop");
         }
 
         // Identity mapped, so these addresses are the physical addresses.
-        let clb = &raw const COMMAND_LIST as u64;
-        let fb = &raw const RECEIVE_AREA as u64;
-        set_reg(base, PxCLB, clb as u32);
-        set_reg(base, PxCLBU, (clb >> 32) as u32);
-        set_reg(base, PxFB, fb as u32);
-        set_reg(base, PxFBU, (fb >> 32) as u32);
+        let clb = DMA.command_list.get() as u64;
+        let fb = DMA.receive_area.get() as u64;
+        set_reg(base, PX_CLB, clb as u32);
+        set_reg(base, PX_CLBU, (clb >> 32) as u32);
+        set_reg(base, PX_FB, fb as u32);
+        set_reg(base, PX_FBU, (fb >> 32) as u32);
 
-        set_bits(base, PxCMD, CMD_SRE);
+        set_bits(base, PX_CMD, CMD_SRE);
 
         // The staggered spin-up bit is read-only in the emulator, so the link
         // is the only usable evidence. 3 means present and physical layer up.
         if !wait_for(50_000_000, || {
-            reg(base, PxSSTS) & SSTS_DET_MASK == SSTS_DET_PHY_UP
+            reg(base, PX_SSTS) & SSTS_DET_MASK == SSTS_DET_PHY_UP
         }) {
-            return Err(match reg(base, PxSSTS) & SSTS_DET_MASK {
+            return Err(match reg(base, PX_SSTS) & SSTS_DET_MASK {
                 0 => "no device",
                 _ => "link did not come up",
             });
         }
 
-        set_reg(base, PxIE, 0);
-        set_reg(base, PxIS, 0xffff_ffff);
-        set_reg(base, PxSERR, reg(base, PxSERR));
+        set_reg(base, PX_IE, 0);
+        set_reg(base, PX_IS, 0xffff_ffff);
+        set_reg(base, PX_SERR, reg(base, PX_SERR));
 
-        set_bits(base, PxCMD, CMD_ST | CMD_FRE);
+        set_bits(base, PX_CMD, CMD_ST | CMD_FRE);
         if !wait_for(10_000_000, || {
-            let cmd = reg(base, PxCMD);
+            let cmd = reg(base, PX_CMD);
             cmd & CMD_RUNNING_EMULATOR == CMD_RUNNING_EMULATOR
                 || cmd & CMD_RUNNING_SPEC == CMD_RUNNING_SPEC
         }) {
-            let cmd = reg(base, PxCMD);
-            let task = reg(base, PxTFD);
-            let status = reg(base, PxSSTS);
-            let error = reg(base, PxSERR);
+            let cmd = reg(base, PX_CMD);
+            let task = reg(base, PX_TFD);
+            let status = reg(base, PX_SSTS);
+            let error = reg(base, PX_SERR);
             println!("    CMD={cmd:#x} TFD={task:#x} SSTS={status:#x} SERR={error:#x}");
             return Err("engines did not start");
         }
 
         let mut controller = Self {
+            dma: &DMA,
             abar,
             port,
             sectors: 0,
@@ -225,16 +282,24 @@ impl AhciController {
     ) -> Result<(), &'static str> {
         let base = self.abar + PORT_BASE + self.port * PORT_STRIDE;
 
-        if !wait_for(10_000_000, || reg(base, PxCI) & 1 == 0) {
+        if !wait_for(10_000_000, || reg(base, PX_CI) & 1 == 0) {
             return Err("command slot stayed busy");
         }
 
-        let table = &raw mut COMMAND_TABLE as *mut u8;
-        let buffer = &raw const TRANSFER_BUFFER as u64;
-        let ctba = &raw const COMMAND_TABLE as u64;
+        let table = self.command_table() as *mut u8;
+        let buffer = self.transfer_buffer() as u64;
+        let ctba = self.command_table() as u64;
 
         // 20 byte register FIS: type, port, command, features, the six LBA
         // bytes, two count bytes, and control.
+        // 28 bit LBA puts the top four bits in the device register instead
+        // of the extended LBA bytes.
+        let device = if self.lba48 {
+            0x40
+        } else {
+            0x40 | ((lba >> 24) & 0x0f) as u8
+        };
+
         let fis: [u8; 16] = [
             FIS_H2D_REGISTER,
             0x80,
@@ -243,7 +308,7 @@ impl AhciController {
             lba as u8,
             (lba >> 8) as u8,
             (lba >> 16) as u8,
-            0x40,
+            device,
             (lba >> 24) as u8,
             (lba >> 32) as u8,
             (lba >> 40) as u8,
@@ -265,20 +330,27 @@ impl AhciController {
 
         // Command list slot 0: command FIS length 5 double words, one region
         // descriptor, write flag, then the command table address.
-        let list = &raw mut COMMAND_LIST as *mut u8;
+        let list = self.command_list() as *mut u8;
         write_u32(list, 0, 5 | (1 << 16) | ((write as u32) << 6));
         write_u32(list, 4, 0);
         write_u32(list, 8, ctba as u32);
         write_u32(list, 12, (ctba >> 32) as u32);
 
-        set_reg(base, PxCI, 1);
-        if !wait_for(100_000_000, || reg(base, PxCI) & 1 == 0) {
-            set_reg(base, PxCI, 0);
-            return Err("command timed out");
+        set_reg(base, PX_CI, 1);
+        if !wait_for(100_000_000, || reg(base, PX_CI) & 1 == 0) {
+            set_reg(base, PX_CI, 0);
+
+            return Err(match take_signature_error(base) {
+                Some(why) => why,
+                None => "command timed out",
+            });
         }
 
-        if reg(base, PxTFD) & TFD_ERR != 0 {
-            return Err("drive reported an error");
+        if reg(base, PX_TFD) & TFD_ERR != 0 {
+            return Err(match take_signature_error(base) {
+                Some(why) => why,
+                None => "drive reported an error",
+            });
         }
 
         Ok(())
@@ -287,7 +359,7 @@ impl AhciController {
     fn identify(&mut self) -> Result<(), &'static str> {
         self.execute(ATA_IDENTIFY, false, 0, 1)?;
 
-        let data: &[u8; 512] = unsafe { &*(&raw const TRANSFER_BUFFER as *const [u8; 512]) };
+        let data: &[u8; 512] = unsafe { &*(self.transfer_buffer() as *const [u8; 512]) };
         let word = |n: usize| -> u16 { u16::from_le_bytes([data[n * 2], data[n * 2 + 1]]) };
 
         if word(49) & (1 << 9) == 0 {
@@ -354,7 +426,7 @@ impl AhciController {
 
             // Straight out of the transfer buffer the device just filled,
             // instead of a second copy through a scratch array.
-            let fresh = unsafe { &*(&raw const TRANSFER_BUFFER as *const [u8; BUF_SIZE]) };
+            let fresh = unsafe { &*(self.transfer_buffer() as *const [u8; BUF_SIZE]) };
             let chunk = (self.block_size * count as usize - start).min(buffer.len() - done);
             buffer[done..done + chunk].copy_from_slice(&fresh[start..start + chunk]);
             done += chunk;
@@ -379,7 +451,7 @@ impl AhciController {
                 self.read_run(sector, count)?;
             }
 
-            let fresh = unsafe { &mut *(&raw mut TRANSFER_BUFFER as *mut [u8; BUF_SIZE]) };
+            let fresh = unsafe { &mut *(self.transfer_buffer() as *mut [u8; BUF_SIZE]) };
             let chunk = (span - start).min(buffer.len() - done);
             fresh[start..start + chunk].copy_from_slice(&buffer[done..done + chunk]);
             self.write_run(sector, count)?;
@@ -411,31 +483,14 @@ impl AhciController {
     }
 
     fn read_run(&mut self, lba: u64, count: u16) -> Result<(), &'static str> {
-        let command = if self.lba48 {
-            ATA_READ_DMA_EXT
-        } else {
-            // 28 bit LBA puts the top four bits in the device register instead
-            // of the extended LBA bytes.
-            self.set_device_register(lba);
-            0xC8
-        };
+        let command = if self.lba48 { ATA_READ_DMA_EXT } else { 0xC8 };
 
         self.execute(command, false, lba, count)
     }
 
     fn write_run(&mut self, lba: u64, count: u16) -> Result<(), &'static str> {
-        let command = if self.lba48 {
-            ATA_WRITE_DMA_EXT
-        } else {
-            self.set_device_register(lba);
-            0xCA
-        };
+        let command = if self.lba48 { ATA_WRITE_DMA_EXT } else { 0xCA };
 
         self.execute(command, true, lba, count)
-    }
-
-    fn set_device_register(&mut self, lba: u64) {
-        let table = &raw mut COMMAND_TABLE as *mut u8;
-        unsafe { *table.add(7) = 0x40 | ((lba >> 24) & 0x0f) as u8 };
     }
 }

@@ -1,23 +1,13 @@
-use core::sync::atomic::{AtomicU64, Ordering};
+#![allow(dead_code)]
 
 use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 
 use spin::Mutex;
 
-use crate::{arch::interrupts::vectors::ticks, task::thread::ThreadId};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ProcessId(u64);
-
-impl ProcessId {
-    pub const KERNEL: ProcessId = ProcessId(0);
-
-    pub fn new() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-        ProcessId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
-    }
-}
+use crate::{
+    arch::interrupts::vectors::ticks,
+    task::identity::{self, ProcessId, ThreadId},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStatus {
@@ -94,7 +84,6 @@ impl Process {
 
 pub struct ProcessManager {
     processes: BTreeMap<ProcessId, Arc<Mutex<Process>>>,
-    current_pid: ProcessId,
     initialized: bool,
 }
 
@@ -102,7 +91,6 @@ impl ProcessManager {
     const fn new() -> Self {
         ProcessManager {
             processes: BTreeMap::new(),
-            current_pid: ProcessId::KERNEL,
             initialized: false,
         }
     }
@@ -115,7 +103,7 @@ impl ProcessManager {
         let kernel = Arc::new(Mutex::new(Process::boot()));
 
         self.processes.insert(ProcessId::KERNEL, kernel);
-        self.current_pid = ProcessId::KERNEL;
+        identity::set_current_pid(ProcessId::KERNEL);
         self.initialized = true;
     }
 
@@ -124,7 +112,7 @@ impl ProcessManager {
             self.init();
         }
 
-        let process = Process::new(name, Some(self.current_pid), cwd);
+        let process = Process::new(name, Some(identity::current_pid()), cwd);
         let pid = process.pid;
 
         self.processes.insert(pid, Arc::new(Mutex::new(process)));
@@ -143,6 +131,11 @@ impl ProcessManager {
         process.exit_code = Some(exit_code);
     }
 
+    // pub fn exit_current(&mut self, exit_code: i32) {
+    //     let current = CURRENT
+    //     self.exit(current_pid, exit_code);
+    // }
+
     pub fn reap(&mut self, pid: ProcessId) -> Option<i32> {
         let process = self.processes.get(&pid)?;
 
@@ -152,14 +145,13 @@ impl ProcessManager {
             ProcessStatus::Running => return None,
         };
 
-        drop(process);
         self.processes.remove(&pid);
 
         Some(code)
     }
 
     pub fn wait(&mut self, target: ProcessId) -> Option<i32> {
-        let current = self.current_pid;
+        let current = identity::current_pid();
 
         loop {
             if let Some(code) = self.reap(target) {
@@ -189,14 +181,6 @@ impl ProcessManager {
             }
             None => Err("PID not found"),
         }
-    }
-
-    pub fn current_pid(&self) -> ProcessId {
-        self.current_pid
-    }
-
-    pub fn set_current_pid(&mut self, pid: ProcessId) {
-        self.current_pid = pid;
     }
 
     pub fn list(&self) -> Vec<ProcessInfo> {
@@ -245,14 +229,6 @@ pub fn wait(target: ProcessId) -> Option<i32> {
 
 pub fn kill(pid: ProcessId) -> Result<(), &'static str> {
     PROCESS_MANAGER.lock().kill(pid)
-}
-
-pub fn current_pid() -> ProcessId {
-    PROCESS_MANAGER.lock().current_pid()
-}
-
-pub fn set_current_pid(pid: ProcessId) {
-    PROCESS_MANAGER.lock().set_current_pid(pid);
 }
 
 pub fn list() -> Vec<ProcessInfo> {

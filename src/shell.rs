@@ -1,43 +1,16 @@
 use core::str;
 
-use fatfs::{DefaultTimeProvider, Dir, FileSystem, LossyOemCpConverter, Read, Write};
-use spin::Mutex;
-use x86_64::instructions::interrupts;
+use alloc::boxed::Box;
 
-use crate::fs::Disk;
+use crate::fs::BlockDevice;
 use crate::graphics::framebuffer::WRITER;
 use crate::{print, println};
+use fatfs::{DefaultTimeProvider, Dir, FileSystem, LossyOemCpConverter, Read, Write};
 
 const INPUT_MAX: usize = 256;
 const PATH_MAX: usize = 256;
 
-/// Keys the keyboard has produced and nothing has read yet. The interrupt
-/// handler writes here and the main loop drains it, so no filesystem work or
-/// printing happens with interrupts off.
-const PENDING_MAX: usize = 64;
-
-static PENDING: Mutex<[char; PENDING_MAX]> = Mutex::new(['\0'; PENDING_MAX]);
-
-pub fn push_key(key: char) {
-    interrupts::without_interrupts(|| {
-        let mut ring = PENDING.lock();
-        if let Some(slot) = ring.iter_mut().find(|slot| **slot == '\0') {
-            *slot = key;
-        }
-    })
-}
-
-pub fn pop_key() -> Option<char> {
-    interrupts::without_interrupts(|| {
-        let mut ring = PENDING.lock();
-        let slot = ring.iter_mut().find(|slot| **slot != '\0')?;
-        let key = *slot;
-        *slot = '\0';
-        Some(key)
-    })
-}
-
-type FatDir<'a> = Dir<'a, Disk, DefaultTimeProvider, LossyOemCpConverter>;
+type FatDir<'a> = Dir<'a, Box<dyn BlockDevice>, DefaultTimeProvider, LossyOemCpConverter>;
 
 #[derive(Clone)]
 struct Path {
@@ -86,12 +59,12 @@ impl Path {
 pub struct Shell {
     input: [u8; INPUT_MAX],
     input_len: usize,
-    fs: FileSystem<Disk>,
+    fs: FileSystem<Box<dyn BlockDevice>>,
     cwd: Path,
 }
 
 impl Shell {
-    pub fn new(fs: FileSystem<Disk>) -> Self {
+    pub fn new(fs: FileSystem<Box<dyn BlockDevice>>) -> Self {
         Shell {
             input: [0; INPUT_MAX],
             input_len: 0,
@@ -174,6 +147,8 @@ impl Shell {
                 false => self.rmdir(arg),
             },
 
+            "clear" => self.clear(),
+
             "test-file" => self.test_file(),
 
             other => println!("Unknown command: {other}"),
@@ -211,7 +186,7 @@ impl Shell {
 
         Some(full)
     }
-    
+
     fn cwd_dir(&self) -> FatDir<'_> {
         let root = self.fs.root_dir();
         let path = self.cwd.as_str();
@@ -241,10 +216,8 @@ impl Shell {
             }
         };
 
-        for entry in dir.iter() {
-            if let Ok(entry) = entry {
-                println!("{}", entry.file_name());
-            }
+        for entry in dir.iter().flatten() {
+            println!("{}", entry.file_name());
         }
     }
 
@@ -341,6 +314,11 @@ impl Shell {
         }
 
         println!("Created test.txt");
+    }
+
+    pub fn clear(&mut self) {
+        WRITER.lock().clear();
+        print!("> ");
     }
 
     pub fn help(&self) {

@@ -109,8 +109,8 @@ fmt:
 fmt-check:
 	cargo +nightly fmt --all -- --check
 
-clippy: boot
-	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
+clippy: boot timer
+	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld" \
 	cargo +nightly clippy --release \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
@@ -119,8 +119,8 @@ clippy: boot
 
 lint: fmt-check clippy
 
-check: boot
-	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld" \
+check: boot timer
+	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld" \
 	cargo +nightly check --release \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \

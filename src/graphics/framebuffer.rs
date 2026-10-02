@@ -339,14 +339,15 @@ impl Writer {
         self.write_bytes(s.as_bytes());
     }
 
-    #[allow(dead_code)]
-    pub fn clear(&self, _color: u32) {
+    pub fn clear(&mut self) {
         let Some(ref fb) = self.framebuffer else {
             return;
         };
         for y in 0..fb.height {
             self.clear_row(y);
         }
+        self.cursor_row = 0;
+        self.cursor_col = 0;
     }
 
     pub fn fill_rect(&self, x: u32, y: u32, width: u32, height: u32, color: u32) {
@@ -392,32 +393,5 @@ pub fn init_framebuffer(addr: u64, width: u32, height: u32, pitch: u32, bpp: u8)
         WRITER
             .lock()
             .init(addr as *mut u8, width, height, pitch, bpp);
-    });
-}
-
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => {
-        $crate::graphics::framebuffer::_print(format_args!($($arg)*))
-    };
-}
-
-#[macro_export]
-macro_rules! println {
-    () => {
-        $crate::print!("\n")
-    };
-
-    ($($arg:tt)*) => {
-        $crate::print!("{}\n", format_args!($($arg)*))
-    };
-}
-
-pub fn _print(args: fmt::Arguments) {
-    use core::fmt::Write;
-    use x86_64::instructions::interrupts;
-
-    interrupts::without_interrupts(|| {
-        WRITER.lock().write_fmt(args).unwrap();
     });
 }

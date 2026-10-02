@@ -117,12 +117,15 @@ pub static mut P3_TABLE: AlignedPageTable = AlignedPageTable([0; 512]);
 #[unsafe(no_mangle)]
 pub static mut P4_TABLE: AlignedPageTable = AlignedPageTable([0; 512]);
 
+pub const BOOT_STACK_SIZE: usize = 1024 * 1024;
+const _: () = assert!(BOOT_STACK_SIZE == 1048576);
+
 #[repr(align(16))]
 #[allow(dead_code)]
-pub struct BootStack([u8; 65536]);
+pub struct BootStack([u8; BOOT_STACK_SIZE]);
 
 #[unsafe(no_mangle)]
-pub static mut BOOT_STACK: BootStack = BootStack([0; 65536]);
+pub static mut BOOT_STACK: BootStack = BootStack([0; BOOT_STACK_SIZE]);
 
 fn halt() -> ! {
     loop {

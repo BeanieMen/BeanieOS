@@ -1,5 +1,3 @@
-use super::pic::madt;
-
 // IDT vectors.
 
 pub const KEYBOARD_VECTOR: u8 = 33;
@@ -13,7 +11,6 @@ pub const LAPIC_EOI_OFFSET: usize = 0xB0;
 
 pub const LAPIC_TIMER_OFFSET: usize = 0x320;
 pub const LAPIC_TIMER_INITIAL_OFFSET: usize = 0x380;
-pub const LAPIC_TIMER_CURRENT_OFFSET: usize = 0x390;
 pub const LAPIC_TIMER_DIVIDE_OFFSET: usize = 0x3E0;
 
 // SVR bits: enable APIC 1<<8   |    spurious vector at (0xFF).
@@ -40,34 +37,8 @@ pub const PS2_DATA_PORT: u16 = 0x60;
 pub const LEGACY_PIC0_MASK: u16 = 0x21;
 pub const LEGACY_PIC1_MASK: u16 = 0xA1;
 
-pub fn lapic_base() -> usize {
-    madt::get().lapic_address
-}
-
-pub fn lapic_svr_reg() -> usize {
-    lapic_base() + LAPIC_SVR_OFFSET
-}
-
-pub fn lapic_id_reg() -> usize {
-    lapic_base() + LAPIC_ID_OFFSET
-}
-
-pub fn lapic_eoi_reg() -> usize {
-    lapic_base() + LAPIC_EOI_OFFSET
-}
-
-pub fn lapic_timer_reg() -> usize {
-    lapic_base() + LAPIC_TIMER_OFFSET
-}
-
-pub fn lapic_timer_initial_reg() -> usize {
-    lapic_base() + LAPIC_TIMER_INITIAL_OFFSET
-}
-
-pub fn lapic_timer_current_reg() -> usize {
-    lapic_base() + LAPIC_TIMER_CURRENT_OFFSET
-}
-
-pub fn lapic_timer_divide_reg() -> usize {
-    lapic_base() + LAPIC_TIMER_DIVIDE_OFFSET
-}
+const _: () = assert!(LAPIC_TIMER_VECTOR >= 32);
+const _: () = assert!(KEYBOARD_VECTOR >= 32);
+const _: () = assert!(LAPIC_TIMER_VECTOR != KEYBOARD_VECTOR);
+const _: () = assert!(SPURIOUS_VECTOR != LAPIC_TIMER_VECTOR);
+const _: () = assert!(SPURIOUS_VECTOR != KEYBOARD_VECTOR);

@@ -13,7 +13,7 @@ unsafe extern "C" {
     static kernel_end: u8;
 }
 
-const PAGE: u64 = Size4KiB::SIZE as u64;
+const PAGE: u64 = Size4KiB::SIZE;
 
 fn align_up(addr: u64) -> u64 {
     (addr + PAGE - 1) & !(PAGE - 1)

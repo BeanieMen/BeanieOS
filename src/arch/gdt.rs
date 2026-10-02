@@ -1,4 +1,4 @@
-use lazy_static::lazy_static;
+use spin::Once;
 use x86_64::VirtAddr;
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable};
@@ -6,8 +6,10 @@ use x86_64::structures::tss::TaskStateSegment;
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
 // 20 KiB stacks
-lazy_static! {
-    static ref TSS: TaskStateSegment = {
+static TSS: Once<TaskStateSegment> = Once::new();
+
+fn tss() -> &'static TaskStateSegment {
+    TSS.call_once(|| {
         let mut tss = TaskStateSegment::new();
 
         const STACK_SIZE: usize = 4096 * 5;
@@ -25,14 +27,16 @@ lazy_static! {
             stack_start + STACK_SIZE as u64
         };
         tss
-    };
+    })
 }
 
-lazy_static! {
-    static ref GDT: (GlobalDescriptorTable, Selectors) = {
+static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
+
+fn gdt() -> &'static (GlobalDescriptorTable, Selectors) {
+    GDT.call_once(|| {
         let mut gdt = GlobalDescriptorTable::new();
         let code_selector = gdt.append(Descriptor::kernel_code_segment());
-        let tss_selector = gdt.append(Descriptor::tss_segment(&TSS));
+        let tss_selector = gdt.append(Descriptor::tss_segment(tss()));
         (
             gdt,
             Selectors {
@@ -40,7 +44,7 @@ lazy_static! {
                 tss_selector,
             },
         )
-    };
+    })
 }
 
 struct Selectors {
@@ -52,14 +56,15 @@ pub fn init() {
     use x86_64::instructions::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
     use x86_64::instructions::tables::load_tss;
 
-    GDT.0.load();
+    let gdt = gdt();
+    gdt.0.load();
     unsafe {
-        CS::set_reg(GDT.1.code_selector);
+        CS::set_reg(gdt.1.code_selector);
         DS::set_reg(SegmentSelector(0)); // unused stuff
         ES::set_reg(SegmentSelector(0));
         FS::set_reg(SegmentSelector(0));
         GS::set_reg(SegmentSelector(0));
         SS::set_reg(SegmentSelector(0));
-        load_tss(GDT.1.tss_selector);
+        load_tss(gdt.1.tss_selector);
     }
 }

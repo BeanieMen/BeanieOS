@@ -44,7 +44,9 @@ impl ConfigRegionAccess for PciConfig {
 #[derive(Clone, Copy)]
 pub struct Device {
     pub address: PciAddress,
+    #[allow(dead_code)]
     pub vendor_id: u16,
+    #[allow(dead_code)]
     pub device_id: u16,
     pub class: u8,
     pub subclass: u8,
