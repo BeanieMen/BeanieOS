@@ -1,0 +1,8 @@
+<h1>Overview</h1>
+
+<p>BeanieOS is a bare-metal <mark>x86-64</mark> hobby kernel implemented entirely in Rust. It operates without a standard library 
+(<mark>#![no_std]</mark>) and without an operating system runtime environment (<mark>#![no_main]</mark>). 
+The kernel boots via Multiboot2 compliant bootloaders, configures foundational CPU structures (GDT, IDT, paging), 
+initializes a memory heap and graphical framebuffer, and hands control over to a cooperative async task executor.</p>
+
+<h1></h1>
