@@ -1,0 +1,41 @@
+<h1>Dependecies and Crate Configuration</h1>
+
+<h2>Purpose and Scope</h2>
+
+<p>This page details the crate configuration, dependency management, and build profiles for BeanieOS. Because BeanieOS operates 
+    as a freestanding (<mark>no_std</mark>) x86_64 hobby kernel, standard library abstractions like thread-local storage, heap allocators, 
+    and unwinding runtimes are unavailable. The build configuration defined in <mark>Cargo.toml</mark> and locked via 
+    <mark>Cargo.lock</mark> establishes a strict zero-host-dependency environment utilizing specialized <mark>no_std</mark> crates.
+</p>
+
+<h2>Profile Configuration and Panic Handling</h2>
+
+<p>In a bare-metal kernel evnvironment, panics cannot rely on platform-specific stack unwinding mechanisms (<mark>libunwind</mark>), 
+because no operating system runtime exists to catch or clean up stack frames. To prevent the computer from nserting unwinding 
+landing pads and depending on symbols like <mark>_Unwind_Resume</mark>, BeanieOS explicitly configures both development and release 
+profiles to abort immediately upon panic.</p>
+<img src="" alt="">
+
+<h3>Build Profile Data Flow</h3>
+<img src="" alt="">
+
+<h2>Crate Ecosystem and <mark>no_std</mark> Dependecies</h2>
+
+<p>BeanieOS leverages a curated set of external crates compatible with freestanding execution. The dependency manifest 
+    configures these libraries with default features disabled where necessary to avoid reliance on the Rust Standard Library (<mark>std</mark>).
+</p>
+
+<h3>Core Dependency Breakdown</h3>
+<ul>
+    <li>
+        <mark>x86_64</mark> (v0.15.5): Provides low-level abstactions for x86_64 architecture constructs, including page table 
+        management, Global Descriptor Table (GDT), Interrupt Descriptor Table (IDT), Control Registers, and port I/O operations.
+    </li>
+    <li>
+        <mark>multiboot2</mark> (v0.28.0): Parses Multiboot2 boot information structures passed by the bootloader, enabling access 
+        to memory maps, framebuffer tags, and ACPI root pointers.
+    </li>
+    <li>
+        
+    </li>
+</ul>
