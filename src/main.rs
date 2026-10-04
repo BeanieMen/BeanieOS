@@ -6,6 +6,8 @@ use core::panic::PanicInfo;
 
 use multiboot2::BootInformation;
 
+use crate::storage::{ahci::disk::partition, vfs::mount::FileSystem};
+
 extern crate alloc;
 
 mod arch;
@@ -32,8 +34,8 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
             disk.sectors(),
             disk.sector_size()
         );
-
-        for (index, partition) in disk.partitions().iter().enumerate() {
+        let partitions = disk.partitions();
+        for (index, partition) in partitions.iter().enumerate() {
             kinfo!(
                 "  partition {index}: lba {} ({} sectors, {} bytes at {:#x})",
                 partition.first_lba(),
@@ -42,8 +44,38 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
                 partition.byte_offset()
             );
         }
-    }
 
+        let partition_lba = partitions[1].first_lba();
+        kinfo!("mounting partition at LBA {}", partition_lba);
+
+        let fat32 =
+            storage::fs::fat32::Fat32::mount(disk, partition_lba).expect("failed to mount FAT32");
+
+        kinfo!("FAT32 mounted at LBA {}", partition_lba);
+
+        let root = fat32.root();
+
+        let path = storage::vfs::path::Path::resolve(root, b"/TEST.TXT")
+            .expect("failed to resolve /TEST.TXT");
+
+        let inode = path.inode();
+        let inode = inode.lock();
+
+        let mut buf = [0u8; 256];
+
+        let n = inode
+            .file_ops
+            .read(&inode, 0, &mut buf)
+            .expect("failed to read /TEST.TXT");
+
+        kinfo!("TEST.TXT: {} bytes", n);
+
+        for &byte in &buf[..n] {
+            print!("{}", byte as char);
+        }
+
+        break;
+    }
     let init = task::process::create("init", "/");
 
     task::scheduler::spawn_in_process(

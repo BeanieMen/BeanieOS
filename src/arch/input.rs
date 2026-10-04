@@ -1,7 +1,6 @@
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-/// Unread keys. The handler writes, the main loop drains.
 const PENDING_MAX: usize = 64;
 
 static PENDING: Mutex<[char; PENDING_MAX]> = Mutex::new(['\0'; PENDING_MAX]);

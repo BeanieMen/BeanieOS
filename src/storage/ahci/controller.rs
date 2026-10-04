@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
-use super::Disk;
-use crate::hal::dma::{AHCI_DMA, AhciDma};
+use super::disk::disk::Disk;
 use super::regs::*;
+use crate::hal::dma::{AHCI_DMA, AhciDma};
 use crate::hal::pci::Device;
 use crate::{kdebug, kinfo};
 

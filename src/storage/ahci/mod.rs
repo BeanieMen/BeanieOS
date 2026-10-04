@@ -1,13 +1,12 @@
 pub mod controller;
-mod disk;
+pub mod disk;
 pub mod irq;
-pub mod partition;
 mod regs;
 
 use alloc::vec::Vec;
 
 pub use controller::AhciController;
-pub use disk::Disk;
+pub use disk::disk::Disk;
 pub use irq::on_interrupt;
 
 use crate::kwarn;

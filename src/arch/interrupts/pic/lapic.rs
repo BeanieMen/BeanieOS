@@ -114,7 +114,6 @@ fn calibrate() -> Option<u32> {
     let mut polls: u32 = 0;
 
     unsafe {
-        // Full scale, so the window's drain is the whole clock.
         core::ptr::write_volatile(lapic_timer_initial_reg() as *mut u32, u32::MAX);
     }
 
@@ -123,8 +122,6 @@ fn calibrate() -> Option<u32> {
 
         let now = pit_count();
 
-        // Counts down and reloads: forwards closes the window, backwards
-        // wraps. Both are one wrapping_sub.
         elapsed += previous.wrapping_sub(now) as u64;
         previous = now;
 
@@ -150,7 +147,6 @@ fn calibrate() -> Option<u32> {
     Some(per_ms as u32)
 }
 
-/// Free-running down counter.
 unsafe fn current_count() -> u32 {
     unsafe { core::ptr::read_volatile(lapic_timer_current_reg() as *const u32) }
 }

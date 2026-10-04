@@ -1,8 +1,5 @@
-mod command;
-mod table;
-
+use super::super::regs::*;
 use crate::hal::dma::{AhciDma, BUF_SIZE, TransferBuffer};
-use super::regs::*;
 use crate::{kdebug, kerror};
 
 // IDENTIFY strings: words 10-19 and 27-46, bytes stored swapped.
@@ -28,18 +25,24 @@ fn text(bytes: &[u8]) -> &str {
 /// share one `DMA` block, so one transfer at a time.
 #[derive(Clone, Copy)]
 pub struct Disk {
-    dma: &'static AhciDma,
+    // `pub(super)` on exactly the fields the sibling `impl` blocks touch:
+    // `command.rs` drives the transfer, `table.rs` reads capacity and port.
+    // `abar`, `model` and `serial` stay private to this module.
+    pub(super) dma: &'static AhciDma,
     abar: usize,
-    port: usize,
-    sectors: u64,
-    block_size: usize,
-    lba48: bool,
+    pub(super) port: usize,
+    pub(super) sectors: u64,
+    pub(super) block_size: usize,
+    pub(super) lba48: bool,
     model: [u8; MODEL_LEN],
     serial: [u8; SERIAL_LEN],
 }
 
 impl Disk {
-    pub(super) fn attach(
+    // Named explicitly rather than `pub(super)`: `Disk` lives one level below
+    // `ahci::disk` now, and `controller.rs` is a sibling of that, not a
+    // descendant, so `pub(super)` would stop at `ahci::disk` and hide this.
+    pub(in crate::storage::ahci) fn attach(
         dma: &'static AhciDma,
         abar: usize,
         port: usize,
@@ -111,11 +114,11 @@ impl Disk {
         Ok(disk)
     }
 
-    fn port_base(&self) -> usize {
+    pub(super) fn port_base(&self) -> usize {
         self.abar + PORT_BASE + self.port * PORT_STRIDE
     }
 
-    fn transfer_buffer(&self) -> *mut TransferBuffer {
+    pub(super) fn transfer_buffer(&self) -> *mut TransferBuffer {
         self.dma.transfer_buffer()
     }
 

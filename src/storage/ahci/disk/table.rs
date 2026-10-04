@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
-use super::super::partition::Partition;
 use super::super::regs::SECTOR;
-use super::Disk;
+use super::disk::Disk;
+use super::partition::Partition;
 use crate::{kdebug, kwarn};
 
 impl Disk {
@@ -25,11 +25,31 @@ impl Disk {
             return out;
         }
 
+        // Entries are `size` bytes each, packed from the array's first LBA --
+        // four 128-byte entries share one sector. Stepping a whole sector per
+        // index lands on entry 4 * index and hides three partitions in four.
+        let Some(base) = table.checked_mul(SECTOR) else {
+            kwarn!("disk {}: GPT entry array LBA overflows", self.port);
+            return out;
+        };
+
+        let end = base.saturating_add(count as u64 * size as u64);
+
+        if end > self.size() {
+            kwarn!(
+                "disk {}: GPT entries end at {end}, past the {}-byte disk",
+                self.port,
+                self.size()
+            );
+            return out;
+        }
+
         for index in 0..count {
             let mut entry = [0u8; 128];
-            let at = (table + index as u64) * SECTOR;
+            let at = base + index as u64 * size as u64;
 
             if self.read_at(at, &mut entry).is_err() {
+                kwarn!("disk {}: entry {index} at byte {at} read failed", self.port);
                 break;
             }
             if entry[..16] == [0u8; 16] {

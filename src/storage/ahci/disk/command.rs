@@ -1,6 +1,6 @@
-use crate::hal::dma::{CMD_TBL_HDR, PRD_COUNT, PRD_SIZE};
 use super::super::regs::*;
-use super::Disk;
+use super::disk::Disk;
+use crate::hal::dma::{CMD_TBL_HDR, PRD_COUNT, PRD_SIZE};
 
 // Command table header: region table length, then the table's own address.
 const PRDT_LENGTH_OFFSET: usize = 0x46;
