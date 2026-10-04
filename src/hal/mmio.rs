@@ -4,14 +4,13 @@ use spin::Mutex;
 use x86_64::structures::paging::PageTableFlags;
 
 use super::dma::Dma;
+use crate::kdebug;
 use crate::memory::mmu::MMU;
-use crate::println;
 
 /// Where MMIO is mapped. Zero: at the BAR's own physical address.
 pub const MMIO_BASE: u64 = 0;
 
-/// Uncached and write-through, so register reads reach the device and register
-/// writes land before a polling loop looks for them.
+/// Uncached and write-through, so device reads and writes go straight through.
 const MMIO_FLAGS: PageTableFlags = PageTableFlags::from_bits_truncate(
     PageTableFlags::PRESENT.bits()
         | PageTableFlags::WRITABLE.bits()
@@ -64,12 +63,11 @@ impl Mmapped {
             size: end - start,
         });
 
-        println!("  mmio {owner} {start:#x}..{end:#x}");
+        kdebug!("  mmio {owner} {start:#x}..{end:#x}");
 
         Some(MMIO_BASE as usize + start as usize)
     }
 
-    /// Maps the register block of every discovered AHCI function.
     pub fn map_all_bars(&self, mmu: &mut MMU<'_>, dma: &Dma, routes: &crate::hal::pci::Routes) {
         for route in routes.iter() {
             let Some((phys, size)) = route.bar5_info() else {
@@ -90,7 +88,7 @@ impl Mmapped {
             let start = phys & !0xfff;
             let end = (phys + size.max(0x1000) + 0xfff) & !0xfff;
 
-            println!("  reserve mmio {} {start:#x}..{end:#x}", route.address);
+            kdebug!("  reserve mmio {} {start:#x}..{end:#x}", route.address);
             dma.reserve(super::dma::Region::new(start, end));
         }
     }

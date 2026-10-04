@@ -1,5 +1,3 @@
-use core::slice;
-
 use crate::task::{identity::current_pid, process, scheduler};
 
 use super::error::{Errno, encode_result};
@@ -33,28 +31,7 @@ fn sys_exit(code: u64) -> ! {
 }
 
 fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
-    use core::slice;
-
-    use crate::fs::fds;
-
-    if len > isize::MAX as u64 {
-        return encode_result(Err(Errno::Invalid));
-    }
-
-    let len = len as usize;
-
-    if len == 0 {
-        return 0;
-    }
-
-    // Build the slice before writing anything: a fault on a bad address must not
-    // leave a partial write behind.
-    let bytes = unsafe { slice::from_raw_parts(buf as *const u8, len) };
-
-    match fds::write(fd, bytes) {
-        Ok(written) => written as u64,
-        Err(_) => encode_result(Err(Errno::BadFd)),
-    }
+    todo!()
 }
 
 fn sys_read(fd: u64, buf: u64, len: u64) -> u64 {

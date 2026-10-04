@@ -9,30 +9,28 @@ unsafe fn ioapic_write(base: usize, reg: u8, value: u32) {
     }
 }
 
-pub(super) unsafe fn init() {
+/// Sends `gsi` to `vector`. Entry registers sit at 0x10 + 2 * index, index
+/// being the GSI above the I/O APIC base: low holds the vector, high holds the
+/// destination LAPIC id in bits 24-31.
+pub fn route(gsi: u32, vector: u8) {
     let parsed = madt::get();
     let address = parsed.ioapic_address;
-    let keyboard_gsi = parsed.keyboard_gsi;
-    let gsi_base = parsed.ioapic_gsi_base;
 
-    let index = keyboard_gsi - gsi_base;
-    // calculates the low and high register offsets to setup I/O APIC redirection table entry corresponding to the keyboard GSI using its index
-    // which is alo then calculated using keyboard gsi parsed from madt and gsi base of the I/O APIC.
-    // demonic level of confusion caused by legacy stuff once again
-
-    // explanation
-    // calculate low and high reg offsets for ioapic redirection table entry
+    let index = gsi.saturating_sub(parsed.ioapic_gsi_base);
     let low = 0x10 + index * 2;
-    let high = low + 1;
 
     let lapic_id = unsafe { lapic::id() };
 
     unsafe {
-        // lapic id is put into 24-31 bits of the high register
-        ioapic_write(address, high as u8, lapic_id << 24);
+        ioapic_write(address, (low + 1) as u8, lapic_id << 24);
     }
     unsafe {
-        // low register is set to wtv vector is gonna be sent
-        ioapic_write(address, low as u8, KEYBOARD_VECTOR as u32);
+        ioapic_write(address, low as u8, vector as u32);
     }
+}
+
+pub(super) unsafe fn init() {
+    let keyboard_gsi = madt::get().keyboard_gsi;
+
+    route(keyboard_gsi, KEYBOARD_VECTOR);
 }

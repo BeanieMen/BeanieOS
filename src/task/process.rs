@@ -131,11 +131,6 @@ impl ProcessManager {
         process.exit_code = Some(exit_code);
     }
 
-    // pub fn exit_current(&mut self, exit_code: i32) {
-    //     let current = CURRENT
-    //     self.exit(current_pid, exit_code);
-    // }
-
     pub fn reap(&mut self, pid: ProcessId) -> Option<i32> {
         let process = self.processes.get(&pid)?;
 

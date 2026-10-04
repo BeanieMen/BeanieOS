@@ -2,10 +2,7 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
-use alloc::boxed::Box;
 use core::panic::PanicInfo;
-
-use fatfs::FileSystem;
 
 use multiboot2::BootInformation;
 
@@ -13,11 +10,12 @@ extern crate alloc;
 
 mod arch;
 mod console;
-mod fs;
 mod graphics;
 mod hal;
+mod logger;
 mod mem;
 mod memory;
+mod storage;
 mod syscall;
 mod task;
 mod userspace;
@@ -25,11 +23,26 @@ mod userspace;
 fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -> ! {
     init(&boot_info, mbi_addr, mbi_size);
 
-    println!("BeanieOS");
-    println!("heap ready");
-    println!("framebuffer ready");
+    for mut disk in storage::ahci::find_disks() {
+        kinfo!(
+            "disk {}: {} {} ({} sectors of {} bytes)",
+            disk.port(),
+            disk.model(),
+            disk.serial(),
+            disk.sectors(),
+            disk.sector_size()
+        );
 
-    fs::fds::install(boot_disk().unwrap());
+        for (index, partition) in disk.partitions().iter().enumerate() {
+            kinfo!(
+                "  partition {index}: lba {} ({} sectors, {} bytes at {:#x})",
+                partition.first_lba(),
+                partition.sectors(),
+                partition.byte_len(),
+                partition.byte_offset()
+            );
+        }
+    }
 
     let init = task::process::create("init", "/");
 
@@ -46,45 +59,6 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     }
 }
 
-fn boot_disk() -> Result<FileSystem<Box<dyn fs::BlockDevice>>, &'static str> {
-    let devices = hal::hal().pci.find_ahci();
-    if devices.is_empty() {
-        return Err("no AHCI controller found");
-    }
-
-    let device = &devices[0];
-    let (bar5, size) = device.bar5_info().ok_or("no usable BAR5")?;
-    let bus = device.address.bus();
-    let slot = device.address.device();
-    let function = device.address.function();
-    println!("controller {bus:02x}:{slot:02x}.{function} BAR5={bar5:#x} size {size:#x}");
-
-    println!(
-        "ticks before AHCI = {}",
-        crate::arch::interrupts::vectors::ticks()
-    );
-
-    let mut controller = arch::ahci::AhciController::new(device)?;
-
-    println!(
-        "ticks after AHCI = {}",
-        crate::arch::interrupts::vectors::ticks()
-    );
-    let total = controller.size();
-    println!(
-        "disk ready: {total} bytes, {} byte sectors",
-        controller.sector_size()
-    );
-
-    // Sector 0 is the MBR, so sector 1 proves the path before involving FAT.
-    let mut first = [0u8; 512];
-    controller.read_at(512, &mut first)?;
-    println!("sector 1 starts {:02x?}", &first[..4]);
-
-    let filesystem = fs::mount(controller)?;
-    Ok(filesystem)
-}
-
 pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
     let memory_map = boot_info
         .memory_map_tag()
@@ -96,13 +70,16 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         None => panic!("No Multiboot2 framebuffer"),
     };
 
+    graphics::framebuffer::init_framebuffer(
+        fb_tag.address(),
+        fb_tag.width(),
+        fb_tag.height(),
+        fb_tag.pitch(),
+        fb_tag.bpp(),
+    );
+
     let routes = hal::discover();
     memory::allocator::RESERVED.snapshot();
-    println!(
-        "  {} device range(s) reserved: {}",
-        memory::allocator::RESERVED.len(),
-        routes.count()
-    );
 
     let mut mmu = unsafe {
         memory::mmu::MMU::boot(
@@ -113,40 +90,48 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
     };
 
     mmu.init_heap();
-
     hal::init(&mut mmu, &routes);
 
-    graphics::framebuffer::init_framebuffer(
-        fb_tag.address(),
-        fb_tag.width(),
-        fb_tag.height(),
-        fb_tag.pitch(),
-        fb_tag.bpp(),
-    );
-
-    mmu.survey();
+    for entry in routes.iter() {
+        let Some((bar5, size)) = entry.bar5_info() else {
+            continue;
+        };
+        kinfo!("found device: {:#x}..{:#x}", bar5, bar5 + size);
+    }
 
     arch::gdt::init();
-    arch::interrupts::init_idt(acpi_root_addr_from(boot_info));
+    arch::interrupts::init_idt(boot_info);
     x86_64::instructions::interrupts::enable();
+
+    // Log only after init: logging earlier splits init across log lines.
+    kinfo!(
+        "Boot memory map found with {} regions",
+        memory_map.memory_areas().len()
+    );
+
+    kinfo!("framebuffer found at {}", fb_tag.address());
+
+    kinfo!(
+        "  {} device range(s) reserved: {}",
+        memory::allocator::RESERVED.len(),
+        routes.count()
+    );
+
+    kinfo!(
+        "heap initialized at {:#x}..{:#x}",
+        mmu.heap_range().0,
+        mmu.heap_range().1
+    );
+    kinfo!("kernel initialized, starting init process");
 
     task::process::init();
     task::scheduler::init();
 }
 
-fn acpi_root_addr_from(boot_info: &BootInformation<'_>) -> usize {
-    if let Some(rsdp) = boot_info.rsdp_v2_tag() {
-        rsdp.xsdt_address()
-    } else if let Some(rsdp) = boot_info.rsdp_v1_tag() {
-        rsdp.rsdt_address()
-    } else {
-        panic!("No ACPI RSDP")
-    }
-}
-
 #[panic_handler]
+
 fn panic(info: &PanicInfo) -> ! {
-    println!("{info}");
+    kerror!("{info}");
     loop {
         x86_64::instructions::hlt();
     }

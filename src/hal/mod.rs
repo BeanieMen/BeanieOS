@@ -8,7 +8,7 @@ use spin::Once;
 
 use crate::memory::mmu::MMU;
 
-static HAL: Once<Hal> = Once::new();
+pub static HAL: Once<Hal> = Once::new();
 
 pub struct Hal {
     pub pci: pci::Pci,

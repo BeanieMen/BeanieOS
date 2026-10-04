@@ -1,6 +1,5 @@
 use spin::Mutex;
 
-/// A physical range claimed by a device.
 #[derive(Clone, Copy)]
 pub struct Region {
     pub start: u64,
@@ -17,7 +16,6 @@ impl Region {
     }
 }
 
-/// How many ranges are tracked.
 const MAX_RESERVED: usize = 32;
 
 pub struct Dma {
@@ -58,7 +56,7 @@ impl Dma {
         self.reserved.lock().push(region);
     }
 
-    /// Feeds every claimed range to `visit` without allocating, so this can run
+    /// Feeds every claimed range to `visit` without allocating, so this runs
     /// before the heap exists.
     pub fn copy_reserved(&self, mut visit: impl FnMut(Region)) {
         let guard = self.reserved.lock();

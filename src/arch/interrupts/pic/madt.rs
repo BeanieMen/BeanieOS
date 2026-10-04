@@ -60,9 +60,7 @@ unsafe fn find_madt(root: usize) -> usize {
 unsafe fn parse_madt(madt: usize) -> Madt {
     let length = unsafe { read_u32(madt + 4) } as usize;
 
-    // MADT:
-    // +36: Local APIC address
-    // +40: flags
+    // MADT header: +36 Local APIC address, +40 flags
     let lapic_address = unsafe { read_u32(madt + 36) } as usize;
 
     let mut ioapic_address = None;

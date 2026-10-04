@@ -2,14 +2,12 @@ use x86_64::structures::idt::{InterruptDescriptorTable, PageFaultErrorCode};
 
 use crate::arch::gdt;
 
-// Diagnostic handlers for every CPU fault vector. Whichever fault fires
-// first prints its own name instead of cascading into a double fault, so a
-// `DOUBLE FAULT` message with no preceding fault line means the failure is
-// in exception delivery itself (IDT/stack), not in a handler.
+// Each fault names itself instead of cascading, so a `DOUBLE FAULT` with no
+// preceding fault line means exception delivery failed, not a handler.
 macro_rules! fault_handler {
     ($name:ident, $label:literal) => {
         extern "x86-interrupt" fn $name(stack_frame: x86_64::structures::idt::InterruptStackFrame) {
-            crate::println!(concat!("EXCEPTION: ", $label, "\n{:#?}"), stack_frame);
+            crate::kerror!(concat!("EXCEPTION: ", $label, "\n{:#?}"), stack_frame);
             loop {
                 x86_64::instructions::hlt();
             }
@@ -23,7 +21,7 @@ macro_rules! fault_handler_with_err {
             stack_frame: x86_64::structures::idt::InterruptStackFrame,
             error_code: u64,
         ) {
-            crate::println!(
+            crate::kerror!(
                 concat!("EXCEPTION: ", $label, "\nError Code: {:#x}\n{:#?}"),
                 error_code,
                 stack_frame
@@ -55,7 +53,7 @@ fault_handler_with_err!(cp_protection_handler, "CONTROL PROTECTION EXCEPTION");
 extern "x86-interrupt" fn machine_check_handler(
     stack_frame: x86_64::structures::idt::InterruptStackFrame,
 ) -> ! {
-    crate::println!("EXCEPTION: MACHINE CHECK\n{:#?}", stack_frame);
+    crate::kerror!("EXCEPTION: MACHINE CHECK\n{:#?}", stack_frame);
     loop {
         x86_64::instructions::hlt();
     }
@@ -64,7 +62,7 @@ extern "x86-interrupt" fn machine_check_handler(
 extern "x86-interrupt" fn breakpoint_handler(
     stack_frame: x86_64::structures::idt::InterruptStackFrame,
 ) {
-    crate::println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
+    crate::kerror!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
 
 extern "x86-interrupt" fn double_fault_handler(
@@ -80,10 +78,10 @@ extern "x86-interrupt" fn page_fault_handler(
 ) {
     use x86_64::registers::control::Cr2;
 
-    crate::println!("EXCEPTION: PAGE FAULT");
-    crate::println!("Accessed Address: {:?}", Cr2::read());
-    crate::println!("Error Code: {:?}", error_code);
-    crate::println!("{:#?}", stack_frame);
+    crate::kerror!("EXCEPTION: PAGE FAULT");
+    crate::kerror!("Accessed Address: {:?}", Cr2::read());
+    crate::kerror!("Error Code: {:?}", error_code);
+    crate::kerror!("{:#?}", stack_frame);
     loop {
         x86_64::instructions::hlt();
     }

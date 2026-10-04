@@ -1,9 +1,7 @@
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-/// Keys the keyboard has produced and nothing has read yet. The interrupt
-/// handler writes here and the main loop drains it, so no filesystem work or
-/// printing happens with interrupts off.
+/// Unread keys. The handler writes, the main loop drains.
 const PENDING_MAX: usize = 64;
 
 static PENDING: Mutex<[char; PENDING_MAX]> = Mutex::new(['\0'; PENDING_MAX]);
