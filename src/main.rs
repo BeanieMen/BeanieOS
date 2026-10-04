@@ -8,7 +8,6 @@ use core::panic::PanicInfo;
 use fatfs::FileSystem;
 
 use multiboot2::BootInformation;
-use x86_64::VirtAddr;
 
 extern crate alloc;
 
@@ -97,14 +96,6 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         None => panic!("No Multiboot2 framebuffer"),
     };
 
-    let mut frame_alloc = unsafe {
-        memory::allocator::BumpAllocator::init(
-            memory_map,
-            mbi_addr as u64,
-            mbi_addr as u64 + mbi_size as u64,
-        )
-    };
-
     let routes = hal::discover();
     memory::allocator::RESERVED.snapshot();
     println!(
@@ -113,13 +104,17 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         routes.count()
     );
 
-    let mmio_mapper = unsafe { memory::allocator::mapper(VirtAddr::new(0)) };
-    let mut heap_mapper = unsafe { memory::allocator::mapper(VirtAddr::new(0)) };
+    let mut mmu = unsafe {
+        memory::mmu::MMU::boot(
+            memory_map,
+            mbi_addr as u64,
+            mbi_addr as u64 + mbi_size as u64,
+        )
+    };
 
-    memory::heap::init_heap(&mut heap_mapper, &mut frame_alloc)
-        .expect("heap initialization failed");
+    mmu.init_heap();
 
-    hal::init(mmio_mapper, &routes, &mut frame_alloc);
+    hal::init(&mut mmu, &routes);
 
     graphics::framebuffer::init_framebuffer(
         fb_tag.address(),
@@ -128,6 +123,8 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         fb_tag.pitch(),
         fb_tag.bpp(),
     );
+
+    mmu.survey();
 
     arch::gdt::init();
     arch::interrupts::init_idt(acpi_root_addr_from(boot_info));

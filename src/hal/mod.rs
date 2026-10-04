@@ -5,7 +5,8 @@ pub mod pci;
 pub use dma::Region;
 
 use spin::Once;
-use x86_64::structures::paging::{FrameAllocator, OffsetPageTable, Size4KiB};
+
+use crate::memory::mmu::MMU;
 
 static HAL: Once<Hal> = Once::new();
 
@@ -23,10 +24,6 @@ impl Hal {
             dma: dma::Dma::new(),
         }
     }
-
-    pub fn set_mapper(&self, mapper: OffsetPageTable<'static>) {
-        self.mmio.set_mapper(mapper);
-    }
 }
 
 pub fn hal() -> &'static Hal {
@@ -42,13 +39,8 @@ pub fn discover() -> pci::Routes {
     routes
 }
 
-pub fn init(
-    mapper: OffsetPageTable<'static>,
-    routes: &pci::Routes,
-    frames: &mut impl FrameAllocator<Size4KiB>,
-) {
+pub fn init(mmu: &mut MMU<'_>, routes: &pci::Routes) {
     let hal = hal();
 
-    hal.set_mapper(mapper);
-    hal.mmio.map_all_bars(&hal.dma, routes, frames);
+    hal.mmio.map_all_bars(mmu, &hal.dma, routes);
 }
