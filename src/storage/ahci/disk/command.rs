@@ -1,4 +1,4 @@
-use super::super::dma::{CMD_TBL_HDR, PRD_COUNT, PRD_SIZE};
+use crate::hal::dma::{CMD_TBL_HDR, PRD_COUNT, PRD_SIZE};
 use super::super::regs::*;
 use super::Disk;
 

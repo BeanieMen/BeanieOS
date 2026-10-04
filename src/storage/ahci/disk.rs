@@ -1,7 +1,7 @@
 mod command;
 mod table;
 
-use super::dma::{BUF_SIZE, Dma, TransferBuffer};
+use crate::hal::dma::{AhciDma, BUF_SIZE, TransferBuffer};
 use super::regs::*;
 use crate::{kdebug, kerror};
 
@@ -28,7 +28,7 @@ fn text(bytes: &[u8]) -> &str {
 /// share one `DMA` block, so one transfer at a time.
 #[derive(Clone, Copy)]
 pub struct Disk {
-    dma: &'static Dma,
+    dma: &'static AhciDma,
     abar: usize,
     port: usize,
     sectors: u64,
@@ -40,7 +40,7 @@ pub struct Disk {
 
 impl Disk {
     pub(super) fn attach(
-        dma: &'static Dma,
+        dma: &'static AhciDma,
         abar: usize,
         port: usize,
     ) -> Result<Self, &'static str> {

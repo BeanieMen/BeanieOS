@@ -21,6 +21,7 @@ const ENTRY_SIZE: u64 = 8;
 const PAGE: u64 = 4096;
 
 /// An address space, the frames it is built from, and the heap inside it.
+#[allow(clippy::upper_case_acronyms)]
 pub struct MMU<'a> {
     root: u64,
     mapper: OffsetPageTable<'a>,

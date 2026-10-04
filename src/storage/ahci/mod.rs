@@ -1,6 +1,5 @@
 pub mod controller;
 mod disk;
-mod dma;
 pub mod irq;
 pub mod partition;
 mod regs;

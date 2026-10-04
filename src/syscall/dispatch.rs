@@ -30,27 +30,27 @@ fn sys_exit(code: u64) -> ! {
     scheduler::exit();
 }
 
-fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
+fn sys_write(_fd: u64, _buf: u64, _len: u64) -> u64 {
     todo!()
 }
 
-fn sys_read(fd: u64, buf: u64, len: u64) -> u64 {
+fn sys_read(_fd: u64, _buf: u64, _len: u64) -> u64 {
     todo!()
 }
 
-fn sys_open(path: u64, flags: u64) -> u64 {
+fn sys_open(_path: u64, _flags: u64) -> u64 {
     todo!()
 }
 
-fn sys_close(fd: u64) -> u64 {
+fn sys_close(_fd: u64) -> u64 {
     todo!()
 }
 
-fn sys_mkdir(path: u64) -> u64 {
+fn sys_mkdir(_path: u64) -> u64 {
     todo!()
 }
 
-fn sys_getdents(fd: u64, buf: u64, len: u64) -> u64 {
+fn sys_getdents(_fd: u64, _buf: u64, _len: u64) -> u64 {
     todo!()
 }
 
@@ -63,10 +63,10 @@ fn sys_getpid() -> u64 {
     current_pid().as_u64()
 }
 
-fn sys_unlink(path: u64) -> u64 {
+fn sys_unlink(_path: u64) -> u64 {
     todo!()
 }
 
-fn sys_rmdir(path: u64) -> u64 {
+fn sys_rmdir(_path: u64) -> u64 {
     todo!()
 }

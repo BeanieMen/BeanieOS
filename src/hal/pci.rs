@@ -153,6 +153,7 @@ impl Route {
     }
 }
 
+#[derive(Clone)]
 pub struct Routes {
     entries: [Option<Route>; MAX_ROUTES],
     count: usize,

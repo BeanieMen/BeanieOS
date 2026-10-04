@@ -1,13 +1,13 @@
 use alloc::vec::Vec;
 
 use super::Disk;
-use super::dma::{DMA, Dma};
+use crate::hal::dma::{AHCI_DMA, AhciDma};
 use super::regs::*;
 use crate::hal::pci::Device;
 use crate::{kdebug, kinfo};
 
 pub struct AhciController {
-    dma: &'static Dma,
+    dma: &'static AhciDma,
     abar: usize,
     ports: u32,
 }
@@ -53,7 +53,7 @@ impl AhciController {
         // GHC.AE (bit 1): the HBA does nothing at all without it.
         set_reg(abar, GHC, GHC_AE);
 
-        DMA.clear();
+        AHCI_DMA.clear();
 
         let pin = device.interrupt_pin().ok_or("no PCI header")?;
         if pin == 0 {
@@ -64,7 +64,7 @@ impl AhciController {
         super::irq::attach(abar, implemented, pin, line);
 
         Ok(Self {
-            dma: &DMA,
+            dma: &AHCI_DMA,
             abar,
             ports: implemented,
         })

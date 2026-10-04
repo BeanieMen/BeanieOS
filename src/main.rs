@@ -78,9 +78,6 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         fb_tag.bpp(),
     );
 
-    let routes = hal::discover();
-    memory::allocator::RESERVED.snapshot();
-
     let mut mmu = unsafe {
         memory::mmu::MMU::boot(
             memory_map,
@@ -90,7 +87,9 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
     };
 
     mmu.init_heap();
-    hal::init(&mut mmu, &routes);
+    hal::init(&mut mmu);
+
+    let routes = hal::routes();
 
     for entry in routes.iter() {
         let Some((bar5, size)) = entry.bar5_info() else {
@@ -129,7 +128,6 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
 }
 
 #[panic_handler]
-
 fn panic(info: &PanicInfo) -> ! {
     kerror!("{info}");
     loop {
