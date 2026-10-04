@@ -1,4 +1,7 @@
-use crate::task::{identity::current_pid, process, scheduler};
+use crate::{
+    storage::vfs::file::OpenFlags,
+    task::{identity::current_pid, process, scheduler},
+};
 
 use super::error::{Errno, encode_result};
 use super::numbers::*;
@@ -30,20 +33,69 @@ fn sys_exit(code: u64) -> ! {
     scheduler::exit();
 }
 
-fn sys_write(_fd: u64, _buf: u64, _len: u64) -> u64 {
-    todo!()
+fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
+    let Some(result) = process::with_current_fds(|fds| {
+        fds.write(fd, unsafe {
+            core::slice::from_raw_parts(buf as *const u8, len as usize)
+        })
+    }) else {
+        return encode_result(Err(Errno::BadFd));
+    };
+
+    match result {
+        Ok(written) => written as u64,
+        Err(_) => encode_result(Err(Errno::Invalid)),
+    }
 }
 
-fn sys_read(_fd: u64, _buf: u64, _len: u64) -> u64 {
-    todo!()
+fn sys_read(fd: u64, buf: u64, len: u64) -> u64 {
+    let Some(result) = process::with_current_fds(|fds| {
+        fds.read(fd, unsafe {
+            core::slice::from_raw_parts_mut(buf as *mut u8, len as usize)
+        })
+    }) else {
+        return encode_result(Err(Errno::BadFd));
+    };
+
+    match result {
+        Ok(read) => read as u64,
+        Err(_) => encode_result(Err(Errno::Invalid)),
+    }
 }
 
-fn sys_open(_path: u64, _flags: u64) -> u64 {
-    todo!()
+fn sys_open(path: u64, flags: u64) -> u64 {
+    let path = match process::str_from_ptr(path) {
+        Ok(path) => path,
+        Err(_) => return encode_result(Err(Errno::Fault)),
+    };
+
+    let open_flags = match flags {
+        0 => OpenFlags::READ,
+        1 => OpenFlags::WRITE,
+        2 => OpenFlags::RDWR,
+        _ => return encode_result(Err(Errno::Invalid)),
+    };
+
+    let Some(result) = process::with_current_fds(|fds| fds.open(path.as_bytes(), open_flags))
+    else {
+        return encode_result(Err(Errno::BadFd));
+    };
+
+    match result {
+        Ok(fd) => fd,
+        Err(_) => return encode_result(Err(Errno::NoEntry)),
+    }
 }
 
-fn sys_close(_fd: u64) -> u64 {
-    todo!()
+fn sys_close(fd: u64) -> u64 {
+    let Some(result) = process::with_current_fds(|fds| fds.close(fd)) else {
+        return encode_result(Err(Errno::BadFd));
+    };
+
+    match result {
+        Ok(()) => 0,
+        Err(_) => encode_result(Err(Errno::BadFd)),
+    }
 }
 
 fn sys_mkdir(_path: u64) -> u64 {

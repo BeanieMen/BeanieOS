@@ -33,7 +33,7 @@ impl<D: BlockDevice> Fat32<D> {
         let device = Arc::new(Mutex::new(device));
         let mut sector = [0u8; 512];
         device.lock().read_block(partition_start, &mut sector)?;
-        
+
         kinfo!("FAT32 boot sector: {:x?}", &sector[..]);
 
         let bytes_per_sector = u16::from_le_bytes([sector[11], sector[12]]);

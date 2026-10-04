@@ -55,17 +55,19 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
 
         let root = fat32.root();
 
-        let path = storage::vfs::path::Path::resolve(root, b"/TEST.TXT")
-            .expect("failed to resolve /TEST.TXT");
+        let fd = task::process::with_current_fds(|fds| {
+            fds.set_root(root.clone());
+            fds.open_read(b"/TEST.TXT")
+        })
+        .expect("no current process")
+        .expect("failed to open /TEST.TXT");
 
-        let inode = path.inode();
-        let inode = inode.lock();
+        kinfo!("opened /TEST.TXT as fd {fd}");
 
         let mut buf = [0u8; 256];
 
-        let n = inode
-            .file_ops
-            .read(&inode, 0, &mut buf)
+        let n = task::process::with_current_fds(|fds| fds.read(fd, &mut buf))
+            .expect("no current process")
             .expect("failed to read /TEST.TXT");
 
         kinfo!("TEST.TXT: {} bytes", n);
@@ -73,6 +75,14 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         for &byte in &buf[..n] {
             print!("{}", byte as char);
         }
+
+        let cursor = task::process::with_current_fds(|fds| fds.get(fd).map(|f| f.tell()))
+            .expect("no current process")
+            .expect("fd vanished");
+
+        let closed = task::process::with_current_fds(|fds| fds.close(fd));
+
+        kinfo!("fd {fd} cursor at {cursor}, close gave {closed:?}");
 
         break;
     }

@@ -6,6 +6,7 @@ use spin::Mutex;
 
 use crate::{
     arch::interrupts::vectors::ticks,
+    storage::vfs::fd::FdTable,
     task::identity::{self, ProcessId, ThreadId},
 };
 
@@ -36,6 +37,7 @@ pub struct Process {
     pub threads: Vec<ThreadId>,
     pub exit_code: Option<i32>,
     pub created_at: u64,
+    pub fds: FdTable,
 }
 
 impl Process {
@@ -49,6 +51,7 @@ impl Process {
             threads: Vec::new(),
             exit_code: None,
             created_at: ticks(),
+            fds: FdTable::new(),
         }
     }
 
@@ -62,6 +65,7 @@ impl Process {
             threads: Vec::new(),
             exit_code: None,
             created_at: ticks(),
+            fds: FdTable::new(),
         }
     }
 
@@ -118,6 +122,10 @@ impl ProcessManager {
         self.processes.insert(pid, Arc::new(Mutex::new(process)));
 
         pid
+    }
+
+    pub fn get(&self, pid: ProcessId) -> Option<Arc<Mutex<Process>>> {
+        self.processes.get(&pid).cloned()
     }
 
     pub fn exit(&mut self, pid: ProcessId, exit_code: i32) {
@@ -228,4 +236,37 @@ pub fn kill(pid: ProcessId) -> Result<(), &'static str> {
 
 pub fn list() -> Vec<ProcessInfo> {
     PROCESS_MANAGER.lock().list()
+}
+
+pub fn current() -> Option<Arc<Mutex<Process>>> {
+    PROCESS_MANAGER.lock().get(identity::current_pid())
+}
+
+pub fn with_current_fds<R>(f: impl FnOnce(&mut FdTable) -> R) -> Option<R> {
+    let process = current()?;
+    let mut guard = process.lock();
+
+    Some(f(&mut guard.fds))
+}
+
+pub fn str_from_ptr(ptr: u64) -> Result<&'static str, &'static str> {
+    if ptr == 0 {
+        return Err("null pointer");
+    }
+
+    let mut len = 0usize;
+
+    let base = ptr as *const u8;
+    let page = 4096 - (ptr as usize) % 4096;
+
+    while len < page {
+        if unsafe { base.add(len).read() } == 0 {
+            let slice = unsafe { core::slice::from_raw_parts(base, len) };
+            return core::str::from_utf8(slice).map_err(|_| "path is not valid UTF-8");
+        }
+
+        len += 1;
+    }
+
+    Err("string is not terminated within its page")
 }

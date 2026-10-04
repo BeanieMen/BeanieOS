@@ -5,6 +5,7 @@ pub type SyscallResult = Result<u64, Errno>;
 pub enum Errno {
     NoSys = 38,
     BadFd = 9,
+    NoEntry = 2,
     Invalid = 22,
     NoMem = 12,
     Fault = 14,
