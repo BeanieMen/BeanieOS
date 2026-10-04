@@ -1,0 +1,14 @@
+<h1>Development Journal</h1>
+
+<h2>Purpose and Scope</h2>
+<p>This page summarizes the evolutionary milestones, technical hudles, and design decisions recorded in the project's development 
+    journal (<mark>JOURNAL.md</mark>). It traces the trajectory of BeanieOS from initial concept and legacy VGA restrictions to a modern 
+    x86_64 bare-metal kernel featuring a graphic framebuffer, CPU exception handling, interrupt controllers, and automated build tooling.
+</p>
+
+<h2>1. Framebuffer Transition and Graphics Output</h2>
+<p>Early milestones focused on abandoning the legacy 80x25 VGA text mode in favour of a modern graphics framebuffer. This ransition required 
+    inegrating bootloader protocols (Multiboot2/Limine) to pass framebuffer metadata (resolution, pitch, and pixel format) directly to the 
+    kernel initialization routines.
+</p>
+<img src="" alt="">
