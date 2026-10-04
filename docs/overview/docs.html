@@ -28,6 +28,10 @@
             padding: 25px 50px 60px 60px;
         }
 
+        h1{
+            margin-bottom: 30px;
+        }
+
         .sidebar{
             position: fixed;
             left: 0;
@@ -160,36 +164,36 @@
         <h2>Beanie Docs</h2>
 
         <nav>
-            <a href="overview.html">Overview</a>
-            <a href="overview/getting-started.html">-- Getting Started & Build System</a>
-            <a href="overview/dependencies.html">-- Dependencies and Crate Configuration</a>
-            <a href="overview/journal.html">-- Development Journal</a>
-            <a href="">-- Documentation Website (docs/)</a>
-
-            <a href="">Boot and Initialization</a>
-            <a href=""></a>
+            <a href="docs.html">Overview</a>
+            <a href="getting-started.html">-- Getting Started & Build System</a>
+            <a href="dependencies.html">-- Dependencies and Crate Configuration</a>
+            <a href="journal.html">-- Development Journal</a>
         </nav>
 
     </aside>
     
     <main>
-        <h1>Overview</h1>
+
+        <h2>Overview</h2>
         <p>BeanieOS is a bare-metal <mark>x86_64</mark> hobby kernel implemented entirely in Rust. It operates without a standard library
         (<mark>#![no_std]</mark>) and without an operating system runtime environment (<mark>#![no_main]</mark>).
         The kernel boots via Multiboot2 compliant bootloaders, configures foundational CPU structures (GDT, IDT, paging),
         initializes a memory heap and graphical framebuffer, and hands control over to a cooperative async task executor.</p>
-        <h1>System Architecture Map</h1>
+        
+        <h2>System Architecture Map</h2>
         <p>The codebase is organised into modular subdirectories corresponding to core kernel esponsibilties, anchored by
             <mark>src/main.rs</mark> as the primary entry and orchestration point.
         </p>
         <img src="" alt="">
-        <h1>Boot-to-Executor Flow</h1>
+        
+        <h2>Boot-to-Executor Flow</h2>
         <p>The initialization sequence transitions the processor from early bootloader handoff into fully interactive kernel tasks.
             The control flow begins at <mark>kernel_main</mark>, invokes <mark>init</mark> to setup paging, allocation, graphics, and interrupts,
             and finally spawns asynchronous tasks into <mark>Executor::run</mark>.
         </p>
         <img src="" alt="">
-        <h1>Child Pages</h1>
+        
+        <h2>Child Pages</h2>
         <p>For granular technical documentation, consult the following child pages:</p>
         <ul>
             <li>
@@ -207,6 +211,7 @@
                 <mark>JOURNAL.md</mark>.
             </li>
         </ul>
+        
     </main>
 
 </body>

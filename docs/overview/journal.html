@@ -8,13 +8,174 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+
+    <style>
+
+        body{
+            margin: 0;
+            padding: 0;
+
+            font-family: "Public Sans", sans-serif;
+            font-optical-sizing: auto;
+            font-weight: 200;
+            font-style: normal;
+        }
+
+        main{
+            margin-top: 9vh;
+            margin-left: 280px;
+            margin-right: 50px;
+            padding: 25px 50px 60px 60px;
+        }
+
+        h1{
+            margin-bottom: 30px;
+        }
+
+        .sidebar{
+            position: fixed;
+            left: 0;
+            top: 9vh;
+
+            width: 240px;
+            height: 100vh;
+
+            background: white;
+            padding: 30px 10px 0 20px;
+
+            border-right: 1px dashed #333;
+        }
+
+        .sidebar nav{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .sidebar a{
+            color: black;
+            text-decoration: none;
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .sidebar a:hover{
+            background: rgb(238, 237, 237);
+        }
+
+        p {
+            line-height: 1.6;
+        }
+
+        li {
+            line-height: 1.8;
+        }
+
+        mark{
+            background-color: rgb(223, 222, 222);
+            font-weight: 500;
+            padding: 1px 4px;
+            border-radius: 6px;
+        }
+
+        main a{
+            color: black;
+        }
+
+        .nav-bar{
+            position: fixed;
+            top: 0;
+            left: 0;
+
+            width: 100%;
+            height: 9vh;
+            margin: 0 !important;
+            background-color: rgb(44, 42, 42);
+
+            display: flex;
+            gap: 800px;
+
+            padding-left: 1.5vw;
+            padding-right: 1.5vw;
+
+            align-items: center;
+        }
+
+        .nav-bar .title{
+            display: flex;
+            gap: 1px;
+            text-decoration: none;
+            color: white;
+            align-items: center;
+        }
+
+        .nav-bar h1{
+            font-size: 2vw;
+        }
+
+        .nav-bar img{
+            height: 3.2vw;
+            width: auto;
+        }
+
+        .nav-links{
+            display: flex;
+            gap: 100px;
+        }
+
+        .github-link{
+            color: rgba(255, 255, 255, 0.782);
+            text-decoration: none;
+            font-size: 17px;
+        }
+
+        .github-link:hover{
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        .docs-link{
+            font-size: large;
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+    </style>
+
 </head>
 
 <body>
+
+    <div class="nav-bar">
+        <a href="index.html" class="title">
+            <img src="https://cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
+            <h1>BeanieOS</h1>
+        </a>
+        <div class="nav-links">
+            <a href="docs.html" class="docs-link">Documentation</a>
+            <a href="https://github.com/beaniemen/BeanieOS" class="github-link">Github</a>
+        </div>
+    </div>
+
+    <aside class="sidebar">
+
+        <h2>Beanie Docs</h2>
+
+        <nav>
+            <a href="docs.html">Overview</a>
+            <a href="getting-started.html">-- Getting Started & Build System</a>
+            <a href="dependencies.html">-- Dependencies and Crate Configuration</a>
+            <a href="journal.html">-- Development Journal</a>
+        </nav>
+
+    </aside>
     
     <main>
 
         <h1>Development Journal</h1>
+
         <h2>Purpose and Scope</h2>
         <p>This page summarizes the evolutionary milestones, technical hudles, and design decisions recorded in the project's development
             journal (<mark>JOURNAL.md</mark>). It traces the trajectory of BeanieOS from initial concept and legacy VGA restrictions to a modern
@@ -26,6 +187,30 @@
             kernel initialization routines.
         </p>
         <img src="" alt="">
+
+        <h2>2. CPU Architecture and Interrupt Management</h2>
+        <p>Configuring x86_64 CPU protection structures proved to be a major architectural hurdle, specifically coordinating the 
+            Global Descriptor Table (GDT), Task State Segment (TSS), Interrupt Descriptor Table (IDT), and Interrupt Stack Table (IST).
+        </p>
+        <img src="" alt="">
+
+        <h2>3. Paging and Memory Mapping</h2>
+        <p>Paging was initially enabled by bootloader wrapper. Kernel iniialization extracts boot information structures (<mark>bootinfo</mark>), 
+        obtains the physical memory offset, and computes virtual addresses for page tables anchored by the control register.</p>
+
+        <h2>4. Developer Workflows and Tooling</h2>
+        <p>To streamline cross-compilationan and testing workflows (especially after shifting environments to CachyOS),the project 
+            introduced automated build scripts and dependency targets within the root <mark>Makefile</mark>.
+        </p>
+
+        <h2>5. Freestanding Memory Routines</h2>
+        <p>As a <mark>no_std</mark> kernel, standard library memory manipulation functions like <mark>memset</mark>, 
+        <mark>memcpy</mark>, <mark>memmove</mark>, and <mark>memcmp</mark> are not available. These essential routines, required for various 
+        kernel operations, are implemented manually in <mark>src/mem.rs</mark> to provide C-ABI compatible memory instrinsics.</p>
+        <img src="" alt="">
+        <p>The <mark>memset</mark> function fills a block of memory with a specified byte value. <mark>memcpy</mark> copies a 
+        block of memory from a source to a destination. <mark>memmove</mark> is a safer version of <mark>memcpy</mark> that handles 
+        overlapping memory regions correctly. Finally, <mark>memcmp</mark> compares to blocks of memory</p>
 
     </main>
 
