@@ -36,6 +36,22 @@ profiles to abort immediately upon panic.</p>
         to memory maps, framebuffer tags, and ACPI root pointers.
     </li>
     <li>
-        
+        <mark>spin</mark> (v0.10): Supplies spinlock primitives (<mark>Mutex</mark>, <mark>Once</mark>) configured with 
+        <mark>default-features = false</mark> to operate in non-preemptive interrupt contexts where blocking mutexes cannot be used.
+    </li>
+    <li>
+        <mark>linked_list_allocator</mark> (v0.10): Implements a heap allocator over a raw memory region, acting as the global allocator 
+        via <mark>#[global_allocator]</mark>.
+    </li>
+    <li>
+        <mark>pci_types</mark> (v0.10): Provides types and strructures for interacting with PCI devices, used for enumerating and 
+        configuring hardware. It disables default features to ensure <mark>no_std</mark> compatibility.
+    </li>
+    <li>
+        <mark>fatfs</mark> (v0.4.0): A FAT filesystem implementation, configured to use <mark>alloc</mark> without <mark>std</mark> 
+        for disk operations. This is sourced directly from Git repository.
     </li>
 </ul>
+
+<h3>Crate Dependency Graph</h3>
+<img src="" alt="">
