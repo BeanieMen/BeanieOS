@@ -60,4 +60,27 @@ image running inside QEMU.</p>
 
 <h2>3. Custom Target Specification (<mark>x86_64.json</mark>)</h2>
 
-<p>Because BeanieOS runs on bare metal without an underlying operating system, stanard</p>
+<p>Because BeanieOS runs on bare metal without an underlying operating system, standard compliation targets are insufficient. 
+    The custom target specification file <mark>x86_64.json</mark> defines the target architecture parameters for LLVM and cargo.
+</p>
+
+<h3>Target Configuration Breakdown</h3>
+<ul>
+    <li>
+        <mark>llvm-target</mark>: Set to <mark>x86_64-unknown-none</mark>, informing LLVM that there is no OS abstraction layer.
+    </li>
+    <li>
+        <mark>panic-strategy</mark>: Configured to <mark>abort</mark> since there is no unwinding runtime available in a freestanding kernel.
+    </li>
+    <li>
+        <mark>disable-redzone</mark>: Set to <mark>true</mark> to prevent the x86_64 ABI red zone (128 bytes below the stack pointer) 
+        from being modified by interrupt handlers, which would corrupt asynchronous stack frames.
+    </li>
+    <li>
+        <mark>features</mark>: Explicitly disables MMX and SSE instructions (<mark>-mmx, -sse</mark>) and enforces software floating point 
+        (<mark>+soft-float</mark>), preventing the CPU from using vector registers before they are properly initialized by the kernel.
+    </li>
+    <li>
+        <mark>linker</mark>: Uses <mark>rust-lld</mark> with the <mark>ld.lld</mark> linker flavor.
+    </li>
+</ul>
