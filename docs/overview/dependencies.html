@@ -1,57 +1,104 @@
-<h1>Dependecies and Crate Configuration</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
 
-<h2>Purpose and Scope</h2>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+</head>
 
-<p>This page details the crate configuration, dependency management, and build profiles for BeanieOS. Because BeanieOS operates 
-    as a freestanding (<mark>no_std</mark>) x86_64 hobby kernel, standard library abstractions like thread-local storage, heap allocators, 
-    and unwinding runtimes are unavailable. The build configuration defined in <mark>Cargo.toml</mark> and locked via 
-    <mark>Cargo.lock</mark> establishes a strict zero-host-dependency environment utilizing specialized <mark>no_std</mark> crates.
-</p>
+<body>
 
-<h2>Profile Configuration and Panic Handling</h2>
+    <div class="nav-bar">
+        <a href="index.html" class="title">
+            <img src="https://cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
+            <h1>BeanieOS</h1>
+        </a>
+        <div class="nav-links">
+            <a href="docs.html" class="docs-link">Documentation</a>
+            <a href="https://github.com/beaniemen/BeanieOS" class="github-link">Github</a>
+        </div>
+    </div>
 
-<p>In a bare-metal kernel evnvironment, panics cannot rely on platform-specific stack unwinding mechanisms (<mark>libunwind</mark>), 
-because no operating system runtime exists to catch or clean up stack frames. To prevent the computer from nserting unwinding 
-landing pads and depending on symbols like <mark>_Unwind_Resume</mark>, BeanieOS explicitly configures both development and release 
-profiles to abort immediately upon panic.</p>
-<img src="" alt="">
+    <aside class="sidebar">
 
-<h3>Build Profile Data Flow</h3>
-<img src="" alt="">
+        <h2>Beanie Docs</h2>
 
-<h2>Crate Ecosystem and <mark>no_std</mark> Dependecies</h2>
+        <nav>
+            <a href="overview.html">Overview</a>
+            <a href="overview/getting-started.html">-- Getting Started & Build System</a>
+            <a href="overview/dependencies.html">-- Dependencies and Crate Configuration</a>
+            <a href="overview/journal.html">-- Development Journal</a>
+            <a href="">-- Documentation Website (docs/)</a>
 
-<p>BeanieOS leverages a curated set of external crates compatible with freestanding execution. The dependency manifest 
-    configures these libraries with default features disabled where necessary to avoid reliance on the Rust Standard Library (<mark>std</mark>).
-</p>
+            <a href="">Boot and Initialization</a>
+            <a href="">-- Firmware, Limine and Disk Image</a>
+            <a href="">-- Assembly Entry and Linker Layout</a>
+            <a href="">-- kernel_main and Subsystem Init Order</a>
 
-<h3>Core Dependency Breakdown</h3>
-<ul>
-    <li>
-        <mark>x86_64</mark> (v0.15.5): Provides low-level abstactions for x86_64 architecture constructs, including page table 
-        management, Global Descriptor Table (GDT), Interrupt Descriptor Table (IDT), Control Registers, and port I/O operations.
-    </li>
-    <li>
-        <mark>multiboot2</mark> (v0.28.0): Parses Multiboot2 boot information structures passed by the bootloader, enabling access 
-        to memory maps, framebuffer tags, and ACPI root pointers.
-    </li>
-    <li>
-        <mark>spin</mark> (v0.10): Supplies spinlock primitives (<mark>Mutex</mark>, <mark>Once</mark>) configured with 
-        <mark>default-features = false</mark> to operate in non-preemptive interrupt contexts where blocking mutexes cannot be used.
-    </li>
-    <li>
-        <mark>linked_list_allocator</mark> (v0.10): Implements a heap allocator over a raw memory region, acting as the global allocator 
-        via <mark>#[global_allocator]</mark>.
-    </li>
-    <li>
-        <mark>pci_types</mark> (v0.10): Provides types and strructures for interacting with PCI devices, used for enumerating and 
-        configuring hardware. It disables default features to ensure <mark>no_std</mark> compatibility.
-    </li>
-    <li>
-        <mark>fatfs</mark> (v0.4.0): A FAT filesystem implementation, configured to use <mark>alloc</mark> without <mark>std</mark> 
-        for disk operations. This is sourced directly from Git repository.
-    </li>
-</ul>
+            <a href="">Architecture Layer (src/arh)</a>
+            <a href="">-- GDT and TSS</a>
+            
+        </nav>
 
-<h3>Crate Dependency Graph</h3>
-<img src="" alt="">
+    </aside>
+    
+    <main>
+        
+        <h1>Dependecies and Crate Configuration</h1>
+        <h2>Purpose and Scope</h2>
+        <p>This page details the crate configuration, dependency management, and build profiles for BeanieOS. Because BeanieOS operates
+            as a freestanding (<mark>no_std</mark>) x86_64 hobby kernel, standard library abstractions like thread-local storage, heap allocators,
+            and unwinding runtimes are unavailable. The build configuration defined in <mark>Cargo.toml</mark> and locked via
+            <mark>Cargo.lock</mark> establishes a strict zero-host-dependency environment utilizing specialized <mark>no_std</mark> crates.
+        </p>
+        <h2>Profile Configuration and Panic Handling</h2>
+        <p>In a bare-metal kernel evnvironment, panics cannot rely on platform-specific stack unwinding mechanisms (<mark>libunwind</mark>),
+        because no operating system runtime exists to catch or clean up stack frames. To prevent the computer from nserting unwinding
+        landing pads and depending on symbols like <mark>_Unwind_Resume</mark>, BeanieOS explicitly configures both development and release
+        profiles to abort immediately upon panic.</p>
+        <img src="" alt="">
+        <h3>Build Profile Data Flow</h3>
+        <img src="" alt="">
+        <h2>Crate Ecosystem and <mark>no_std</mark> Dependecies</h2>
+        <p>BeanieOS leverages a curated set of external crates compatible with freestanding execution. The dependency manifest
+            configures these libraries with default features disabled where necessary to avoid reliance on the Rust Standard Library (<mark>std</mark>).
+        </p>
+        <h3>Core Dependency Breakdown</h3>
+        <ul>
+            <li>
+                <mark>x86_64</mark> (v0.15.5): Provides low-level abstactions for x86_64 architecture constructs, including page table
+                management, Global Descriptor Table (GDT), Interrupt Descriptor Table (IDT), Control Registers, and port I/O operations.
+            </li>
+            <li>
+                <mark>multiboot2</mark> (v0.28.0): Parses Multiboot2 boot information structures passed by the bootloader, enabling access
+                to memory maps, framebuffer tags, and ACPI root pointers.
+            </li>
+            <li>
+                <mark>spin</mark> (v0.10): Supplies spinlock primitives (<mark>Mutex</mark>, <mark>Once</mark>) configured with
+                <mark>default-features = false</mark> to operate in non-preemptive interrupt contexts where blocking mutexes cannot be used.
+            </li>
+            <li>
+                <mark>linked_list_allocator</mark> (v0.10): Implements a heap allocator over a raw memory region, acting as the global allocator
+                via <mark>#[global_allocator]</mark>.
+            </li>
+            <li>
+                <mark>pci_types</mark> (v0.10): Provides types and strructures for interacting with PCI devices, used for enumerating and
+                configuring hardware. It disables default features to ensure <mark>no_std</mark> compatibility.
+            </li>
+            <li>
+                <mark>fatfs</mark> (v0.4.0): A FAT filesystem implementation, configured to use <mark>alloc</mark> without <mark>std</mark>
+                for disk operations. This is sourced directly from Git repository.
+            </li>
+        </ul>
+        <h3>Crate Dependency Graph</h3>
+        <img src="" alt="">
+
+    </main>
+
+</body>
+
+</html>

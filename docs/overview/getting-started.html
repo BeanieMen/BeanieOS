@@ -1,118 +1,128 @@
-<h1>Getting Started & Build System</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
 
-<h2>Purpose & Scope</h2>
-<p>This page details the build infrastructure, toolchain requirements, and orchestration scipts for BeanieOS. It covers the 
-    <mark>Makefile</mark> compilation pipeline, the custom <mark>x86_64.json</mark> target specification required for bare-metal 
-    execution, code formatting settings in <mark>rustfmt.toml</mark>, and workspace exclusion rules in <mark>.gitignore</mark>.
-</p>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+</head>
 
-<h2>1. Toolchain Requirements & Setup</h2>
-<p>BeanieOS targets a freestanding <mark>x86_64</mark> environment, requiring a rust nigthly toolchain with standard library 
-building support (<mark>-Zbuild-std</mark>), along with system utilities for disk image creation and virtualization.</p>
-<p>The <mark>make setup</mark> target automates the installation of required Rust toolchain components and host utilities
-(assuming an Arch Linux environment using yay):</p>
+<body>
 
-<ul>
-    <li>
-        Installs the default stable and nigthly Rust toolchains.
-    </li>
-    <li>
-        <mark>Adds the llvm-tools-preview</mark> component to the nightly toolchain for post-processing binaries
-    </li>
-    <li>
-        Installs QEMU system emulators, partition managers (<mark>parted</mark>), and FAT filesystem tools 
-        (<mark>dosfstools</mark>, <mark>mtools</mark>).
-    </li>
-</ul>
 
-<h2>2. Makefile Targets & Build Pipeline</h2>
-<p>The <mark>Makefile</mark> coordinates the transition from raw assembly and Rust source files to a bootable UEFI disk 
-image running inside QEMU.</p>
+    
+    <main>
 
-<h3>Build Pipeline Architecture</h3>
-<img src="" alt="">
+        <h1>Getting Started & Build System</h1>
+        <h2>Purpose & Scope</h2>
+        <p>This page details the build infrastructure, toolchain requirements, and orchestration scipts for BeanieOS. It covers the
+            <mark>Makefile</mark> compilation pipeline, the custom <mark>x86_64.json</mark> target specification required for bare-metal
+            execution, code formatting settings in <mark>rustfmt.toml</mark>, and workspace exclusion rules in <mark>.gitignore</mark>.
+        </p>
+        <h2>1. Toolchain Requirements & Setup</h2>
+        <p>BeanieOS targets a freestanding <mark>x86_64</mark> environment, requiring a rust nigthly toolchain with standard library
+        building support (<mark>-Zbuild-std</mark>), along with system utilities for disk image creation and virtualization.</p>
+        <p>The <mark>make setup</mark> target automates the installation of required Rust toolchain components and host utilities
+        (assuming an Arch Linux environment using yay):</p>
+        <ul>
+            <li>
+                Installs the default stable and nigthly Rust toolchains.
+            </li>
+            <li>
+                <mark>Adds the llvm-tools-preview</mark> component to the nightly toolchain for post-processing binaries
+            </li>
+            <li>
+                Installs QEMU system emulators, partition managers (<mark>parted</mark>), and FAT filesystem tools
+                (<mark>dosfstools</mark>, <mark>mtools</mark>).
+            </li>
+        </ul>
+        <h2>2. Makefile Targets & Build Pipeline</h2>
+        <p>The <mark>Makefile</mark> coordinates the transition from raw assembly and Rust source files to a bootable UEFI disk
+        image running inside QEMU.</p>
+        <h3>Build Pipeline Architecture</h3>
+        <img src="" alt="">
+        <h3>Key Makefile Target</h3>
+        <ul>
+            <li>
+                <mark>make boot</mark>: Assembles the initial bootstrap code from <mark>src/srch/boot.s</mark> using the GNU assembler
+                into <mark>target/boot.o</mark>
+            </li>
+            <li>
+                <mark>make kernel</mark>: Compiles the Rust kernel using the nightly compiler, passing <mark>-Zbuild-std=core,alloc</mark>
+                and <mark>-Zjson-target-spec</mark> with <mark>x86_64.json</mark>. It links against <mark>target/boot.o</mark>
+                and <mark>linker.ld</mark>, then strips debug symbols using <mark>llvm-strip</mark>.
+            </li>
+            <li>
+                <mark>make disk</mark>: Generates  128MB raw disk image (<mark>out/beanieos.img</mark>) creates a GPT layout with a FAT2
+                EFI System Partition (ESP), and copies the Limine bootloader (<mark>BOOTX64.EFI</mark>), the stripped kernel binary, and
+                <mark>limine.conf</mark> into the appropriate EFI directory structures.
+            </li>
+            <li>
+                <mark>make run</mark>: Boots the generated disk image in QEMU configured with UEFI OVMF firmware (<mark>OVMF_CODE.4m.fd</mark>
+                and <mark>OVMF_VARS.4m.fd</mark>) and SDL display.
+            </li>
+            <li>
+                <mark>make link</mark> / <mark>make clippy</mark>: Runs code format verfication (<mark>fmt-check</mark>) and static analysis via
+                Clippy with strict warning checks (<mark>-D warnings</mark>).
+            </li>
+        </ul>
+        <h2>3. Custom Target Specification (<mark>x86_64.json</mark>)</h2>
+        <p>Because BeanieOS runs on bare metal without an underlying operating system, standard compliation targets are insufficient.
+            The custom target specification file <mark>x86_64.json</mark> defines the target architecture parameters for LLVM and cargo.
+        </p>
+        <h3>Target Configuration Breakdown</h3>
+        <ul>
+            <li>
+                <mark>llvm-target</mark>: Set to <mark>x86_64-unknown-none</mark>, informing LLVM that there is no OS abstraction layer.
+            </li>
+            <li>
+                <mark>panic-strategy</mark>: Configured to <mark>abort</mark> since there is no unwinding runtime available in a freestanding kernel.
+            </li>
+            <li>
+                <mark>disable-redzone</mark>: Set to <mark>true</mark> to prevent the x86_64 ABI red zone (128 bytes below the stack pointer)
+                from being modified by interrupt handlers, which would corrupt asynchronous stack frames.
+            </li>
+            <li>
+                <mark>features</mark>: Explicitly disables MMX and SSE instructions (<mark>-mmx, -sse</mark>) and enforces software floating point
+                (<mark>+soft-float</mark>), preventing the CPU from using vector registers before they are properly initialized by the kernel.
+            </li>
+            <li>
+                <mark>linker</mark>: Uses <mark>rust-lld</mark> with the <mark>ld.lld</mark> linker flavor.
+            </li>
+        </ul>
+        <h2>4. Code Style & Repository Hygiene</h2>
+        <p>BeanieOS maintains strict formatting rules and excludes build artifacts via configuration files at the repository root.</p>
+        <h3>Formatting (<mark>rustfmt.toml</mark>)</h3>
+        <p>The <mark>rustfmt.toml</mark> configuration file enforces code style rules across all source files:</p>
+        <ul>
+            <li>
+                <mark>editon</mark>: Set to <mark>"2024"</mark> <mark>[rustfmt.toml:1-1()]</mark>.
+            </li>
+            <li>
+                <mark>max-width</mark>: Capped at <mark>100</mark> characters per line <mark>[rustfmt.toml:2-2()]</mark>.
+            </li>
+            <li>
+                <mark>use_small_heuristics</mark>: Set to <mark>"Default</mark> <mark>[rustfmt.toml:3-3()]</mark>.
+            </li>
+        </ul>
+        <h3>Version Control Exclusion (<mark>.gitignore</mark>)</h3>
+        <p>The <mark>.gitignore</mark> file prevents local build artifacts, editor configurations, and auxiliary directories
+        from being commited to version control:</p>
+        <ul>
+            <li>
+                Excludes <mark>/target</mark>, <mark>out/</mark> and <mark>,vscode/</mark> or <mark>.opencode/</mark>
+                editor directories.
+            </li>
+            <li>
+                Excludes documentation (<mark>docs/</mark>), blog posts (<mark>blog/</mark>), and utility scripts (<mark>scripts/</mark>).
+            </li>
+        </ul>
 
-<h3>Key Makefile Target</h3>
-<ul>
-    <li>
-        <mark>make boot</mark>: Assembles the initial bootstrap code from <mark>src/srch/boot.s</mark> using the GNU assembler 
-        into <mark>target/boot.o</mark>
-    </li>
-    <li>
-        <mark>make kernel</mark>: Compiles the Rust kernel using the nightly compiler, passing <mark>-Zbuild-std=core,alloc</mark> 
-        and <mark>-Zjson-target-spec</mark> with <mark>x86_64.json</mark>. It links against <mark>target/boot.o</mark> 
-        and <mark>linker.ld</mark>, then strips debug symbols using <mark>llvm-strip</mark>.
-    </li>
-    <li>
-        <mark>make disk</mark>: Generates  128MB raw disk image (<mark>out/beanieos.img</mark>) creates a GPT layout with a FAT2 
-        EFI System Partition (ESP), and copies the Limine bootloader (<mark>BOOTX64.EFI</mark>), the stripped kernel binary, and 
-        <mark>limine.conf</mark> into the appropriate EFI directory structures.
-    </li>
-    <li>
-        <mark>make run</mark>: Boots the generated disk image in QEMU configured with UEFI OVMF firmware (<mark>OVMF_CODE.4m.fd</mark> 
-        and <mark>OVMF_VARS.4m.fd</mark>) and SDL display.
-    </li>
-    <li>
-        <mark>make link</mark> / <mark>make clippy</mark>: Runs code format verfication (<mark>fmt-check</mark>) and static analysis via 
-        Clippy with strict warning checks (<mark>-D warnings</mark>).
-    </li>
-</ul>
+    </main>
 
-<h2>3. Custom Target Specification (<mark>x86_64.json</mark>)</h2>
+</body>
 
-<p>Because BeanieOS runs on bare metal without an underlying operating system, standard compliation targets are insufficient. 
-    The custom target specification file <mark>x86_64.json</mark> defines the target architecture parameters for LLVM and cargo.
-</p>
-
-<h3>Target Configuration Breakdown</h3>
-<ul>
-    <li>
-        <mark>llvm-target</mark>: Set to <mark>x86_64-unknown-none</mark>, informing LLVM that there is no OS abstraction layer.
-    </li>
-    <li>
-        <mark>panic-strategy</mark>: Configured to <mark>abort</mark> since there is no unwinding runtime available in a freestanding kernel.
-    </li>
-    <li>
-        <mark>disable-redzone</mark>: Set to <mark>true</mark> to prevent the x86_64 ABI red zone (128 bytes below the stack pointer) 
-        from being modified by interrupt handlers, which would corrupt asynchronous stack frames.
-    </li>
-    <li>
-        <mark>features</mark>: Explicitly disables MMX and SSE instructions (<mark>-mmx, -sse</mark>) and enforces software floating point 
-        (<mark>+soft-float</mark>), preventing the CPU from using vector registers before they are properly initialized by the kernel.
-    </li>
-    <li>
-        <mark>linker</mark>: Uses <mark>rust-lld</mark> with the <mark>ld.lld</mark> linker flavor.
-    </li>
-</ul>
-
-<h2>4. Code Style & Repository Hygiene</h2>
-
-<p>BeanieOS maintains strict formatting rules and excludes build artifacts via configuration files at the repository root.</p>
-
-<h3>Formatting (<mark>rustfmt.toml</mark>)</h3>
-<p>The <mark>rustfmt.toml</mark> configuration file enforces code style rules across all source files:</p>
-<ul>
-    <li>
-        <mark>editon</mark>: Set to <mark>"2024"</mark> <mark>[rustfmt.toml:1-1()]</mark>.
-    </li>
-    <li>
-        <mark>max-width</mark>: Capped at <mark>100</mark> characters per line <mark>[rustfmt.toml:2-2()]</mark>.
-    </li>
-    <li>
-        <mark>use_small_heuristics</mark>: Set to <mark>"Default</mark> <mark>[rustfmt.toml:3-3()]</mark>.
-    </li>
-</ul>
-
-<h3>Version Control Exclusion (<mark>.gitignore</mark>)</h3>
-<p>The <mark>.gitignore</mark> file prevents local build artifacts, editor configurations, and auxiliary directories 
-from being commited to version control:</p>
-
-<ul>
-    <li>
-        Excludes <mark>/target</mark>, <mark>out/</mark> and <mark>,vscode/</mark> or <mark>.opencode/</mark> 
-        editor directories.
-    </li>
-    <li>
-        Excludes documentation (<mark>docs/</mark>), blog posts (<mark>blog/</mark>), and utility scripts (<mark>scripts/</mark>).
-    </li>
-</ul>
+</html>

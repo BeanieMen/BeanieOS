@@ -12,6 +12,9 @@
     <style>
 
         body{
+            margin: 0;
+            padding: 0;
+
             font-family: "Public Sans", sans-serif;
             font-optical-sizing: auto;
             font-weight: 200;
@@ -19,20 +22,24 @@
         }
 
         main{
+            margin-top: 9vh;
             margin-left: 280px;
-            padding: 40px;
+            margin-right: 50px;
+            padding: 25px 50px 60px 60px;
         }
 
         .sidebar{
             position: fixed;
             left: 0;
-            top: 0;
+            top: 9vh;
 
             width: 240px;
             height: 100vh;
 
             background: white;
-            padding: 30px 20px;
+            padding: 30px 10px 0 20px;
+
+            border-right: 1px dashed #333;
         }
 
         .sidebar nav{
@@ -51,20 +58,116 @@
         .sidebar a:hover{
             background: rgb(238, 237, 237);
         }
+
+        p {
+            line-height: 1.6;
+        }
+
+        li {
+            line-height: 1.8;
+        }
+
+        mark{
+            background-color: rgb(223, 222, 222);
+            font-weight: 500;
+            padding: 1px 4px;
+            border-radius: 6px;
+        }
+
+        main a{
+            color: black;
+        }
+
+        .nav-bar{
+            position: fixed;
+            top: 0;
+            left: 0;
+
+            width: 100%;
+            height: 9vh;
+            margin: 0 !important;
+            background-color: rgb(44, 42, 42);
+
+            display: flex;
+            gap: 800px;
+
+            padding-left: 1.5vw;
+            padding-right: 1.5vw;
+
+            align-items: center;
+        }
+
+        .nav-bar .title{
+            display: flex;
+            gap: 1px;
+            text-decoration: none;
+            color: white;
+            align-items: center;
+        }
+
+        .nav-bar h1{
+            font-size: 2vw;
+        }
+
+        .nav-bar img{
+            height: 3.2vw;
+            width: auto;
+        }
+
+        .nav-links{
+            display: flex;
+            gap: 100px;
+        }
+
+        .github-link{
+            color: rgba(255, 255, 255, 0.782);
+            text-decoration: none;
+            font-size: 17px;
+        }
+
+        .github-link:hover{
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        .docs-link{
+            font-size: large;
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
     </style>
+
 </head>
 
 <body>
 
+    <div class="nav-bar">
+        <a href="index.html" class="title">
+            <img src="https://cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
+            <h1>BeanieOS</h1>
+        </a>
+        <div class="nav-links">
+            <a href="docs.html" class="docs-link">Documentation</a>
+            <a href="https://github.com/beaniemen/BeanieOS" class="github-link">Github</a>
+        </div>
+    </div>
+
     <aside class="sidebar">
 
-        <h2>BeanieOS</h2>
+        <h2>Beanie Docs</h2>
 
         <nav>
             <a href="overview.html">Overview</a>
-            <a href="overview/getting-started.html">- Getting Started & Build System</a>
-            <a href="overview/dependencies.html">- Dependencies and Crate Configuration</a>
-            <a href="overview/journal.html">- Development Journal</a>
+            <a href="overview/getting-started.html">-- Getting Started & Build System</a>
+            <a href="overview/dependencies.html">-- Dependencies and Crate Configuration</a>
+            <a href="overview/journal.html">-- Development Journal</a>
+            <a href="">-- Documentation Website (docs/)</a>
+
+            <a href="">Boot and Initialization</a>
+            <a href=""></a>
         </nav>
 
     </aside>
