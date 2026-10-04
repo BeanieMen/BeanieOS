@@ -84,3 +84,35 @@ image running inside QEMU.</p>
         <mark>linker</mark>: Uses <mark>rust-lld</mark> with the <mark>ld.lld</mark> linker flavor.
     </li>
 </ul>
+
+<h2>4. Code Style & Repository Hygiene</h2>
+
+<p>BeanieOS maintains strict formatting rules and excludes build artifacts via configuration files at the repository root.</p>
+
+<h3>Formatting (<mark>rustfmt.toml</mark>)</h3>
+<p>The <mark>rustfmt.toml</mark> configuration file enforces code style rules across all source files:</p>
+<ul>
+    <li>
+        <mark>editon</mark>: Set to <mark>"2024"</mark> <mark>[rustfmt.toml:1-1()]</mark>.
+    </li>
+    <li>
+        <mark>max-width</mark>: Capped at <mark>100</mark> characters per line <mark>[rustfmt.toml:2-2()]</mark>.
+    </li>
+    <li>
+        <mark>use_small_heuristics</mark>: Set to <mark>"Default</mark> <mark>[rustfmt.toml:3-3()]</mark>.
+    </li>
+</ul>
+
+<h3>Version Control Exclusion (<mark>.gitignore</mark>)</h3>
+<p>The <mark>.gitignore</mark> file prevents local build artifacts, editor configurations, and auxiliary directories 
+from being commited to version control:</p>
+
+<ul>
+    <li>
+        Excludes <mark>/target</mark>, <mark>out/</mark> and <mark>,vscode/</mark> or <mark>.opencode/</mark> 
+        editor directories.
+    </li>
+    <li>
+        Excludes documentation (<mark>docs/</mark>), blog posts (<mark>blog/</mark>), and utility scripts (<mark>scripts/</mark>).
+    </li>
+</ul>
