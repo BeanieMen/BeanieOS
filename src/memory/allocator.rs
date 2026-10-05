@@ -1,13 +1,11 @@
 use x86_64::{
-    PhysAddr, VirtAddr,
-    structures::paging::{
-        FrameAllocator, OffsetPageTable, PageSize, PageTable, PhysFrame, Size4KiB,
-    },
+    PhysAddr,
+    structures::paging::{FrameAllocator, PageSize, PhysFrame, Size4KiB},
 };
 
 use multiboot2::{MemoryArea, MemoryAreaType, MemoryMapTag};
 
-// Linker-provided kernel bounds (see linker.ld: kernel_start / kernel_end).
+// Linker-provided bounds (linker.ld: kernel_start / kernel_end).
 unsafe extern "C" {
     static kernel_start: u8;
     static kernel_end: u8;
@@ -29,15 +27,15 @@ fn kernel_range() -> (u64, u64) {
 
 fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end: u64) -> bool {
     let frame_end = addr + PAGE;
-    // 1 mib range is reserved for firmware
+    // Low 1 MiB: firmware
     if addr < 0x10_0000 {
         return true;
     }
-    // kernel range is reserved
+    // Kernel image
     if addr < kend && frame_end > kstart {
         return true;
     }
-    // multiboot2 boot info range is reserved
+    // Multiboot2 boot info
     if addr < mbi_end && frame_end > mbi_start {
         return true;
     }
@@ -110,8 +108,7 @@ impl Reserved {
 
 pub static RESERVED: Reserved = Reserved::new();
 
-/// Never hands out the kernel image, the boot information, low memory, or a frame
-/// a device owns.
+/// Never hands out the kernel image, boot info, low memory, or device frames.
 pub struct BumpAllocator<'a> {
     areas: &'a [MemoryArea],
     area_idx: usize,
@@ -195,23 +192,4 @@ unsafe impl FrameAllocator<Size4KiB> for BumpAllocator<'_> {
         }
         None
     }
-}
-
-fn active_level_4_table(physical_memory_offset: VirtAddr) -> &'static mut PageTable {
-    use x86_64::registers::control::Cr3;
-
-    let (level_4_table_frame, _) = Cr3::read();
-
-    let phys = level_4_table_frame.start_address();
-
-    let virt = physical_memory_offset + phys.as_u64();
-
-    let page_table_ptr: *mut PageTable = virt.as_mut_ptr();
-
-    unsafe { &mut *page_table_ptr }
-}
-
-pub unsafe fn mapper(physical_memory_offset: VirtAddr) -> OffsetPageTable<'static> {
-    let level_4_table = active_level_4_table(physical_memory_offset);
-    unsafe { OffsetPageTable::new(level_4_table, physical_memory_offset) }
 }

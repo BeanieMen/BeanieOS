@@ -90,6 +90,9 @@ $(DISK): kernel limine file
 		$(TEST_FILE) \
 		::test.txt
 
+	# Write test.txt directly into the first sector (LBA 0) without truncating
+	dd if=$(TEST_FILE) of=$(DISK) bs=512 count=1 conv=notrunc
+
 run: $(DISK)
 	qemu-system-x86_64 \
 		-machine q35 \
@@ -124,4 +127,3 @@ check: boot timer
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)
-

@@ -10,6 +10,8 @@ pub enum Syscall {
     Getdents = 6,
     Yield = 7,
     Getpid = 8,
+    Unlink = 9,
+    Rmdir = 10,
 }
 
 impl TryFrom<u64> for Syscall {
@@ -26,6 +28,8 @@ impl TryFrom<u64> for Syscall {
             6 => Ok(Self::Getdents),
             7 => Ok(Self::Yield),
             8 => Ok(Self::Getpid),
+            9 => Ok(Self::Unlink),
+            10 => Ok(Self::Rmdir),
             _ => Err(()),
         }
     }

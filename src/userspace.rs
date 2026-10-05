@@ -1,29 +1,5 @@
-use alloc::boxed::Box;
-
-use fatfs::FileSystem;
-use spin::{Mutex, Once};
-
-use crate::fs::BlockDevice;
 use crate::graphics::framebuffer::WRITER;
-use crate::shell::Shell;
 use crate::task::scheduler;
-
-pub static SHELL: Once<Mutex<Shell>> = Once::new();
-
-pub fn install(fs: FileSystem<Box<dyn BlockDevice>>) {
-    SHELL.call_once(|| Mutex::new(Shell::new(fs)));
-}
-
-pub extern "C" fn shell_task() {
-    let shell = SHELL.get().expect("Shell not initialized");
-    loop {
-        if let Some(key) = crate::arch::input::pop_key() {
-            shell.lock().shell_input(key);
-        } else {
-            scheduler::yield_now();
-        }
-    }
-}
 
 static RGB_TICKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 

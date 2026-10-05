@@ -45,9 +45,7 @@ impl Scheduler {
         self.threads.insert(ThreadId::MAIN, boot);
         self.current = ThreadId::MAIN;
 
-        // The boot context was entered by `kernel_main` without a context switch,
-        // so no `activate` call will run for it. Publish its pointer here, or
-        // `current_thread` stays null until the first switch away from here.
+        // The boot context never had an `activate` call, so publish it here.
         self.publish_current();
 
         self.initialized = true;
@@ -64,14 +62,12 @@ impl Scheduler {
         Some(thread_ptr)
     }
 
-    /// add current scheduler thread to gs base
     fn publish_current(&mut self) {
         if let Some(current_ptr) = self.thread_ptr(self.current) {
             identity::set_current_thread(current_ptr);
         }
     }
 
-    /// check if the current thread pointer in gs base matches the scheduler's current thread
     pub fn gs_base_agrees(&self) -> bool {
         self.thread_ptr(self.current)
             .is_some_and(|current_ptr| identity::current_thread() == current_ptr)
@@ -217,9 +213,7 @@ impl Scheduler {
         let previous_id = self.current;
 
         if next_id == previous_id {
-            // The only runnable thread is the one already running: nothing
-            // switches, and GS base already names it. `activate` is skipped, so
-            // this path would otherwise leave the pointer untouched.
+            // `activate` was skipped, so re-publish the pointer GS base has.
             self.requeue(next_id);
 
             return None;
@@ -247,9 +241,7 @@ impl Scheduler {
         self.requeue(previous_id);
         identity::set_current_pid(next_pid);
 
-        // Published before returning, so it lands before `apply` runs
-        // `switch_context` and before anything can drop the outgoing thread: the
-        // pointer must name the incoming thread, never the outgoing one.
+        // Must land before `apply` runs `switch_context`.
         self.publish_current();
 
         (next_rsp != 0).then_some(ContextSwitch {

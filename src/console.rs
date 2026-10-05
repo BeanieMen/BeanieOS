@@ -8,7 +8,7 @@ impl core::fmt::Write for SerialPort {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         use x86_64::instructions::port::Port;
 
-        let mut port = unsafe { Port::new(0x3f8) };
+        let mut port = Port::new(0x3f8);
 
         for byte in s.bytes() {
             unsafe { port.write(byte) };

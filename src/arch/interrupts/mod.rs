@@ -3,6 +3,7 @@ mod faults;
 pub mod pic;
 pub mod vectors;
 
+use multiboot2::BootInformation;
 use spin::Once;
 use x86_64::structures::idt::InterruptDescriptorTable;
 
@@ -17,9 +18,20 @@ fn idt() -> &'static InterruptDescriptorTable {
     })
 }
 
-pub fn init_idt(acpi_root_addr: usize) {
+/// XSDT if the firmware gave one, RSDT otherwise.
+fn acpi_root_addr(boot_info: &BootInformation<'_>) -> usize {
+    if let Some(rsdp) = boot_info.rsdp_v2_tag() {
+        rsdp.xsdt_address()
+    } else if let Some(rsdp) = boot_info.rsdp_v1_tag() {
+        rsdp.rsdt_address()
+    } else {
+        panic!("No ACPI RSDP")
+    }
+}
+
+pub fn init_idt(boot_info: &BootInformation<'_>) {
     idt().load();
     unsafe {
-        pic::init(acpi_root_addr);
+        pic::init(acpi_root_addr(boot_info));
     }
 }

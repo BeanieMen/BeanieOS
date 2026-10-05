@@ -162,8 +162,7 @@ impl Writer {
         }
     }
 
-    /// Logical row r is always at pixel row r * FONT_HEIGHT, which is why
-    /// scrolling has to move pixels (see `scroll`).
+    /// Row r sits at pixel row r * FONT_HEIGHT, so scrolling moves pixels.
     fn row_y(&self, row: u32) -> u32 {
         row * FONT_HEIGHT
     }
@@ -179,7 +178,6 @@ impl Writer {
         }
     }
 
-    /// bpp, pitch and the row base pointer are resolved once, not per pixel.
     fn draw_char(&mut self, col: u32, row: u32, c: u8, fg: u32, bg: u32) {
         if !self.glyph_fits(col, row) {
             return self.draw_char_generic(col, row, c, fg, bg);
@@ -214,7 +212,6 @@ impl Writer {
         }
     }
 
-    /// For non-32bpp depths and glyphs clipped at a screen edge.
     fn draw_char_generic(&mut self, col: u32, row: u32, c: u8, fg: u32, bg: u32) {
         if self.framebuffer.is_none() {
             return;
@@ -234,9 +231,7 @@ impl Writer {
         }
     }
 
-    /// Only the `rows() * FONT_HEIGHT` pixel rows that hold text are moved,
-    /// so a height that is not a multiple of FONT_HEIGHT does not drag the
-    /// last partial row along.
+    /// Only whole text rows move, so a partial last row is left alone.
     fn scroll(&mut self) {
         let Some(ref fb) = self.framebuffer else {
             return;
@@ -255,22 +250,6 @@ impl Writer {
         unsafe {
             core::ptr::copy(fb.addr.add(shift), fb.addr, text_bytes - shift);
             core::ptr::write_bytes(fb.addr.add(text_bytes - shift), 0, shift);
-        }
-    }
-
-    fn clear_row(&self, y: u32) {
-        let Some(ref fb) = self.framebuffer else {
-            return;
-        };
-        if y >= fb.height {
-            return;
-        }
-        unsafe {
-            core::ptr::write_bytes(
-                fb.addr.add(y as usize * fb.pitch as usize),
-                0,
-                fb.pitch as usize,
-            )
         }
     }
 
@@ -337,17 +316,6 @@ impl Writer {
 
     pub fn write_string(&mut self, s: &str) {
         self.write_bytes(s.as_bytes());
-    }
-
-    pub fn clear(&mut self) {
-        let Some(ref fb) = self.framebuffer else {
-            return;
-        };
-        for y in 0..fb.height {
-            self.clear_row(y);
-        }
-        self.cursor_row = 0;
-        self.cursor_col = 0;
     }
 
     pub fn fill_rect(&self, x: u32, y: u32, width: u32, height: u32, color: u32) {

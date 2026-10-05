@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use x86_64::{VirtAddr, structures::idt::InterruptDescriptorTable};
 
-use crate::arch::interrupts::consts::LAPIC_TIMER_VECTOR;
+use crate::arch::interrupts::consts::{AHCI_VECTOR, LAPIC_TIMER_VECTOR};
 
 use super::consts::{KEYBOARD_VECTOR, PS2_DATA_PORT, SPURIOUS_VECTOR};
 use super::pic;
@@ -42,6 +42,7 @@ unsafe extern "C" {
     fn timer_interrupt_entry();
 }
 
+/// Every tick is `TICK_MS` milliseconds, so this counts time, not spins.
 pub(crate) fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
@@ -49,14 +50,13 @@ pub(crate) fn ticks() -> u64 {
 pub(crate) fn register_vectors(idt: &mut InterruptDescriptorTable) {
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_interrupt_handler);
     idt[SPURIOUS_VECTOR].set_handler_fn(spurious_interrupt_handler);
+    idt[AHCI_VECTOR].set_handler_fn(crate::storage::ahci::on_interrupt);
 
     unsafe {
         idt[LAPIC_TIMER_VECTOR]
             .set_handler_addr(VirtAddr::from_ptr(timer_interrupt_entry as *const ()));
     }
 }
-
-// evils map putting this piece of code here because i dont know where to put it right now
 
 const SCANCODE_MAP: [u8; 128] = {
     let mut map = [0; 128];

@@ -78,6 +78,50 @@ impl Device {
         self.class == 0x01 && self.subclass == 0x06 && self.interface == 0x01
     }
 
+    /// INTx line firmware assigned: 1 is INTA# through 4 for INTD#, 0 unconnected.
+    pub fn interrupt_pin(&self) -> Option<u8> {
+        let config = PciConfig;
+        let header = PciHeader::new(self.address);
+
+        let endpoint = EndpointHeader::from_header(header, &config)?;
+
+        Some(endpoint.interrupt(&config).0)
+    }
+
+    /// GSI firmware routed INTx to, from the Interrupt Line register. 0 or 0xff
+    /// means unassigned. Not the pin: pin 1 is INTA#, not GSI 1.
+    pub fn interrupt_line(&self) -> Option<u8> {
+        let config = PciConfig;
+        let header = PciHeader::new(self.address);
+
+        let endpoint = EndpointHeader::from_header(header, &config)?;
+
+        let line = endpoint.interrupt(&config).1;
+
+        ((line != 0) && (line != 0xff)).then_some(line)
+    }
+
+    /// Whether INTx is masked: command register bit 10. While set the device
+    /// asserts nothing however the rest is wired.
+    pub fn interrupt_disabled(&self) -> bool {
+        let config = PciConfig;
+        let header = PciHeader::new(self.address);
+
+        header
+            .command(&config)
+            .contains(CommandRegister::INTERRUPT_DISABLE)
+    }
+
+    pub fn unmask_interrupt(&self) {
+        let config = PciConfig;
+        let mut header = PciHeader::new(self.address);
+
+        header.update_command(&config, |mut command| {
+            command.remove(CommandRegister::INTERRUPT_DISABLE);
+            command
+        });
+    }
+
     pub fn enable(&self) {
         let config = PciConfig;
         let mut header = PciHeader::new(self.address);
@@ -95,7 +139,6 @@ pub struct Route {
 }
 
 impl Route {
-    /// Physical base and size of this function's BAR5.
     pub fn bar5_info(&self) -> Option<(u64, u64)> {
         let config = PciConfig;
         let header = PciHeader::new(self.address);
@@ -110,6 +153,7 @@ impl Route {
     }
 }
 
+#[derive(Clone)]
 pub struct Routes {
     entries: [Option<Route>; MAX_ROUTES],
     count: usize,

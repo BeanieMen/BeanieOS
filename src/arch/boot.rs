@@ -2,10 +2,8 @@ use core::mem::size_of;
 
 use crate::kernel_main;
 
-// check if bootloader is mb2 compat
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 
-// tell we are mb2 compat
 const MB_MAGIC: u32 = 0xe85250d6;
 const MB_ARCH: u32 = 0;
 
@@ -66,7 +64,6 @@ static MULTIBOOT_HEADER: MultibootHeader = MultibootHeader {
         typ: 1,
         flags: 0,
         size: 32,
-        // request memory map, boot device, command line, modules, rsdp v1/v2, framebuffer
         requests: [6, 8, 9, 1, 14, 15],
     },
     framebuffer_request: FramebufferRequestTag {
