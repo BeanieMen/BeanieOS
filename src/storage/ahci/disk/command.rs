@@ -48,7 +48,7 @@ impl Disk {
             0,
             0,
         ];
-        unsafe { core::ptr::copy_nonoverlapping(fis.as_ptr(), table, fis.len()) };
+        copy_volatile(table, &fis);
 
         write_u32(table, PRDT_LENGTH_OFFSET, PRD_SIZE);
         write_u32(table, CMD_TABLE_BASE_OFFSET, ctba as u32);
@@ -74,6 +74,11 @@ impl Disk {
 
         // Armed first, so an instant completion cannot beat the clear.
         super::super::irq::arm(base);
+
+        // Everything above is write-back memory the adapter is about to read
+        // over PCI. Nothing has been published to it until this returns.
+        dma_publish();
+
         set_reg(base, PX_CI, 1);
 
         super::super::irq::wait(base)?;
@@ -87,6 +92,11 @@ impl Disk {
                 None => "drive reported an error",
             });
         }
+
+        // The adapter wrote the data buffer itself. Reading it before this
+        // would race its stores against ours and can return stale bytes on a
+        // transfer the drive reported as complete.
+        dma_consume();
 
         Ok(())
     }

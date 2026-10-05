@@ -18,7 +18,11 @@ fn idt() -> &'static InterruptDescriptorTable {
     })
 }
 
-/// XSDT if the firmware gave one, RSDT otherwise.
+pub(crate) fn idt_addr() -> u64 {
+    &raw const *idt() as u64
+}
+
+// XSDT if the firmware gave one, RSDT otherwise.
 fn acpi_root_addr(boot_info: &BootInformation<'_>) -> usize {
     if let Some(rsdp) = boot_info.rsdp_v2_tag() {
         rsdp.xsdt_address()
@@ -29,7 +33,7 @@ fn acpi_root_addr(boot_info: &BootInformation<'_>) -> usize {
     }
 }
 
-pub fn init_idt(boot_info: &BootInformation<'_>) {
+pub(crate) fn init_idt(boot_info: &BootInformation<'_>) {
     idt().load();
     unsafe {
         pic::init(acpi_root_addr(boot_info));

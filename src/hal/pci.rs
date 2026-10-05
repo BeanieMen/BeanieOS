@@ -41,7 +41,7 @@ fn config_address(address: PciAddress, offset: u16) -> u32 {
 }
 
 #[derive(Clone, Copy)]
-pub struct Device {
+pub(crate) struct Device {
     pub address: PciAddress,
     #[allow(dead_code)]
     pub vendor_id: u16,
@@ -53,7 +53,7 @@ pub struct Device {
 }
 
 impl Device {
-    pub fn bar(&self, index: u8) -> Option<Bar> {
+    pub(crate) fn bar(&self, index: u8) -> Option<Bar> {
         let config = PciConfig;
         let header = PciHeader::new(self.address);
 
@@ -62,7 +62,7 @@ impl Device {
         endpoint.bar(index, &config)
     }
 
-    pub fn bar_info(&self, index: u8) -> Option<(u64, u64)> {
+    fn bar_info(&self, index: u8) -> Option<(u64, u64)> {
         match self.bar(index)? {
             Bar::Memory32 { address, size, .. } => Some((address as u64, size as u64)),
             Bar::Memory64 { address, size, .. } => Some((address, size)),
@@ -70,16 +70,16 @@ impl Device {
         }
     }
 
-    pub fn bar5_info(&self) -> Option<(u64, u64)> {
+    pub(crate) fn bar5_info(&self) -> Option<(u64, u64)> {
         self.bar_info(5)
     }
 
-    pub fn is_ahci(&self) -> bool {
+    fn is_ahci(&self) -> bool {
         self.class == 0x01 && self.subclass == 0x06 && self.interface == 0x01
     }
 
-    /// INTx line firmware assigned: 1 is INTA# through 4 for INTD#, 0 unconnected.
-    pub fn interrupt_pin(&self) -> Option<u8> {
+    // INTx line firmware assigned: 1 is INTA# through 4 for INTD#, 0 unconnected.
+    pub(crate) fn interrupt_pin(&self) -> Option<u8> {
         let config = PciConfig;
         let header = PciHeader::new(self.address);
 
@@ -88,9 +88,8 @@ impl Device {
         Some(endpoint.interrupt(&config).0)
     }
 
-    /// GSI firmware routed INTx to, from the Interrupt Line register. 0 or 0xff
-    /// means unassigned. Not the pin: pin 1 is INTA#, not GSI 1.
-    pub fn interrupt_line(&self) -> Option<u8> {
+    // GSI INTx was routed to. 0 or 0xff is unassigned. Not the pin: pin 1 is INTA#.
+    pub(crate) fn interrupt_line(&self) -> Option<u8> {
         let config = PciConfig;
         let header = PciHeader::new(self.address);
 
@@ -101,9 +100,8 @@ impl Device {
         ((line != 0) && (line != 0xff)).then_some(line)
     }
 
-    /// Whether INTx is masked: command register bit 10. While set the device
-    /// asserts nothing however the rest is wired.
-    pub fn interrupt_disabled(&self) -> bool {
+    // Command register bit 10. While set the device asserts nothing.
+    pub(crate) fn interrupt_disabled(&self) -> bool {
         let config = PciConfig;
         let header = PciHeader::new(self.address);
 
@@ -112,7 +110,7 @@ impl Device {
             .contains(CommandRegister::INTERRUPT_DISABLE)
     }
 
-    pub fn unmask_interrupt(&self) {
+    pub(crate) fn unmask_interrupt(&self) {
         let config = PciConfig;
         let mut header = PciHeader::new(self.address);
 
@@ -122,7 +120,7 @@ impl Device {
         });
     }
 
-    pub fn enable(&self) {
+    pub(crate) fn enable(&self) {
         let config = PciConfig;
         let mut header = PciHeader::new(self.address);
 
@@ -134,12 +132,12 @@ impl Device {
 }
 
 #[derive(Clone, Copy)]
-pub struct Route {
+pub(crate) struct Route {
     pub address: PciAddress,
 }
 
 impl Route {
-    pub fn bar5_info(&self) -> Option<(u64, u64)> {
+    pub(crate) fn bar5_info(&self) -> Option<(u64, u64)> {
         let config = PciConfig;
         let header = PciHeader::new(self.address);
 
@@ -154,20 +152,20 @@ impl Route {
 }
 
 #[derive(Clone)]
-pub struct Routes {
+pub(crate) struct Routes {
     entries: [Option<Route>; MAX_ROUTES],
     count: usize,
 }
 
 impl Routes {
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Routes {
             entries: [None; MAX_ROUTES],
             count: 0,
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = Route> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = Route> + '_ {
         self.entries.iter().take(self.count).flatten().copied()
     }
 
@@ -180,19 +178,19 @@ impl Routes {
         self.count += 1;
     }
 
-    pub fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.count
     }
 }
 
-pub struct Pci;
+pub(crate) struct Pci;
 
 impl Pci {
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Pci
     }
 
-    pub fn ahci_bars(&self) -> Routes {
+    pub(crate) fn ahci_bars(&self) -> Routes {
         let config = PciConfig;
         let mut routes = Routes::new();
 
@@ -222,7 +220,7 @@ impl Pci {
         routes
     }
 
-    pub fn scan(&self) -> Vec<Device> {
+    pub(crate) fn scan(&self) -> Vec<Device> {
         let config = PciConfig;
         let mut devices = Vec::new();
 
@@ -255,7 +253,7 @@ impl Pci {
         devices
     }
 
-    pub fn find_ahci(&self) -> Vec<Device> {
+    pub(crate) fn find_ahci(&self) -> Vec<Device> {
         self.scan().into_iter().filter(Device::is_ahci).collect()
     }
 }

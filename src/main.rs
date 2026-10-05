@@ -15,8 +15,8 @@ mod console;
 mod graphics;
 mod hal;
 mod logger;
-mod mem;
 mod memory;
+mod paging;
 mod storage;
 mod syscall;
 mod task;
@@ -46,17 +46,20 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         }
 
         let partition_lba = partitions[1].first_lba();
+        let partition_len = partitions[1].sectors();
         kinfo!("mounting partition at LBA {}", partition_lba);
 
-        let fat32 =
-            storage::fs::fat32::Fat32::mount(disk, partition_lba).expect("failed to mount FAT32");
+        let fat32 = storage::fs::fat32::Fat32::mount(partition::Partition::new(
+            disk,
+            partition_lba,
+            partition_len,
+        ))
+        .expect("failed to mount FAT32");
 
         kinfo!("FAT32 mounted at LBA {}", partition_lba);
 
-        let root = fat32.root();
-
         let fd = task::process::with_current_fds(|fds| {
-            fds.set_root(root.clone());
+            fds.mount(fat32.clone());
             fds.open_read(b"/TEST.TXT")
         })
         .expect("no current process")
@@ -95,13 +98,42 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         task::identity::Priority::Normal,
     );
 
+    let user = task::process::create("user", "/");
+
+    task::scheduler::spawn_in_process(
+        user,
+        "usertask",
+        user_task,
+        task::identity::Priority::Normal,
+    );
+
     loop {
         task::scheduler::yield_now();
         x86_64::instructions::hlt();
     }
 }
 
-pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
+extern "C" fn user_task() {
+    match task::userland::verify_release() {
+        Ok(()) => kinfo!("address space release: no frames leaked"),
+        Err(why) => kerror!("address space release: {why}"),
+    }
+
+    let Some(space) = task::userland::build() else {
+        kerror!("could not build a user address space");
+        loop {
+            task::scheduler::yield_now();
+        }
+    };
+
+    task::process::attach_space(task::identity::current_pid(), space.root);
+
+    kinfo!("entering ring 3 at {:#x}", task::userland::USER_BASE);
+
+    task::userland::enter(&space)
+}
+
+pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
     let memory_map = boot_info
         .memory_map_tag()
         .expect("No Multiboot2 memory map");
@@ -128,7 +160,7 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
         )
     };
 
-    mmu.init_heap();
+    mmu.init_heap().expect("could not map the kernel heap");
     hal::init(&mut mmu);
 
     let routes = hal::routes();
@@ -142,6 +174,7 @@ pub fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
 
     arch::gdt::init();
     arch::interrupts::init_idt(boot_info);
+    syscall::entry::install();
     x86_64::instructions::interrupts::enable();
 
     // Log only after init: logging earlier splits init across log lines.

@@ -42,7 +42,7 @@ unsafe extern "C" {
     fn timer_interrupt_entry();
 }
 
-/// Every tick is `TICK_MS` milliseconds, so this counts time, not spins.
+// Every tick is `TICK_MS` milliseconds, so this counts time, not spins.
 pub(crate) fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }

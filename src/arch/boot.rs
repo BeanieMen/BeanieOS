@@ -82,16 +82,16 @@ static MULTIBOOT_HEADER: MultibootHeader = MultibootHeader {
     },
 };
 
-const HUGE_PAGE_FLAGS: u64 = 0x83; // present | writable | huge bit
+const HUGE_PAGE_FLAGS: u64 = crate::paging::PTE_BOOT_IDENTITY;
 
 // 1 p4 -> 1 p3 -> 8 p2 -> 1gib pages (8gb addressable)
 #[repr(align(4096))]
 #[allow(dead_code)]
-pub struct AlignedPageTable([u64; 512]);
+pub(crate) struct AlignedPageTable([u64; 512]);
 
 #[repr(align(4096))]
 #[allow(dead_code)]
-pub struct AlignedP2Tables([[u64; 512]; 8]);
+pub(crate) struct AlignedP2Tables([[u64; 512]; 8]);
 
 #[unsafe(no_mangle)]
 pub static mut P2_TABLES: AlignedP2Tables = AlignedP2Tables({
@@ -114,12 +114,14 @@ pub static mut P3_TABLE: AlignedPageTable = AlignedPageTable([0; 512]);
 #[unsafe(no_mangle)]
 pub static mut P4_TABLE: AlignedPageTable = AlignedPageTable([0; 512]);
 
+// Read by name out of this file by scripts/disasm-check.sh, which compares it
+// against the literal in boot.s. That makes it an interface, not dead API.
 pub const BOOT_STACK_SIZE: usize = 1024 * 1024;
 const _: () = assert!(BOOT_STACK_SIZE == 1048576);
 
 #[repr(align(16))]
 #[allow(dead_code)]
-pub struct BootStack([u8; BOOT_STACK_SIZE]);
+pub(crate) struct BootStack([u8; BOOT_STACK_SIZE]);
 
 #[unsafe(no_mangle)]
 pub static mut BOOT_STACK: BootStack = BootStack([0; BOOT_STACK_SIZE]);

@@ -6,8 +6,8 @@ use super::partition::Partition;
 use crate::{kdebug, kwarn};
 
 impl Disk {
-    /// GPT only. No table yields an empty list, not an error.
-    pub fn partitions(&mut self) -> Vec<Partition> {
+    // GPT only. No table yields an empty list, not an error.
+    pub(crate) fn partitions(&mut self) -> Vec<Partition> {
         let mut out = Vec::new();
         let mut header = [0u8; SECTOR as usize];
 

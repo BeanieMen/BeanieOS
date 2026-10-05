@@ -1,41 +1,39 @@
 use alloc::{format, vec::Vec};
 
-use spin::Mutex;
 use x86_64::structures::paging::PageTableFlags;
 
 use super::dma::Dma;
+use crate::arch::lock::InterruptMutex;
 use crate::kdebug;
-use crate::memory::mmu::MMU;
+use crate::memory::mmu::{KERNEL_RW, MMU};
+use crate::memory::pool::Area;
 
-/// Where MMIO is mapped. Zero: at the BAR's own physical address.
-pub const MMIO_BASE: u64 = 0;
+// Where MMIO is mapped. Zero: at the BAR's own physical address.
+pub(crate) const MMIO_BASE: u64 = 0;
 
-/// Uncached and write-through, so device reads and writes go straight through.
+// Uncached and write-through, so device reads and writes go straight through.
 const MMIO_FLAGS: PageTableFlags = PageTableFlags::from_bits_truncate(
-    PageTableFlags::PRESENT.bits()
-        | PageTableFlags::WRITABLE.bits()
-        | PageTableFlags::NO_CACHE.bits()
-        | PageTableFlags::WRITE_THROUGH.bits(),
+    KERNEL_RW.bits() | PageTableFlags::NO_CACHE.bits() | PageTableFlags::WRITE_THROUGH.bits(),
 );
 
 #[derive(Clone)]
-pub struct Mapping {
+pub(crate) struct Mapping {
     pub va: usize,
     pub size: u64,
 }
 
-pub struct Mmapped {
-    mappings: Mutex<Vec<Mapping>>,
+pub(crate) struct Mmapped {
+    mappings: InterruptMutex<Vec<Mapping>>,
 }
 
 impl Mmapped {
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Mmapped {
-            mappings: Mutex::new(Vec::new()),
+            mappings: InterruptMutex::new(Vec::new()),
         }
     }
 
-    pub fn mapping_at(&self, va: usize) -> Option<Mapping> {
+    pub(crate) fn mapping_at(&self, va: usize) -> Option<Mapping> {
         self.mappings
             .lock()
             .iter()
@@ -43,7 +41,7 @@ impl Mmapped {
             .cloned()
     }
 
-    pub fn map(
+    pub(crate) fn map(
         &self,
         mmu: &mut MMU<'_>,
         dma: &Dma,
@@ -54,9 +52,10 @@ impl Mmapped {
         let start = phys & !0xfff;
         let end = (phys + size.max(0x1000) + 0xfff) & !0xfff;
 
-        mmu.map_range(MMIO_BASE + start, start, end - start, MMIO_FLAGS)?;
+        mmu.map_range(MMIO_BASE + start, start, end - start, MMIO_FLAGS)
+            .ok()?;
 
-        dma.reserve(super::dma::Region::new(start, end));
+        dma.reserve(Area::new(start, end));
 
         self.mappings.lock().push(Mapping {
             va: MMIO_BASE as usize + start as usize,
@@ -68,7 +67,12 @@ impl Mmapped {
         Some(MMIO_BASE as usize + start as usize)
     }
 
-    pub fn map_all_bars(&self, mmu: &mut MMU<'_>, dma: &Dma, routes: &crate::hal::pci::Routes) {
+    pub(crate) fn map_all_bars(
+        &self,
+        mmu: &mut MMU<'_>,
+        dma: &Dma,
+        routes: &crate::hal::pci::Routes,
+    ) {
         for route in routes.iter() {
             let Some((phys, size)) = route.bar5_info() else {
                 continue;
@@ -79,7 +83,7 @@ impl Mmapped {
         }
     }
 
-    pub fn reserve_all_bars(&self, dma: &Dma, routes: &crate::hal::pci::Routes) {
+    pub(crate) fn reserve_all_bars(&self, dma: &Dma, routes: &crate::hal::pci::Routes) {
         for route in routes.iter() {
             let Some((phys, size)) = route.bar5_info() else {
                 continue;
@@ -89,7 +93,7 @@ impl Mmapped {
             let end = (phys + size.max(0x1000) + 0xfff) & !0xfff;
 
             kdebug!("  reserve mmio {} {start:#x}..{end:#x}", route.address);
-            dma.reserve(super::dma::Region::new(start, end));
+            dma.reserve(Area::new(start, end));
         }
     }
 }

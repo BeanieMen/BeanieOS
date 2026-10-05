@@ -6,14 +6,14 @@ use crate::hal::dma::{AHCI_DMA, AhciDma};
 use crate::hal::pci::Device;
 use crate::{kdebug, kinfo};
 
-pub struct AhciController {
+pub(crate) struct AhciController {
     dma: &'static AhciDma,
     abar: usize,
     ports: u32,
 }
 
 impl AhciController {
-    pub fn new(device: &Device) -> Result<Self, &'static str> {
+    pub(crate) fn new(device: &Device) -> Result<Self, &'static str> {
         let (phys, _) = device.bar5_info().ok_or("no BAR5")?;
         let abar = crate::hal::hal()
             .mmio
@@ -70,7 +70,7 @@ impl AhciController {
         })
     }
 
-    pub fn find_disks(&mut self) -> Vec<Disk> {
+    pub(crate) fn find_disks(&mut self) -> Vec<Disk> {
         let mut disks = Vec::new();
 
         for port in 0..32 {

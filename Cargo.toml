@@ -14,6 +14,10 @@ panic = "abort" # disable stack unwinding on panic
 name = "beanieos"
 test = false
 bench = false
+required-features = ["kernel"]
+
+[features]
+kernel = []
 
 [dependencies]
 spin = { version = "0.10", default-features = false, features = ["mutex", "spin_mutex", "once"] }

@@ -1,8 +1,8 @@
-pub type SyscallResult = Result<u64, Errno>;
+pub(crate) type SyscallResult = Result<u64, Errno>;
 
 #[repr(u64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Errno {
+pub(crate) enum Errno {
     NoSys = 38,
     BadFd = 9,
     NoEntry = 2,
@@ -11,7 +11,7 @@ pub enum Errno {
     Fault = 14,
 }
 
-pub fn encode_result(result: SyscallResult) -> u64 {
+pub(crate) fn encode(result: SyscallResult) -> u64 {
     match result {
         Ok(value) => value,
         Err(errno) => -(errno as i64) as u64,

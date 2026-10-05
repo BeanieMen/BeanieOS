@@ -4,7 +4,7 @@ use spin::Mutex;
 
 use crate::storage::vfs::inode::{FileType, Inode};
 
-pub struct OpenFlags {
+pub(crate) struct OpenFlags {
     pub read: bool,
     pub write: bool,
     pub create: bool,
@@ -13,7 +13,7 @@ pub struct OpenFlags {
 }
 
 impl OpenFlags {
-    pub const READ: Self = Self {
+    pub(crate) const READ: Self = Self {
         read: true,
         write: false,
         create: false,
@@ -21,7 +21,7 @@ impl OpenFlags {
         append: false,
     };
 
-    pub const WRITE: Self = Self {
+    pub(crate) const WRITE: Self = Self {
         read: false,
         write: true,
         create: false,
@@ -29,7 +29,7 @@ impl OpenFlags {
         append: false,
     };
 
-    pub const RDWR: Self = Self {
+    pub(crate) const RDWR: Self = Self {
         read: true,
         write: true,
         create: false,
@@ -38,14 +38,14 @@ impl OpenFlags {
     };
 }
 
-pub struct File {
+pub(crate) struct File {
     pub inode: Arc<Mutex<Inode>>,
     pub offset: u64,
     pub flags: OpenFlags,
 }
 
 impl File {
-    pub fn new(inode: Arc<Mutex<Inode>>, flags: OpenFlags) -> Self {
+    pub(crate) fn new(inode: Arc<Mutex<Inode>>, flags: OpenFlags) -> Self {
         File {
             inode,
             offset: 0,
@@ -53,7 +53,7 @@ impl File {
         }
     }
 
-    pub fn readable(&self) -> bool {
+    pub(crate) fn readable(&self) -> bool {
         self.flags.read || self.flags.append
     }
 
@@ -61,7 +61,7 @@ impl File {
         self.flags.write || self.flags.append || self.flags.truncate
     }
 
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, &'static str> {
+    pub(crate) fn read(&mut self, buf: &mut [u8]) -> Result<usize, &'static str> {
         if !self.readable() {
             return Err("file is not open for reading");
         }
@@ -81,7 +81,7 @@ impl File {
         Ok(read)
     }
 
-    pub fn write(&mut self, buf: &[u8]) -> Result<usize, &'static str> {
+    pub(crate) fn write(&mut self, buf: &[u8]) -> Result<usize, &'static str> {
         if !self.writable() {
             return Err("file is not open for writing");
         }
@@ -105,13 +105,13 @@ impl File {
         Ok(written)
     }
 
-    pub fn seek(&mut self, offset: u64) -> Result<u64, &'static str> {
+    fn seek(&mut self, offset: u64) -> Result<u64, &'static str> {
         self.offset = offset;
 
         Ok(self.offset)
     }
 
-    pub fn tell(&self) -> u64 {
+    pub(crate) fn tell(&self) -> u64 {
         self.offset
     }
 }

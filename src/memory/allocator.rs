@@ -1,9 +1,15 @@
 use x86_64::{
     PhysAddr,
-    structures::paging::{FrameAllocator, PageSize, PhysFrame, Size4KiB},
+    structures::paging::{FrameAllocator, PhysFrame, Size4KiB},
 };
 
-use multiboot2::{MemoryArea, MemoryAreaType, MemoryMapTag};
+use multiboot2::{MemoryAreaType, MemoryMapTag};
+
+use crate::arch::lock::InterruptMutex;
+use crate::kwarn;
+
+use crate::memory::pool::{Area, FramePool};
+use crate::paging::{LOW_1MIB, PAGE_SIZE};
 
 // Linker-provided bounds (linker.ld: kernel_start / kernel_end).
 unsafe extern "C" {
@@ -11,13 +17,7 @@ unsafe extern "C" {
     static kernel_end: u8;
 }
 
-const PAGE: u64 = Size4KiB::SIZE;
-
-fn align_up(addr: u64) -> u64 {
-    (addr + PAGE - 1) & !(PAGE - 1)
-}
-
-fn kernel_range() -> (u64, u64) {
+pub(crate) fn kernel_range() -> (u64, u64) {
     unsafe {
         let start = (&kernel_start as *const u8) as u64;
         let end = (&kernel_end as *const u8) as u64;
@@ -25,171 +25,133 @@ fn kernel_range() -> (u64, u64) {
     }
 }
 
-fn frame_is_reserved(addr: u64, kstart: u64, kend: u64, mbi_start: u64, mbi_end: u64) -> bool {
-    let frame_end = addr + PAGE;
-    // Low 1 MiB: firmware
-    if addr < 0x10_0000 {
-        return true;
-    }
-    // Kernel image
-    if addr < kend && frame_end > kstart {
-        return true;
-    }
-    // Multiboot2 boot info
-    if addr < mbi_end && frame_end > mbi_start {
-        return true;
-    }
-    false
-}
+const MAX_RESERVED: usize = 64;
 
-pub struct Reserved {
-    inner: spin::Mutex<ReservedList>,
+pub(crate) struct Reserved {
+    inner: InterruptMutex<ReservedList>,
 }
 
 struct ReservedList {
-    entries: [crate::hal::Region; MAX_RESERVED],
+    entries: [Area; MAX_RESERVED],
     count: usize,
 }
 
 impl ReservedList {
     const fn new() -> Self {
         ReservedList {
-            entries: [crate::hal::Region::new(0, 0); MAX_RESERVED],
+            entries: [Area::new(0, 0); MAX_RESERVED],
             count: 0,
         }
     }
 
-    fn reset(&mut self) {
-        self.count = 0;
-    }
-
-    fn push(&mut self, region: crate::hal::Region) {
-        if self.count >= MAX_RESERVED {
-            return;
+    fn push(&mut self, region: Area) -> bool {
+        if self.count >= MAX_RESERVED || !region.is_valid() {
+            return false;
         }
 
         self.entries[self.count] = region;
         self.count += 1;
-    }
 
-    fn contains(&self, addr: u64) -> bool {
-        self.entries[..self.count]
-            .iter()
-            .any(|region| region.contains(addr))
-    }
-}
-
-const MAX_RESERVED: usize = 32;
-
-impl Reserved {
-    pub const fn new() -> Self {
-        Reserved {
-            inner: spin::Mutex::new(ReservedList::new()),
-        }
-    }
-
-    pub fn snapshot(&self) {
-        let mut guard = self.inner.lock();
-        guard.reset();
-
-        crate::hal::hal()
-            .dma
-            .copy_reserved(|region| guard.push(region));
-    }
-
-    pub fn contains(&self, addr: u64) -> bool {
-        self.inner.lock().contains(addr)
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.lock().count
-    }
-}
-
-pub static RESERVED: Reserved = Reserved::new();
-
-/// Never hands out the kernel image, boot info, low memory, or device frames.
-pub struct BumpAllocator<'a> {
-    areas: &'a [MemoryArea],
-    area_idx: usize,
-    curr_addr: u64,
-    kstart: u64,
-    kend: u64,
-    mbi_start: u64,
-    mbi_end: u64,
-    reserved: &'static Reserved,
-}
-
-impl<'a> BumpAllocator<'a> {
-    pub unsafe fn init(memory_map: &'a MemoryMapTag, mbi_start: u64, mbi_end: u64) -> Self {
-        let (kstart, kend) = kernel_range();
-        let areas = memory_map.memory_areas();
-        let mut area_idx = 0;
-        let mut curr_addr = 0;
-        for (i, area) in areas.iter().enumerate() {
-            if area.typ() != MemoryAreaType::Available {
-                continue;
-            }
-            let addr = align_up(area.start_address());
-            if addr + PAGE <= area.end_address() {
-                area_idx = i;
-                curr_addr = addr;
-                break;
-            }
-        }
-        Self {
-            areas,
-            area_idx,
-            curr_addr,
-            kstart,
-            kend,
-            mbi_start,
-            mbi_end,
-            reserved: &RESERVED,
-        }
-    }
-
-    fn advance_area(&mut self) -> bool {
-        self.area_idx += 1;
-
-        let Some(area) = self.areas.get(self.area_idx) else {
-            return false;
-        };
-
-        self.curr_addr = align_up(area.start_address());
         true
     }
 }
 
-unsafe impl FrameAllocator<Size4KiB> for BumpAllocator<'_> {
-    fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        while self.area_idx < self.areas.len() {
-            let area = &self.areas[self.area_idx];
-            if area.typ() != MemoryAreaType::Available {
-                self.advance_area();
-                continue;
-            }
-            let area_end = area.end_address();
-            // Align cursor to area start if we just entered it.
-            let area_start = align_up(area.start_address());
-            if self.curr_addr < area_start {
-                self.curr_addr = area_start;
-            }
-            while self.curr_addr + PAGE <= area_end {
-                let addr = self.curr_addr;
-                self.curr_addr += PAGE;
-                if frame_is_reserved(addr, self.kstart, self.kend, self.mbi_start, self.mbi_end) {
-                    continue;
-                }
-                if self.reserved.contains(addr) {
-                    continue;
-                }
-                return Some(PhysFrame::containing_address(PhysAddr::new(addr)));
-            }
-            if !self.advance_area() {
-                break;
+impl Reserved {
+    pub(crate) const fn new() -> Self {
+        Reserved {
+            inner: InterruptMutex::new(ReservedList::new()),
+        }
+    }
+
+    // False when the list is full or the range is inverted. Both used to be dropped
+    // silently, so a BAR that did not fit looked like one never offered.
+    pub(crate) fn push(&self, region: Area) -> bool {
+        self.inner.lock().push(region)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.inner.lock().count
+    }
+
+    fn avoid_all(&self, pool: &mut FramePool) -> usize {
+        let guard = self.inner.lock();
+        let mut dropped = 0;
+
+        for region in &guard.entries[..guard.count] {
+            if !pool.avoid(*region) {
+                dropped += 1;
             }
         }
-        None
+
+        dropped
     }
+}
+
+pub(crate) static RESERVED: Reserved = Reserved::new();
+
+pub(crate) struct FrameSource(pub FramePool);
+
+impl FrameSource {
+    pub(crate) const fn new() -> Self {
+        FrameSource(FramePool::new())
+    }
+}
+
+unsafe impl FrameAllocator<Size4KiB> for FrameSource {
+    fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        self.0
+            .alloc()
+            .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
+    }
+}
+
+pub(crate) static FRAMES: InterruptMutex<FrameSource> = InterruptMutex::new(FrameSource::new());
+
+pub(crate) fn init_frames(memory_map: &MemoryMapTag, mbi_start: u64, mbi_end: u64) {
+    let (kstart, kend) = kernel_range();
+
+    let mut pool = FramePool::new();
+
+    for area in memory_map.memory_areas() {
+        if area.typ() != MemoryAreaType::Available {
+            continue;
+        }
+
+        pool.add_area(Area::new(area.start_address(), area.end_address()));
+    }
+
+    pool.avoid(Area::new(0, LOW_1MIB));
+    pool.avoid(Area::new(kstart, kend));
+    pool.avoid(Area::new(mbi_start, mbi_end));
+
+    let dropped = RESERVED.avoid_all(&mut pool);
+
+    assert_eq!(
+        dropped, 0,
+        "{dropped} device range(s) could not be reserved; their frames would become allocatable RAM"
+    );
+
+    *FRAMES.lock() = FrameSource(pool);
+}
+
+pub(crate) fn alloc_frame() -> Option<PhysFrame> {
+    FRAMES.lock().allocate_frame()
+}
+
+// `count` contiguous frames, for a device needing one buffer rather than a
+// translation of a scattered one.
+pub(crate) fn alloc_contiguous(count: usize) -> Option<PhysFrame> {
+    FRAMES
+        .lock()
+        .0
+        .alloc_contiguous(count)
+        .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
+}
+
+pub(crate) fn free_frame(addr: u64) -> bool {
+    FRAMES.lock().0.free(addr)
+}
+
+pub(crate) fn live_frames() -> usize {
+    FRAMES.lock().0.live()
 }
