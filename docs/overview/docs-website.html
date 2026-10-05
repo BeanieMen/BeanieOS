@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+
+    <style>
+
+        body{
+            margin: 0;
+            padding: 0;
+
+            font-family: "Public Sans", sans-serif;
+            font-optical-sizing: auto;
+            font-weight: 200;
+            font-style: normal;
+        }
+
+        main{
+            margin-top: 9vh;
+            margin-left: 280px;
+            margin-right: 50px;
+            padding: 25px 50px 60px 60px;
+        }
+
+        h1{
+            margin-bottom: 30px;
+        }
+
+        .sidebar{
+            position: fixed;
+            left: 0;
+            top: 9vh;
+
+            width: 240px;
+            height: 100vh;
+
+            background: white;
+            padding: 30px 10px 0 20px;
+
+            border-right: 1px dashed #333;
+        }
+
+        .sidebar nav{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .sidebar a{
+            color: black;
+            text-decoration: none;
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .sidebar a:hover{
+            background: rgb(238, 237, 237);
+        }
+
+        p {
+            line-height: 1.6;
+        }
+
+        li {
+            line-height: 1.8;
+        }
+
+        mark{
+            background-color: rgb(223, 222, 222);
+            font-weight: 500;
+            padding: 1px 4px;
+            border-radius: 6px;
+        }
+
+        main a{
+            color: black;
+        }
+
+        .nav-bar{
+            position: fixed;
+            top: 0;
+            left: 0;
+
+            width: 100%;
+            height: 9vh;
+            margin: 0 !important;
+            background-color: rgb(44, 42, 42);
+
+            display: flex;
+            gap: 800px;
+
+            padding-left: 1.5vw;
+            padding-right: 1.5vw;
+
+            align-items: center;
+        }
+
+        .nav-bar .title{
+            display: flex;
+            gap: 1px;
+            text-decoration: none;
+            color: white;
+            align-items: center;
+        }
+
+        .nav-bar h1{
+            font-size: 2vw;
+        }
+
+        .nav-bar img{
+            height: 3.2vw;
+            width: auto;
+        }
+
+        .nav-links{
+            display: flex;
+            gap: 100px;
+        }
+
+        .github-link{
+            color: rgba(255, 255, 255, 0.782);
+            text-decoration: none;
+            font-size: 17px;
+        }
+
+        .github-link:hover{
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        .docs-link{
+            font-size: large;
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <div class="nav-bar">
+        <a href="index.html" class="title">
+            <img src="https://cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
+            <h1>BeanieOS</h1>
+        </a>
+        <div class="nav-links">
+            <a href="docs.html" class="docs-link">Documentation</a>
+            <a href="https://github.com/beaniemen/BeanieOS" class="github-link">Github</a>
+        </div>
+    </div>
+
+    <aside class="sidebar">
+
+        <h2>Beanie Docs</h2>
+
+        <nav>
+            <a href="docs.html">Overview</a>
+            <a href="getting-started.html">-- Getting Started & Build System</a>
+            <a href="dependencies.html">-- Dependencies and Crate Configuration</a>
+            <a href="journal.html">-- Development Journal</a>
+            <a href="docs-website.html">-- Documentation Website (docs/)</a>
+        </nav>
+
+    </aside>
+
+    <main>
+
+        <h1>Documentation Website (docs/)</h1>
+
+        <p>The docs/ directory contains the static website for BeanieOS, published at <mark>beanie-os.vercel.app</mark>. 
+        This website serves as the primary documentation portal, providing an overview of the kernel, getting started guides, 
+        dependency information, and a development journal. The site s built by using standard web technologies: HTML for 
+        structure and CSS for styling.</p>
+
+        <h2>Website Structure and Content</h2>
+        <p>The documentation website is composed of several key HTML files and a ingle CSS stylesheet. The <mark>index.html</mark> 
+        file serves as the homepage, offering  general introduction to BeanieOS, its current development status, and a roadmap for 
+        future work, The <mark>docs.html</mark> file provides a high-level overview f the kernel's architecture and boot 
+        process, acting as a central hub for more detailed documentation pages.</p>
+
+        <h3>Homepage <mark>index.html</mark></h3>
+        <p>The <mark>index.html</mark> file is the entrypoint to the BeanieOS website. It features:</p>
+        <ul>
+            <li>A navigation bar (<mark>.nav-bar</mark>) with links to the documentationand the Github repository.
+            </li>
+            <li>
+                An introductory section (<mark>.intro</mark>) describing BeanieOS as an x86_64 hobby kernel written in Rust.
+            </li>
+            <li>
+                A "Current Status" section (<mark>.current-status</mark>) detailing the progress of various core system omponents 
+                like the bootloader, kernel, interrupt handling, memory management, basic process system, and shell.
+            </li>
+            <li>
+                Sections for "Graphics", "Storage & File System", and "Architecture", outlining the current state of these subsystems.
+            </li>
+            <li>
+                A "Next Up" section (<mark> .next</mark>) listing future development goals .
+            </li>
+            <li>
+                A "Learn BeanieOS" section (<mark>.documentation</mark>) with a link to the main documentation page (<mark>docs.html</mark>).
+            </li>
+        </ul>
+
+        <h3>Overview Page <mark>(docs.html)</mark></h3>
+
+        <p>This page provides  more technical introduction to BeanieOS . It covers:</p>
+        <ul>
+            <li>
+                A general overview of BeanieOS as a bare-metal <mark>x86_64</mark> kernel implemented in Rust, highlighting its 
+                <mark>#![no_std]</mark> and <mark>#![no_main]</mark> characteristics.
+            </li>
+            <li>
+                A "System Architecture Map"section, indicating that the codebase is organized into modular subdirectories with 
+                <mark>src/main.rs</mark> as the primary entry point.
+            </li>
+            <li>
+                A "Boot-to-Executor Flow" section, describing the initialization sequence from <mark>kernel_main</mark> to 
+                <mark>Executor::run</mark>
+            </li>
+            <li>
+                A "Child Pages" section, linking to more specific documentation pages:
+
+                <li>
+                    "Getting Started & Build System" (<mark>overview/getting-started.html</mark>).
+                </li>
+                <li>
+                    "Dependencies and Crate Configuration" (<mark>overview/dependencies.html</mark>).
+                </li>
+                <li>
+                    "Developer Journal" (<mark>overview/journal.html</mark>).
+                </li>
+            </li>
+        </ul>
+
+        <h3>Styling</h3>
+        <p>The <mark>style.css</mark> file defines the visual presentation of the website. It uses the "Google Sans Code" 
+        font and applies styles to the navigation bar, headings, paragraphs, and various sections to create a consistent look 
+        and feel. Key styling elements include:</p>
+        <ul>
+            <li>
+                Global body styles for font and margins.
+            </li>
+            <li>
+                Navigation bar (<mark>.nav-bar</mark>) styling, including background color, display properties, and link appearance.
+            </li>
+            <li>
+                Section margins
+            </li>
+            <li>
+                Specific styles for the introductory section (<mark>.intro</mark>), bordered headings (<mark>.bordered-heading</mark>), 
+                and margined lines (<mark>.margined-lines</mark>).
+            </li>
+            <li>
+                Status indicators (<mark>.status</mark>) for development progress.
+            </li>
+        </ul>
+
+        <h2>Deployment</h2>
+        <p>The documentation website is published at beanie-os.vercel.app. This indicates that Vercel is used for hosting and deployment, likely configured to serve the static files directly from the docs/ directory.</p>
+
+        <h2>Data Flow and Navigation</h2>
+        <p>The user's interaction with the documentation website follows a straightforward static site navigation pattern.</p>
+
+    </main>
+    
+</body>
+</html>

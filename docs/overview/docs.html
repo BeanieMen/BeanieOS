@@ -175,43 +175,43 @@
     
     <main>
 
-        <h1>Development Journal</h1>
-
-        <h2>Purpose and Scope</h2>
-        <p>This page summarizes the evolutionary milestones, technical hudles, and design decisions recorded in the project's development
-            journal (<mark>JOURNAL.md</mark>). It traces the trajectory of BeanieOS from initial concept and legacy VGA restrictions to a modern
-            x86_64 bare-metal kernel featuring a graphic framebuffer, CPU exception handling, interrupt controllers, and automated build tooling.
-        </p>
-        <h2>1. Framebuffer Transition and Graphics Output</h2>
-        <p>Early milestones focused on abandoning the legacy 80x25 VGA text mode in favour of a modern graphics framebuffer. This ransition required
-            inegrating bootloader protocols (Multiboot2/Limine) to pass framebuffer metadata (resolution, pitch, and pixel format) directly to the
-            kernel initialization routines.
+        <h2>Overview</h2>
+        <p>BeanieOS is a bare-metal <mark>x86_64</mark> hobby kernel implemented entirely in Rust. It operates without a standard library
+        (<mark>#![no_std]</mark>) and without an operating system runtime environment (<mark>#![no_main]</mark>).
+        The kernel boots via Multiboot2 compliant bootloaders, configures foundational CPU structures (GDT, IDT, paging),
+        initializes a memory heap and graphical framebuffer, and hands control over to a cooperative async task executor.</p>
+        
+        <h2>System Architecture Map</h2>
+        <p>The codebase is organised into modular subdirectories corresponding to core kernel esponsibilties, anchored by
+            <mark>src/main.rs</mark> as the primary entry and orchestration point.
         </p>
         <img src="" alt="">
-
-        <h2>2. CPU Architecture and Interrupt Management</h2>
-        <p>Configuring x86_64 CPU protection structures proved to be a major architectural hurdle, specifically coordinating the 
-            Global Descriptor Table (GDT), Task State Segment (TSS), Interrupt Descriptor Table (IDT), and Interrupt Stack Table (IST).
+        
+        <h2>Boot-to-Executor Flow</h2>
+        <p>The initialization sequence transitions the processor from early bootloader handoff into fully interactive kernel tasks.
+            The control flow begins at <mark>kernel_main</mark>, invokes <mark>init</mark> to setup paging, allocation, graphics, and interrupts,
+            and finally spawns asynchronous tasks into <mark>Executor::run</mark>.
         </p>
         <img src="" alt="">
-
-        <h2>3. Paging and Memory Mapping</h2>
-        <p>Paging was initially enabled by bootloader wrapper. Kernel iniialization extracts boot information structures (<mark>bootinfo</mark>), 
-        obtains the physical memory offset, and computes virtual addresses for page tables anchored by the control register.</p>
-
-        <h2>4. Developer Workflows and Tooling</h2>
-        <p>To streamline cross-compilationan and testing workflows (especially after shifting environments to CachyOS),the project 
-            introduced automated build scripts and dependency targets within the root <mark>Makefile</mark>.
-        </p>
-
-        <h2>5. Freestanding Memory Routines</h2>
-        <p>As a <mark>no_std</mark> kernel, standard library memory manipulation functions like <mark>memset</mark>, 
-        <mark>memcpy</mark>, <mark>memmove</mark>, and <mark>memcmp</mark> are not available. These essential routines, required for various 
-        kernel operations, are implemented manually in <mark>src/mem.rs</mark> to provide C-ABI compatible memory instrinsics.</p>
-        <img src="" alt="">
-        <p>The <mark>memset</mark> function fills a block of memory with a specified byte value. <mark>memcpy</mark> copies a 
-        block of memory from a source to a destination. <mark>memmove</mark> is a safer version of <mark>memcpy</mark> that handles 
-        overlapping memory regions correctly. Finally, <mark>memcmp</mark> compares to blocks of memory</p>
+        
+        <h2>Child Pages</h2>
+        <p>For granular technical documentation, consult the following child pages:</p>
+        <ul>
+            <li>
+                <a href="overview/getting-started.html">Getting Started & Build System</a> -- Covers Makefile targets (<mark>setup</mark>, <mark>boot</mark>,
+                <mark>kernel</mark>, <mark>disk</mark>, <mark>run</mark>, <mark>lint</mark>), toolchain requirements, the <mark>x86_64.json</mark>
+                target specification, formatting configurations, and version control exclusions.
+            </li>
+            <li>
+                <a href="overview/dependencies.html">Dependencies and Crate Configuration</a> -- Detals <mark>Cargo.toml</mark> and <mark>Cargo.lock</mark>
+                configurations, including <mark>no_std</mark> crate integrations (<mark>x86_64</mark>, <mark>multiboot2</mark>, <mark>spin</mark>,
+                <mark>linked_list_allocator</mark>, <mark>futures-util</mark>, <mark>pc-keyboard</mark>) and <mark>panic = "abort"</mark> profile setups.
+            </li>
+            <li>
+                <a href="overview/journal.html">Developer Journal</a> -- Summarize historial notes, learnings, and incremental architectural decisions extracted from
+                <mark>JOURNAL.md</mark>.
+            </li>
+        </ul>
 
     </main>
 
