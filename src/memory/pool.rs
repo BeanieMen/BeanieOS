@@ -2,12 +2,9 @@ use crate::paging::PAGE_SIZE;
 
 pub const MAX_AREAS: usize = 64;
 
-// Boot avoids plus one per device range. At 16 this overflowed past the 13th BAR
-// and every later range became allocatable RAM.
 pub const MAX_AVOID: usize = 3 + MAX_AREAS;
 pub const MAX_FREE: usize = 8192;
 
-// A half-open physical range, `[start, end)`. The only range type in the tree.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Area {
     pub start: u64,
@@ -19,7 +16,6 @@ impl Area {
         Area { start, end }
     }
 
-    // False for an inverted or empty range.
     pub fn is_valid(&self) -> bool {
         self.end > self.start
     }
@@ -164,9 +160,7 @@ impl FramePool {
         }
     }
 
-    // A bus master cannot follow a page table, so a scattered buffer's translation
-    // does not describe the buffer. Scans forward only, so a run cannot overlap
-    // frames already handed out.
+
     pub fn alloc_contiguous(&mut self, frames: usize) -> Option<u64> {
         if frames == 0 {
             return None;
@@ -189,7 +183,6 @@ impl FramePool {
             while cursor + span <= area.end {
                 let run = Area::new(cursor, cursor + span);
 
-                // Free to reuse, but not inside a run: neighbours may since have gone.
                 let on_free_list = self.free[..self.free_len]
                     .iter()
                     .any(|frame| run.contains(*frame));

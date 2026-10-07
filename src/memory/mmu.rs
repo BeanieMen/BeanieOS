@@ -15,8 +15,6 @@ pub(crate) use crate::paging::{
     PTE_LEAF_MASK, PTE_PRESENT,
 };
 
-// One definition of each flag set, so a mapping cannot disagree with `boot.rs`
-// about what "writable" means.
 pub(crate) const KERNEL_RW: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_KERNEL_RW);
 pub(crate) const USER_RW: PageTableFlags =
@@ -24,14 +22,11 @@ pub(crate) const USER_RW: PageTableFlags =
 
 const P1_LEVEL: u8 = 3;
 
-// Why a mapping or an allocation did not happen. `Option`/bool made "no frame
-// left" and "nothing to do" the same value at every call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MemoryError {
     OutOfFrames,
     NotMapped,
     AlreadyMapped,
-    // A mapping call was given a non-page-aligned address.
     Unaligned,
 }
 
@@ -50,8 +45,6 @@ impl core::fmt::Display for MemoryError {
 #[allow(clippy::upper_case_acronyms)]
 use crate::paging::{PTE_USER, PTE_WRITABLE};
 
-// A handle, not a second implementation: `map_one` is the mapping engine and
-// `AddressSpace` is the owner.
 pub(crate) struct MMU<'a> {
     space: AddressSpace,
     _marker: core::marker::PhantomData<&'a ()>,
@@ -66,17 +59,14 @@ fn index(virt: u64, level: usize) -> u64 {
     }
 }
 
-// SAFETY: `table` must be a page-aligned, mapped, writable physical address.
 unsafe fn read_entry(table: u64, index: u64) -> u64 {
     unsafe { core::ptr::read_volatile((table + index * ENTRY_SIZE) as *const u64) }
 }
 
-// SAFETY: as `read_entry`, and the table must not be shared with a live mapper.
 unsafe fn write_entry(table: u64, index: u64, value: u64) {
     unsafe { core::ptr::write_volatile((table + index * ENTRY_SIZE) as *mut u64, value) }
 }
 
-// A zeroed frame to stand in for a missing page table.
 fn new_table() -> Result<u64, MemoryError> {
     let frame = alloc_frame().ok_or(MemoryError::OutOfFrames)?;
     let base = frame.start_address().as_u64();
@@ -86,8 +76,6 @@ fn new_table() -> Result<u64, MemoryError> {
     Ok(base)
 }
 
-// Replaces the 2 MiB page whose level 2 entry sits at `slot` with a 512-entry
-// table mapping the same physical range one page at a time.
 fn split_huge_at(slot: u64) -> Result<u64, MemoryError> {
     let base = new_table()?;
 
@@ -110,9 +98,6 @@ fn split_huge_at(slot: u64) -> Result<u64, MemoryError> {
     Ok(base)
 }
 
-// Maps one 4 KiB page with an explicit P4 -> P1 walk. `OffsetPageTable` required
-// the virtual page and its table in the same 1 GiB, which is why the heap could
-// not be mapped at all; walking by hand puts no such relationship between them.
 fn map_one(
     root: u64,
     virt: u64,
@@ -158,9 +143,6 @@ fn map_one(
     Ok(())
 }
 
-// Frame backing `virt`. Panics when unmapped: a masked-off zero here becomes
-// physical address 0 in a driver's descriptor, where a read returns floating bus
-// data, a write is dropped, and nothing faults.
 fn translate_in(root: u64, virt: u64) -> PhysFrame {
     let mut table = root;
 
@@ -172,7 +154,6 @@ fn translate_in(root: u64, virt: u64) -> PhysFrame {
             "translate: {virt:#x} has no level {level} entry"
         );
 
-        // PS is a huge-page flag at P2 and P1 only; at P4/P3 bit 7 is PAT.
         if level > 0 && entry & PTE_HUGE != 0 {
             let shift = if level == 1 { 30 } else { 21 };
             let page = (1 << shift) - 1;
@@ -188,7 +169,6 @@ fn translate_in(root: u64, virt: u64) -> PhysFrame {
     PhysFrame::containing_address(PhysAddr::new(table))
 }
 
-// Every frame the tree at `table` holds, children first.
 fn release_tree(table: u64, level: u8) {
     for i in 0..ENTRIES_PER_TABLE {
         let entry = unsafe { read_entry(table, i) };
@@ -199,8 +179,6 @@ fn release_tree(table: u64, level: u8) {
 
         let child = entry & PTE_ADDR_MASK;
 
-        // P1 entries are leaves; above that a non-huge entry is a pointer to
-        // the next table down, and its pages have to be released too.
         if level >= P1_LEVEL || entry & PTE_HUGE != 0 {
             free_frame(child);
         } else {
@@ -211,7 +189,6 @@ fn release_tree(table: u64, level: u8) {
     free_frame(table);
 }
 
-// A process's page tables.
 pub(crate) struct AddressSpace {
     pub root: PhysFrame,
     owned: bool,

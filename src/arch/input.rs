@@ -39,7 +39,6 @@ impl Ring {
         true
     }
 
-    // Oldest key, or None when empty.
     fn pop(&mut self) -> Option<char> {
         if self.count == 0 {
             return None;
@@ -72,7 +71,6 @@ fn pop_key() -> Option<char> {
     PENDING.lock().pop()
 }
 
-// Keys dropped since boot because the queue was full.
 fn dropped_keys() -> usize {
     DROPPED.load(Ordering::Relaxed)
 }

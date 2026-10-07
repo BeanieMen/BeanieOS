@@ -9,7 +9,6 @@ use crate::arch::interrupts::pic;
 use crate::arch::interrupts::vectors::ticks;
 use crate::kinfo;
 
-// Deadline for one command; the timer wakes the halt below.
 const TIMEOUT_MS: u64 = 500;
 
 const CR0_INTERRUPT_ENABLE: u64 = 1;

@@ -396,7 +396,6 @@ impl<D: BlockDevice> Fat32FileOps<D> {
 }
 
 impl<D: BlockDevice> Fat32FileOps<D> {
-    // Copies one run of bytes from within a single sector.
     fn read_within_sector(
         &self,
         sector_number: u64,

@@ -35,6 +35,7 @@ fn sys_exit(code: u64) -> ! {
 }
 
 fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
+    // max buf 4kib
     if len > 4096 {
         return Err(Errno::Invalid);
     }
@@ -45,7 +46,7 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
     if entry::copy_from_user(&mut staging[..capped], buf).is_err() {
         return Err(Errno::Fault);
     }
-
+    
     let Some(result) = process::with_current_fds(|fds| fds.write(fd, &staging[..capped])) else {
         return Err(Errno::BadFd);
     };

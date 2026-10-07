@@ -5,7 +5,6 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable};
 use x86_64::structures::tss::TaskStateSegment;
 pub(crate) const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
-// 20 KiB stacks
 static TSS: Once<TaskStateSegment> = Once::new();
 
 fn tss() -> &'static TaskStateSegment {

@@ -1,6 +1,5 @@
 use super::disk::Disk;
 
-// A slice of a disk: one partition table entry.
 #[derive(Clone, Copy)]
 pub(crate) struct Partition {
     disk: Disk,

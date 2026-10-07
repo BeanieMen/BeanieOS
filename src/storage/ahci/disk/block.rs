@@ -7,7 +7,6 @@ pub(crate) trait BlockDevice: Sync + Send + 'static {
 }
 
 impl BlockDevice for Disk {
-    // convert lba to byte offset
     fn read_block(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
         self.read_at(lba * 512, buf)
     }
