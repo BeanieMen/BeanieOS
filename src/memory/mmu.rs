@@ -1,18 +1,30 @@
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use multiboot2::MemoryMapTag;
+use x86_64::PhysAddr;
 use x86_64::VirtAddr;
-use x86_64::registers::control::Cr3;
+use x86_64::registers::control::{Cr3, Cr3Flags};
 use x86_64::structures::paging::{PageTableFlags, PhysFrame};
 
 use crate::arch::lock::InterruptMutex;
-use crate::memory::allocator::{alloc_frame, init_frames, kernel_phys_range};
+use crate::memory::allocator::{alloc_frame, free_frame, init_frames, kernel_phys_range};
 use crate::memory::heap::{HEAP_SIZE, HEAP_START};
 use crate::paging::{
-    ENTRIES_PER_TABLE, ENTRY_SIZE, PAGE_SIZE, PTE_ADDR_MASK, PTE_HUGE, PTE_LEAF_MASK,
-    PTE_PRESENT, PTE_USER, PTE_WRITABLE, phys_to_direct,
+    DIRECT_MAP_P4_INDEX, ENTRIES_PER_TABLE, ENTRY_SIZE, KERNEL_P4_INDEX, KERNEL_VIRTUAL_BASE,
+    PAGE_SIZE, PTE_ADDR_MASK, PTE_HUGE, PTE_LEAF_MASK, PTE_PRESENT, PTE_USER, PTE_WRITABLE,
+    phys_to_direct,
 };
 
 pub(crate) const KERNEL_RW: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_KERNEL_RW);
+pub(crate) const USER_RW: PageTableFlags =
+    PageTableFlags::from_bits_truncate(crate::paging::PTE_USER_RW);
+
+const SHARED_P4_SLOTS: [u64; 2] = [KERNEL_P4_INDEX, DIRECT_MAP_P4_INDEX];
+
+unsafe extern "C" {
+    static P4_TABLE: u8;
+}
 
 const P1_LEVEL: u8 = 3;
 
@@ -155,6 +167,234 @@ impl Mapper {
         Ok(())
     }
 }
+
+fn translate_in(root: u64, virt: u64) -> PhysFrame {
+    let mut table = root;
+
+    for level in 0..P1_LEVEL {
+        let entry = unsafe { read_entry(table, index(virt, level as usize)) };
+
+        assert!(
+            entry & PTE_PRESENT != 0,
+            "translate: {virt:#x} has no level {level} entry"
+        );
+
+        if level > 0 && entry & PTE_HUGE != 0 {
+            let shift = if level == 1 { 30 } else { 21 };
+            let page = (1 << shift) - 1;
+
+            return PhysFrame::containing_address(PhysAddr::new(
+                (entry & PTE_ADDR_MASK & page) + (virt & page),
+            ));
+        }
+
+        table = entry & PTE_ADDR_MASK;
+    }
+
+    PhysFrame::containing_address(PhysAddr::new(table))
+}
+
+fn is_shared_slot(index: u64) -> bool {
+    index >= DIRECT_MAP_P4_INDEX
+}
+
+/// Frees every frame `table` owns, children first.
+///
+/// Stops at the shared P4 slots: those subtrees belong to the kernel and to no
+/// process, and walking into one would free the kernel image along with every
+/// process's view of it.
+fn release_tree(table: u64, level: u8) {
+    for i in 0..ENTRIES_PER_TABLE {
+        if level == 0 && is_shared_slot(i) {
+            continue;
+        }
+
+        let entry = unsafe { read_entry(table, i) };
+
+        if entry & PTE_PRESENT == 0 {
+            continue;
+        }
+
+        let child = entry & PTE_ADDR_MASK;
+
+        if level >= P1_LEVEL || entry & PTE_HUGE != 0 {
+            free_frame(child);
+        } else {
+            release_tree(child, level + 1);
+        }
+    }
+
+    free_frame(table);
+}
+
+pub(crate) struct AddressSpace {
+    pub root: PhysFrame,
+    owned: bool,
+}
+
+static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
+
+fn remember_kernel_cr3() {
+    let (frame, _) = Cr3::read();
+    KERNEL_CR3.store(frame.start_address().as_u64(), Ordering::Release);
+}
+
+pub(crate) fn kernel_cr3() -> PhysFrame {
+    PhysFrame::containing_address(PhysAddr::new(KERNEL_CR3.load(Ordering::Acquire)))
+}
+
+pub(crate) fn switch_cr3(root: PhysFrame) {
+    let (current, _) = Cr3::read();
+    if current != root {
+        unsafe { Cr3::write(root, Cr3Flags::empty()) };
+    }
+}
+
+pub(crate) fn current_cr3() -> PhysFrame {
+    Cr3::read().0
+}
+
+pub(crate) fn activate_root(root: PhysFrame) {
+    switch_cr3(root);
+}
+
+impl AddressSpace {
+    pub(crate) fn root_addr(&self) -> u64 {
+        self.root.start_address().as_u64()
+    }
+
+    fn walk(&self, virt: u64, flags: PageTableFlags) -> Result<u64, MemoryError> {
+        let mut table = self.root_addr();
+
+        for level in 0..P1_LEVEL as usize {
+            let slot = table + index(virt, level) * ENTRY_SIZE;
+            let entry = unsafe { read_entry(table, index(virt, level)) };
+
+            table = if entry & PTE_PRESENT == 0 {
+                let child = new_table()?;
+
+                let user = flags.bits() & PTE_USER;
+
+                unsafe {
+                    write_entry(
+                        table,
+                        index(virt, level),
+                        child | PTE_PRESENT | PTE_WRITABLE | user,
+                    )
+                };
+
+                child
+            } else if entry & PTE_HUGE != 0 {
+                split_huge_at(slot)?
+            } else {
+                entry & PTE_ADDR_MASK
+            };
+        }
+
+        Ok(table)
+    }
+
+    pub(crate) fn new() -> Result<Self, MemoryError> {
+        let frame = alloc_frame().ok_or(MemoryError::OutOfFrames)?;
+
+        let virt = phys_to_direct(frame.start_address().as_u64());
+
+        unsafe { core::ptr::write_bytes(virt as *mut u8, 0, PAGE_SIZE as usize) };
+
+        Ok(AddressSpace {
+            root: frame,
+            owned: true,
+        })
+    }
+
+    /// A fresh address space sharing the kernel's two upper P4 entries rather
+    /// than copying the image. Sharing is what keeps process creation cheap, and
+    /// why `release_tree` has to skip those slots.
+    pub(crate) fn new_with_kernel() -> Result<Self, MemoryError> {
+        let space = Self::new()?;
+
+        let boot_p4 = (&raw const P4_TABLE) as u64;
+
+        for slot in SHARED_P4_SLOTS {
+            unsafe {
+                write_entry(space.root_addr(), slot, read_entry(boot_p4, slot));
+            }
+        }
+
+        Ok(space)
+    }
+
+    pub(crate) fn map(
+        &mut self,
+        virt: u64,
+        target: PhysFrame,
+        flags: PageTableFlags,
+    ) -> Result<(), MemoryError> {
+        let virt = virt & !(PAGE_SIZE - 1);
+
+        let table = self.walk(virt, flags)?;
+
+        let leaf = index(virt, P1_LEVEL as usize);
+
+        unsafe { write_entry(table, leaf, target.start_address().as_u64() | flags.bits()) };
+
+        x86_64::instructions::tlb::flush_all();
+
+        Ok(())
+    }
+
+    pub(crate) fn map_fresh(
+        &mut self,
+        virt: u64,
+        size: u64,
+        flags: PageTableFlags,
+    ) -> Result<u64, MemoryError> {
+        let pages = size.div_ceil(PAGE_SIZE);
+
+        for i in 0..pages {
+            let frame = alloc_frame().ok_or(MemoryError::OutOfFrames)?;
+
+            self.map(virt + i * PAGE_SIZE, frame, flags)?;
+        }
+
+        Ok(pages)
+    }
+
+    pub(crate) fn translate(&self, virt: u64) -> PhysFrame {
+        translate_in(self.root_addr(), virt)
+    }
+
+    pub(crate) fn activate(&self) {
+        switch_cr3(self.root);
+    }
+
+    fn is_active(&self) -> bool {
+        current_cr3() == self.root
+    }
+}
+
+impl Drop for AddressSpace {
+    fn drop(&mut self) {
+        if !self.owned {
+            return;
+        }
+
+        if self.is_active() {
+            activate_root(kernel_cr3());
+        }
+
+        release_tree(self.root_addr(), 0);
+    }
+}
+
+/// Lowest user address, and the top of the canonical lower half.
+pub(crate) const USER_START: u64 = 0x0000_0000_0000_0000;
+pub(crate) const USER_END: u64 = KERNEL_VIRTUAL_BASE - 1;
+
+/// Code, stack and data, low enough to be well clear of the firmware's.
+pub(crate) const USER_BASE: u64 = 0x0040_0000;
+pub(crate) const USER_STACK_TOP: u64 = 0x0030_0000;
+pub(crate) const USER_DATA: u64 = 0x0050_0000;
 
 #[derive(Clone, Copy)]
 pub(crate) struct MemoryInfo {
