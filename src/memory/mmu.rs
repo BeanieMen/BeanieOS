@@ -169,9 +169,10 @@ impl Mapper {
 }
 
 fn translate_in(root: u64, virt: u64) -> PhysFrame {
-    let mut table = root;
+    let mut frame = root;
 
     for level in 0..P1_LEVEL {
+        let table = phys_to_direct(frame);
         let entry = unsafe { read_entry(table, index(virt, level as usize)) };
 
         assert!(
@@ -188,9 +189,10 @@ fn translate_in(root: u64, virt: u64) -> PhysFrame {
             ));
         }
 
-        table = entry & PTE_ADDR_MASK;
+        frame = entry & PTE_ADDR_MASK;
     }
 
+    let table = phys_to_direct(frame);
     let leaf = unsafe { read_entry(table, index(virt, P1_LEVEL as usize)) };
 
     assert!(
@@ -210,7 +212,9 @@ fn is_shared_slot(index: u64) -> bool {
 /// Stops at the shared P4 slots: those subtrees belong to the kernel and to no
 /// process, and walking into one would free the kernel image along with every
 /// process's view of it.
-fn release_tree(table: u64, level: u8) {
+fn release_tree(root: u64, level: u8) {
+    let table = phys_to_direct(root);
+
     for i in 0..ENTRIES_PER_TABLE {
         if level == 0 && is_shared_slot(i) {
             continue;
@@ -279,13 +283,14 @@ impl AddressSpace {
     }
 
     fn walk(&self, virt: u64, flags: PageTableFlags) -> Result<u64, MemoryError> {
-        let mut table = self.root_addr();
+        let mut frame = self.root_addr();
 
         for level in 0..P1_LEVEL as usize {
+            let table = phys_to_direct(frame);
             let slot = table + index(virt, level) * ENTRY_SIZE;
             let entry = unsafe { read_entry(table, index(virt, level)) };
 
-            table = if entry & PTE_PRESENT == 0 {
+            frame = if entry & PTE_PRESENT == 0 {
                 let child = new_table()?;
 
                 let user = flags.bits() & PTE_USER;
@@ -306,7 +311,7 @@ impl AddressSpace {
             };
         }
 
-        Ok(table)
+        Ok(frame)
     }
 
     pub(crate) fn new() -> Result<Self, MemoryError> {
@@ -330,13 +335,21 @@ impl AddressSpace {
 
         let boot_p4 = (&raw const P4_TABLE) as u64;
 
+        // A root frame is a physical address and nothing maps that into the
+        // higher half, so it has to go through the direct map to be writable.
+        let target = phys_to_direct(space.root_addr());
+
         for slot in SHARED_P4_SLOTS {
             unsafe {
-                write_entry(space.root_addr(), slot, read_entry(boot_p4, slot));
+                write_entry(target, slot, read_entry(boot_p4, slot));
             }
         }
 
         Ok(space)
+    }
+
+    pub(crate) fn from_root(root: PhysFrame) -> Self {
+        AddressSpace { root, owned: true }
     }
 
     pub(crate) fn map(
@@ -347,7 +360,8 @@ impl AddressSpace {
     ) -> Result<(), MemoryError> {
         let virt = virt & !(PAGE_SIZE - 1);
 
-        let table = self.walk(virt, flags)?;
+        let frame = self.walk(virt, flags)?;
+        let table = phys_to_direct(frame);
 
         let leaf = index(virt, P1_LEVEL as usize);
 

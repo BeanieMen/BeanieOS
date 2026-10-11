@@ -328,6 +328,7 @@ static void cmd_help(void) {
     print("  rm <file>     remove a file\n");
     print("  cat <file>    print a file\n");
     print("  read <file>   read a file and report the size\n");
+    print("  run <file>    execute a program\n");
     print("  clear         clear the screen\n");
     print("  yield         give up the rest of the time slice\n");
     print("  exit          leave the shell\n");
@@ -461,6 +462,25 @@ static void cmd_read(const char *path) {
     sys_close(fd);
 }
 
+static void cmd_run(const char *arg) {
+    char full[PATH_MAX];
+    char *argv[3];
+    char *envp[2];
+
+    resolve_path(arg, full);
+
+    argv[0] = full;
+    argv[1] = 0;
+    envp[0] = 0;
+    envp[1] = 0;
+
+    long ret = sys_execve(full, argv, envp);
+
+    print("run: execve returned ");
+    print_num(ret);
+    print("\n");
+}
+
 static void cmd_clear(void) {
     for (int i = 0; i < 30; i++) {
         print("\n");
@@ -526,6 +546,12 @@ static void dispatch(char **argv, int argc) {
         } else {
             cmd_read(argv[1]);
         }
+    } else if (strcmp(cmd, "run") == 0) {
+        if (argc < 2) {
+            print("run: needs a program\n");
+        } else {
+            cmd_run(argv[1]);
+        }
     } else {
         print("unknown command: ");
         print(cmd);
@@ -537,7 +563,10 @@ int main(void) {
     print("\n=========================================\n");
     print("     Welcome to BeanieOS User Shell!     \n");
     print("=========================================\n");
-    print("Ring 3, loaded from /INIT\n");
+    print("Ring 3, loaded from init.c in userspace\n");
+    print("proper shell loaded as a init proc with multi threading and forking via execve\n");
+    print("do run hi to test elf loading and execution\n");
+    print("will try and make games soon. tui games\n");
     print("Type 'help' for the command list.\n\n");
 
     char *argv[MAX_ARGS];

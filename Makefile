@@ -18,15 +18,15 @@ CARGO := cargo +nightly
 CARGO_FLAGS := --release --features kernel -Zbuild-std=core,alloc \
 	-Zjson-target-spec --target $(TARGET)
 RUSTFLAGS := -C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld
-USER_BIN := userspace/bin/init
-USER_SRCS := userspace/src/crt0.s userspace/src/init.c
-USER_HDRS := userspace/include/syscall.h
+USER_BIN_DIR := userspace/bin
+USER_HDRS := userspace/include/syscall.h userspace/linker.ld userspace/Makefile
 
-.PHONY: all setup check kernel disk run symbols clean
+
+.PHONY: all setup check kernel disk run symbols clean userbins
 
 all: $(DISK)
 
-$(USER_BIN): $(USER_SRCS) $(USER_HDRS) userspace/linker.ld userspace/Makefile
+userbins:
 	$(MAKE) -C userspace
 
 setup:
@@ -49,7 +49,7 @@ kernel: $(BOOT_OBJ) $(TIMER_OBJ) linker.ld
 	touch src/main.rs
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build $(CARGO_FLAGS)
 
-$(DISK): kernel $(USER_BIN)
+$(DISK): kernel userbins
 	@mkdir -p $(OUT)
 	rm -f $@
 	truncate -s 128M $@
@@ -65,8 +65,10 @@ $(DISK): kernel $(USER_BIN)
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/limine.conf ::limine.conf
 	mmd -i $@@@$(KERNEL_OFFSET) ::boot
 	mcopy -i $@@@$(KERNEL_OFFSET) $(KERNEL) ::boot/kernel
-	mcopy -i $@@@$(KERNEL_OFFSET) $(USER_BIN) ::init
-
+	for bin in $(USER_BIN_DIR)/*; do \
+		mcopy -i $@@@$(KERNEL_OFFSET) "$$bin" ::`basename "$$bin"` || exit 1; \
+	done
+	
 
 disk: $(DISK)
 

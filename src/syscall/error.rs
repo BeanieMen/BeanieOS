@@ -9,6 +9,8 @@ pub(crate) enum Errno {
     Invalid = 22,
     NoMem = 12,
     Fault = 14,
+    NotDir = 20,
+    Overflow = 75,
 }
 
 pub(crate) fn encode(result: SyscallResult) -> u64 {

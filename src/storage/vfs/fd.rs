@@ -49,11 +49,30 @@ impl FdTable {
             .ok_or("bad file descriptor")
     }
 
-    fn get_mut(&mut self, fd: u64) -> Result<&mut File, &'static str> {
+    pub(crate) fn get_mut(&mut self, fd: u64) -> Result<&mut File, &'static str> {
         self.slots
             .get_mut(fd as usize)
             .and_then(|slot| slot.as_mut())
             .ok_or("bad file descriptor")
+    }
+
+    pub(crate) fn lseek(&mut self, fd: u64, offset: i64, whence: u32) -> Result<u64, &'static str> {
+        let file = self.get_mut(fd)?;
+
+        let base = match whence {
+            0 => 0i64,
+            1 => file.tell() as i64,
+            2 => file.size() as i64,
+            _ => return Err("bad whence"),
+        };
+
+        let target = base.checked_add(offset).ok_or("seek overflow")?;
+
+        if target < 0 {
+            return Err("seek before start of file");
+        }
+
+        file.seek(target as u64)
     }
 
     pub(crate) fn close(&mut self, fd: u64) -> Result<(), &'static str> {

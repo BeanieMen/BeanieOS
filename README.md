@@ -22,7 +22,9 @@ pranjal is a beginner and i am teaching him how stuff works so it might be a bit
 
 <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
 
-
+# agenda
+we have finally gotten user programs working on this god forsaken kernel.
+next on the agenda is getting musl lib c programs compiled on my linux machine to run also here. i dont wanna use my hacky userspace libc definition. then its gonna be implementing unix stuff
 
 # Features
 The features/things for this operating system that will be implemented are

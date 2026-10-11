@@ -278,6 +278,14 @@ pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
     }
 }
 
+pub(crate) fn take_space(pid: ProcessId) -> Option<mmu::AddressSpace> {
+    let process = PROCESS_MANAGER.lock().get(pid)?;
+
+    let root = process.lock().space.take()?;
+
+    Some(mmu::AddressSpace::from_root(root))
+}
+
 pub(crate) fn activate_space(pid: ProcessId) {
     let root = PROCESS_MANAGER
         .lock()
