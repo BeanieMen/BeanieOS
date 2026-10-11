@@ -1,4 +1,4 @@
-use spin::Mutex;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::graphics::framebuffer::Color;
 
@@ -12,7 +12,7 @@ pub enum Level {
 }
 
 impl Level {
-    pub const fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Level::Error => "ERROR",
             Level::Warn => "WARN",
@@ -22,7 +22,7 @@ impl Level {
         }
     }
 
-    pub const fn color(&self) -> Color {
+    pub(crate) const fn color(&self) -> Color {
         match self {
             Level::Error => Color::Red,
             Level::Warn => Color::Yellow,
@@ -31,14 +31,32 @@ impl Level {
             Level::Trace => Color::Cyan,
         }
     }
+
+    const fn from_bits(bits: u8) -> Self {
+        match bits {
+            0 => Level::Error,
+            1 => Level::Warn,
+            2 => Level::Info,
+            3 => Level::Debug,
+            _ => Level::Trace,
+        }
+    }
 }
 
-pub const MAX_LEVEL: Level = Level::Trace;
+const MAX_LEVEL: Level = Level::Trace;
 
-static LEVEL_FILTER: Mutex<Level> = Mutex::new(Level::Info);
+static LEVEL_FILTER: AtomicU8 = AtomicU8::new(Level::Info as u8);
+
+fn set_level(level: Level) {
+    LEVEL_FILTER.store(level as u8, Ordering::Relaxed);
+}
+
+pub(crate) fn level() -> Level {
+    Level::from_bits(LEVEL_FILTER.load(Ordering::Relaxed))
+}
 
 pub fn _log(level: Level, module: &str, args: core::fmt::Arguments) {
-    if level > MAX_LEVEL || level > *LEVEL_FILTER.lock() {
+    if level > MAX_LEVEL || level as u8 > LEVEL_FILTER.load(Ordering::Relaxed) {
         return;
     }
 

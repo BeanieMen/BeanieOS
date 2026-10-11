@@ -1,6 +1,6 @@
 use spin::Once;
 
-pub struct Madt {
+pub(crate) struct Madt {
     pub lapic_address: usize,
     pub ioapic_address: usize,
     pub ioapic_gsi_base: u32,

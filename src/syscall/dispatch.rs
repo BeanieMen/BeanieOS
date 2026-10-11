@@ -3,12 +3,13 @@ use crate::{
     task::{identity::current_pid, process, scheduler},
 };
 
-use super::error::{Errno, encode_result};
+use super::entry;
+use super::error::{Errno, SyscallResult};
 use super::numbers::*;
 
-pub fn dispatch(number: u64, args: [u64; 6]) -> u64 {
+pub(crate) fn dispatch(number: u64, args: [u64; 6]) -> SyscallResult {
     let Ok(syscall) = Syscall::try_from(number) else {
-        return encode_result(Err(Errno::NoSys));
+        return Err(Errno::NoSys);
     };
 
     match syscall {
@@ -33,92 +34,106 @@ fn sys_exit(code: u64) -> ! {
     scheduler::exit();
 }
 
-fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
-    let Some(result) = process::with_current_fds(|fds| {
-        fds.write(fd, unsafe {
-            core::slice::from_raw_parts(buf as *const u8, len as usize)
-        })
-    }) else {
-        return encode_result(Err(Errno::BadFd));
+fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
+    if len > 4096 {
+        return Err(Errno::Invalid);
+    }
+
+    let mut staging = [0u8; 4096];
+    let capped = len as usize;
+
+    if entry::copy_from_user(&mut staging[..capped], buf).is_err() {
+        return Err(Errno::Fault);
+    }
+
+    let Some(result) = process::with_current_fds(|fds| fds.write(fd, &staging[..capped])) else {
+        return Err(Errno::BadFd);
     };
 
     match result {
-        Ok(written) => written as u64,
-        Err(_) => encode_result(Err(Errno::Invalid)),
+        Ok(written) => Ok(written as u64),
+        Err(_) => Err(Errno::Invalid),
     }
 }
 
-fn sys_read(fd: u64, buf: u64, len: u64) -> u64 {
-    let Some(result) = process::with_current_fds(|fds| {
-        fds.read(fd, unsafe {
-            core::slice::from_raw_parts_mut(buf as *mut u8, len as usize)
-        })
-    }) else {
-        return encode_result(Err(Errno::BadFd));
+fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
+    if len > 4096 {
+        return Err(Errno::Invalid);
+    }
+
+    let mut staging = [0u8; 4096];
+
+    let Some(result) = process::with_current_fds(|fds| fds.read(fd, &mut staging[..len as usize]))
+    else {
+        return Err(Errno::BadFd);
     };
 
-    match result {
-        Ok(read) => read as u64,
-        Err(_) => encode_result(Err(Errno::Invalid)),
+    let read = match result {
+        Ok(read) => read,
+        Err(_) => return Err(Errno::Invalid),
+    };
+
+    if entry::copy_to_user(buf, &staging[..read]).is_err() {
+        return Err(Errno::Fault);
     }
+
+    Ok(read as u64)
 }
 
-fn sys_open(path: u64, flags: u64) -> u64 {
-    let path = match process::str_from_ptr(path) {
-        Ok(path) => path,
-        Err(_) => return encode_result(Err(Errno::Fault)),
+fn sys_open(path: u64, flags: u64) -> SyscallResult {
+    let Ok(path) = entry::user_path(path) else {
+        return Err(Errno::Fault);
     };
 
     let open_flags = match flags {
         0 => OpenFlags::READ,
         1 => OpenFlags::WRITE,
         2 => OpenFlags::RDWR,
-        _ => return encode_result(Err(Errno::Invalid)),
+        _ => return Err(Errno::Invalid),
     };
 
-    let Some(result) = process::with_current_fds(|fds| fds.open(path.as_bytes(), open_flags))
-    else {
-        return encode_result(Err(Errno::BadFd));
+    let Some(result) = process::with_current_fds(|fds| fds.open(&path, open_flags)) else {
+        return Err(Errno::BadFd);
     };
 
     match result {
-        Ok(fd) => fd,
-        Err(_) => return encode_result(Err(Errno::NoEntry)),
+        Ok(fd) => Ok(fd),
+        Err(_) => return Err(Errno::NoEntry),
     }
 }
 
-fn sys_close(fd: u64) -> u64 {
+fn sys_close(fd: u64) -> SyscallResult {
     let Some(result) = process::with_current_fds(|fds| fds.close(fd)) else {
-        return encode_result(Err(Errno::BadFd));
+        return Err(Errno::BadFd);
     };
 
     match result {
-        Ok(()) => 0,
-        Err(_) => encode_result(Err(Errno::BadFd)),
+        Ok(()) => Ok(0),
+        Err(_) => Err(Errno::BadFd),
     }
 }
 
-fn sys_mkdir(_path: u64) -> u64 {
+fn sys_mkdir(_path: u64) -> SyscallResult {
     todo!()
 }
 
-fn sys_getdents(_fd: u64, _buf: u64, _len: u64) -> u64 {
+fn sys_getdents(_fd: u64, _buf: u64, _len: u64) -> SyscallResult {
     todo!()
 }
 
-fn sys_yield() -> u64 {
+fn sys_yield() -> SyscallResult {
     scheduler::yield_now();
-    0
+    Ok(0)
 }
 
-fn sys_getpid() -> u64 {
-    current_pid().as_u64()
+fn sys_getpid() -> SyscallResult {
+    Ok(current_pid().as_u64())
 }
 
-fn sys_unlink(_path: u64) -> u64 {
+fn sys_unlink(_path: u64) -> SyscallResult {
     todo!()
 }
 
-fn sys_rmdir(_path: u64) -> u64 {
+fn sys_rmdir(_path: u64) -> SyscallResult {
     todo!()
 }

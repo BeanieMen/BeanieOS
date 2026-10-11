@@ -27,7 +27,7 @@ const FRAME_BYTES: usize = FRAME_WORDS * 8;
 
 const RFLAGS_IF: usize = 0x202;
 
-pub struct Thread {
+pub(crate) struct Thread {
     pub id: ThreadId,
     pub pid: ProcessId,
     #[allow(dead_code)]
@@ -41,7 +41,7 @@ pub struct Thread {
 }
 
 impl Thread {
-    pub fn boot() -> Self {
+    pub(crate) fn boot() -> Self {
         Thread {
             id: ThreadId::MAIN,
             pid: ProcessId::KERNEL,
@@ -73,20 +73,20 @@ impl Thread {
         }
     }
 
-    pub fn saved_rsp(&self) -> usize {
+    pub(crate) fn saved_rsp(&self) -> usize {
         unsafe { *self.rsp.get() }
     }
 
-    pub fn rsp_slot(&self) -> *mut usize {
+    pub(crate) fn rsp_slot(&self) -> *mut usize {
         self.rsp.get()
     }
 
-    pub fn requeue(&mut self) {
+    pub(crate) fn requeue(&mut self) {
         self.state = ThreadState::Ready;
         self.timeslice = TIMESLICE_TICKS;
     }
 
-    pub fn begin_running(&mut self) {
+    pub(crate) fn begin_running(&mut self) {
         self.state = ThreadState::Running;
         self.timeslice = TIMESLICE_TICKS;
     }
@@ -109,7 +109,7 @@ fn build_initial_frame(sp: usize, entry: extern "C" fn()) {
     }
 }
 
-pub fn thread_trampoline_exit() -> ! {
+fn thread_trampoline_exit() -> ! {
     crate::task::scheduler::exit()
 }
 

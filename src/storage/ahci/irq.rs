@@ -9,7 +9,7 @@ use crate::arch::interrupts::pic;
 use crate::arch::interrupts::vectors::ticks;
 use crate::kinfo;
 
-/// Deadline for one command; the timer wakes the halt below.
+// Deadline for one command; the timer wakes the halt below.
 const TIMEOUT_MS: u64 = 500;
 
 const CR0_INTERRUPT_ENABLE: u64 = 1;
@@ -18,17 +18,16 @@ static ABAR: AtomicUsize = AtomicUsize::new(0);
 static PORTS: AtomicUsize = AtomicUsize::new(0);
 static DONE: AtomicBool = AtomicBool::new(false);
 
-/// How many times the handler has run, so a timeout can say whether the
-/// interrupt never came or came and meant nothing.
+// How many times the handler ran, so a timeout can tell "the interrupt never
+// came" from "it came and meant nothing".
 static HANDLED: AtomicUsize = AtomicUsize::new(0);
 
-/// Routes the adapter's line. Must run before any port unmasks PxIE.
-pub fn attach(abar: usize, ports: u32, pin: u8, line: u8) {
+// Routes the adapter's line. Must run before any port unmasks PxIE.
+pub(crate) fn attach(abar: usize, ports: u32, pin: u8, line: u8) {
     ABAR.store(abar, Ordering::Relaxed);
     PORTS.store(ports as usize, Ordering::Relaxed);
 
-    // Config 0x3C holds the GSI firmware routed this to. The pin is not a
-    // substitute: pin 1 is INTA#, which is the keyboard's line, not GSI 1.
+    // Config 0x3C holds the GSI. Not the pin: pin 1 is INTA#, the keyboard's line.
     let gsi = line as u32;
 
     kinfo!("  interrupt: pin {pin} -> gsi {gsi} (line register {line})");
@@ -66,7 +65,7 @@ pub extern "x86-interrupt" fn on_interrupt(
     }
 }
 
-pub fn wait(base: usize) -> Result<(), &'static str> {
+pub(crate) fn wait(base: usize) -> Result<(), &'static str> {
     let was_enabled = Cr0::read().bits() & CR0_INTERRUPT_ENABLE != 0;
     let deadline = ticks() + TIMEOUT_MS.div_ceil(TICK_MS);
 
@@ -111,7 +110,7 @@ pub fn wait(base: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
-pub fn arm(base: usize) {
+pub(crate) fn arm(base: usize) {
     DONE.store(false, Ordering::Relaxed);
 
     // Bits latched by an earlier command would fire before this one starts.

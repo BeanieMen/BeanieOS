@@ -9,10 +9,9 @@ unsafe fn ioapic_write(base: usize, reg: u8, value: u32) {
     }
 }
 
-/// Sends `gsi` to `vector`. Entry registers sit at 0x10 + 2 * index, index
-/// being the GSI above the I/O APIC base: low holds the vector, high holds the
-/// destination LAPIC id in bits 24-31.
-pub fn route(gsi: u32, vector: u8) {
+// Sends `gsi` to `vector`. Entry registers sit at 0x10 + 2 * index, index being
+// the GSI above the I/O APIC base: low holds the vector, high the dest LAPIC id.
+pub(crate) fn route(gsi: u32, vector: u8) {
     let parsed = madt::get();
     let address = parsed.ioapic_address;
 

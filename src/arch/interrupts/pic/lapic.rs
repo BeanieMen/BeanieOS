@@ -9,19 +9,19 @@ use crate::arch::interrupts::consts::{
 
 use super::madt;
 
-/// 8254 crystal: the only rate here that can be taken rather than measured.
+// 8254 crystal: the only rate here that can be taken rather than measured.
 const PIT_HZ: u64 = 1_193_182;
 
-/// 59659 PIT ticks is 50 ms at PIT_HZ.
+// 59659 PIT ticks is 50 ms at PIT_HZ.
 const PIT_WINDOW_TICKS: u64 = 59_659;
 
-/// Zero is how the PIT encodes 65536.
+// Zero is how the PIT encodes 65536.
 const PIT_RELOAD: u16 = 0;
 
-/// Reads before giving up: a PIT that never advances must not stall the boot.
+// A PIT that never advances must not stall the boot.
 const PIT_POLL_LIMIT: u32 = 10_000_000;
 
-/// Assumed when the PIT is silent: 1 GHz bus / 16, the emulator's rate.
+// Assumed when the PIT is silent: 1 GHz bus / 16, the emulator's rate.
 const NOMINAL_COUNTS_PER_MS: u32 = 62_500;
 
 fn lapic_base() -> usize {
@@ -63,8 +63,8 @@ pub(super) unsafe fn init() {
         core::ptr::write_volatile(svr, value | LAPIC_SVR_ENABLE | SPURIOUS_VECTOR as u32);
     }
 }
-/// One tick per `TICK_MS`, the period measured against the PIT. The LAPIC
-/// bus clock is never published, so a tick is not a time unit until measured.
+// One tick per `TICK_MS`, the period measured against the PIT: the LAPIC bus
+// clock is never published, so a tick is not a time unit until measured.
 pub(super) unsafe fn init_timer() {
     let counts = calibrate().unwrap_or_else(|| {
         crate::kwarn!("PIT did not advance, assuming {NOMINAL_COUNTS_PER_MS} counts/ms");
@@ -87,9 +87,9 @@ pub(super) unsafe fn init_timer() {
     }
 }
 
-/// LAPIC counts per millisecond, measured against the PIT. Channel 0 free-runs
-/// at PIT_HZ, so PIT ticks elapsed over the window time how far the LAPIC
-/// drained. `None` means the PIT never advanced, not that it was wrong.
+// LAPIC counts per millisecond, measured against the PIT. Channel 0 free-runs
+// at PIT_HZ, so PIT ticks elapsed over the window time how far the LAPIC drained.
+// `None` means the PIT never advanced, not that it was wrong.
 fn calibrate() -> Option<u32> {
     unsafe {
         // Not started: writing the initial count starts the one-shot, so the
@@ -151,7 +151,7 @@ unsafe fn current_count() -> u32 {
     unsafe { core::ptr::read_volatile(lapic_timer_current_reg() as *const u32) }
 }
 
-/// Latch channel 0, then read low byte first.
+// Latch channel 0, then read low byte first.
 fn pit_count() -> u16 {
     let mut command = Port::<u8>::new(0x43u16);
     let mut channel = Port::<u8>::new(0x40u16);

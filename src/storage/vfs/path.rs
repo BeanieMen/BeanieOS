@@ -4,28 +4,28 @@ use spin::Mutex;
 
 use super::{dentry::Dentry, inode::Inode};
 
-pub struct Path {
+pub(crate) struct Path {
     pub dentry: Arc<Mutex<Dentry>>,
 }
 
 impl Path {
-    pub fn new(dentry: Arc<Mutex<Dentry>>) -> Self {
+    pub(crate) fn new(dentry: Arc<Mutex<Dentry>>) -> Self {
         Self { dentry }
     }
 
-    pub fn inode(&self) -> Arc<Mutex<Inode>> {
+    pub(crate) fn inode(&self) -> Arc<Mutex<Inode>> {
         self.dentry.lock().inode.clone()
     }
 
-    pub fn parent(&self) -> Option<Arc<Mutex<Dentry>>> {
+    pub(crate) fn parent(&self) -> Option<Arc<Mutex<Dentry>>> {
         self.dentry.lock().parent.clone()
     }
 
-    pub fn name(&self) -> String {
+    pub(crate) fn name(&self) -> String {
         self.dentry.lock().name.clone()
     }
 
-    pub fn resolve(root: Arc<Mutex<Dentry>>, path: &[u8]) -> Result<Self, &'static str> {
+    pub(crate) fn resolve(root: Arc<Mutex<Dentry>>, path: &[u8]) -> Result<Self, &'static str> {
         if path.is_empty() {
             return Err("empty path");
         }

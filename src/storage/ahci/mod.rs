@@ -5,13 +5,13 @@ mod regs;
 
 use alloc::vec::Vec;
 
-pub use controller::AhciController;
-pub use disk::disk::Disk;
-pub use irq::on_interrupt;
+pub(crate) use controller::AhciController;
+pub(crate) use disk::disk::Disk;
+pub(crate) use irq::on_interrupt;
 
 use crate::kwarn;
 
-pub fn find_disks() -> Vec<Disk> {
+pub(crate) fn find_disks() -> Vec<Disk> {
     let mut disks = Vec::new();
 
     for device in crate::hal::hal().pci.find_ahci() {

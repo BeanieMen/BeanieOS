@@ -14,7 +14,7 @@ fn disable_legacy_pic() {
     }
 }
 
-pub unsafe fn init(acpi_root_addr: usize) {
+pub(crate) unsafe fn init(acpi_root_addr: usize) {
     unsafe {
         madt::init(acpi_root_addr);
     }
@@ -31,7 +31,7 @@ pub unsafe fn init(acpi_root_addr: usize) {
     disable_legacy_pic();
 }
 
-pub unsafe fn eoi() {
+pub(crate) unsafe fn eoi() {
     unsafe {
         lapic::send_eoi();
     }

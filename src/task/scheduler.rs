@@ -1,10 +1,7 @@
-#![allow(dead_code)]
-
 use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc, vec::Vec};
 
-use spin::Mutex;
-
 use crate::arch::interrupts::vectors::ticks;
+use crate::arch::lock::InterruptMutex;
 use crate::task::{
     identity::{self, Priority, ProcessId, TIMESLICE_TICKS, ThreadId, ThreadState},
     thread::{Thread, switch_context},
@@ -12,13 +9,16 @@ use crate::task::{
 
 const NUM_PRIORITIES: usize = 4;
 
-pub struct Scheduler {
-    threads: BTreeMap<ThreadId, Arc<Mutex<Thread>>>,
+struct Scheduler {
+    threads: BTreeMap<ThreadId, Arc<InterruptMutex<Thread>>>,
     ready_queues: [VecDeque<ThreadId>; NUM_PRIORITIES],
     current: ThreadId,
     reschedule_requested: bool,
     charged_up_to: u64,
     initialized: bool,
+    // Threads in `threads` that are not `Dead`. Counted on entry and decremented
+    // when a thread turns `Dead`, so `remove` only drops already-counted ones.
+    live: usize,
 }
 
 impl Scheduler {
@@ -32,18 +32,20 @@ impl Scheduler {
             reschedule_requested: false,
             charged_up_to: 0,
             initialized: false,
+            live: 0,
         }
     }
 
-    pub fn init(&mut self) {
+    pub(crate) fn init(&mut self) {
         if self.initialized {
             return;
         }
 
-        let boot = Arc::new(Mutex::new(Thread::boot()));
+        let boot = Arc::new(InterruptMutex::new(Thread::boot()));
 
         self.threads.insert(ThreadId::MAIN, boot);
         self.current = ThreadId::MAIN;
+        self.live = 1;
 
         // The boot context never had an `activate` call, so publish it here.
         self.publish_current();
@@ -68,12 +70,12 @@ impl Scheduler {
         }
     }
 
-    pub fn gs_base_agrees(&self) -> bool {
+    fn gs_base_agrees(&self) -> bool {
         self.thread_ptr(self.current)
             .is_some_and(|current_ptr| identity::current_thread() == current_ptr)
     }
 
-    pub fn spawn(
+    pub(crate) fn spawn(
         &mut self,
         pid: ProcessId,
         name: &str,
@@ -87,26 +89,28 @@ impl Scheduler {
         let thread = Thread::new(pid, name, entry, priority);
         let id = thread.id;
 
-        self.threads.insert(id, Arc::new(Mutex::new(thread)));
+        self.threads
+            .insert(id, Arc::new(InterruptMutex::new(thread)));
         self.ready_queues[priority.index()].push_back(id);
+        self.live += 1;
 
-        identity::set_current_pid(pid);
+        crate::task::process::attach_thread(pid, id);
 
         id
     }
 
-    pub fn current_id(&self) -> ThreadId {
+    fn current_id(&self) -> ThreadId {
         self.current
     }
 
-    pub fn current_pid(&self) -> ProcessId {
-        self.threads
-            .get(&self.current)
-            .map(|thread| thread.lock().pid)
-            .unwrap_or(ProcessId::KERNEL)
+    // From the thread GS base, not this map: `self.current` only agrees with GS base
+    // between switches, and asking the map meant taking SCHEDULER plus every
+    // thread lock to answer a question GS base already holds.
+    pub(crate) fn current_pid(&self) -> ProcessId {
+        identity::current_pid()
     }
 
-    pub fn account_tick(&mut self) {
+    fn account_tick(&mut self) {
         let Some(current) = self.threads.get(&self.current) else {
             return;
         };
@@ -129,7 +133,7 @@ impl Scheduler {
         }
     }
 
-    pub fn yield_to(&mut self) -> Option<ContextSwitch> {
+    fn yield_to(&mut self) -> Option<ContextSwitch> {
         self.charge_ticks();
 
         let forced = core::mem::take(&mut self.reschedule_requested);
@@ -160,7 +164,7 @@ impl Scheduler {
         }
     }
 
-    pub fn sleep_for(&mut self, duration_ticks: u64) -> Option<ContextSwitch> {
+    fn sleep_for(&mut self, duration_ticks: u64) -> Option<ContextSwitch> {
         if self.runnable_count() <= 1 {
             return None;
         }
@@ -174,11 +178,16 @@ impl Scheduler {
         self.switch_to_any()
     }
 
-    pub fn retire_current(&mut self) -> Option<ContextSwitch> {
+    fn retire_current(&mut self) -> Option<ContextSwitch> {
         let id = self.current;
 
         if let Some(thread) = self.threads.get(&id) {
-            thread.lock().state = ThreadState::Dead;
+            let mut guard = thread.lock();
+
+            if guard.state != ThreadState::Dead {
+                guard.state = ThreadState::Dead;
+                self.live = self.live.saturating_sub(1);
+            }
         }
 
         self.switch_to_any()
@@ -228,20 +237,22 @@ impl Scheduler {
             previous.lock().rsp_slot()
         };
 
-        let (next_rsp, next_pid) = {
+        let next_rsp = {
             let next = self.threads.get(&next_id)?;
             let mut next = next.lock();
 
             next.begin_running();
 
-            (next.saved_rsp(), next.pid)
+            next.saved_rsp()
         };
 
         self.current = next_id;
         self.requeue(previous_id);
-        identity::set_current_pid(next_pid);
 
-        // Must land before `apply` runs `switch_context`.
+        // Must land before `apply` runs `switch_context`. Publishing the new
+        // thread is also what publishes its pid: `identity::current_pid` reads
+        // it off the thread GS base points at, so there is no second copy of
+        // the current pid to keep in step here.
         self.publish_current();
 
         (next_rsp != 0).then_some(ContextSwitch {
@@ -251,18 +262,32 @@ impl Scheduler {
     }
 
     fn remove(&mut self, id: ThreadId) -> bool {
-        let Some(thread_ptr) = self.thread_ptr(id) else {
+        let Some(thread) = self.threads.get(&id) else {
             return false;
         };
 
-        if identity::current_thread() == thread_ptr {
+        let (pid, ptr) = {
+            let mut guard = thread.lock();
+            (guard.pid, &mut *guard as *mut Thread)
+        };
+
+        // The running thread's slot is where its stack pointer is parked when it
+        // is switched out, and it is written again on the way back. Dropping the
+        // entry now would leave that write landing in freed memory.
+        if identity::current_thread() == ptr {
             return false;
         }
 
-        self.threads.remove(&id).is_some()
+        if self.threads.remove(&id).is_none() {
+            return false;
+        }
+
+        crate::task::process::detach_thread(pid, id);
+
+        true
     }
 
-    pub fn reap_dead(&mut self) {
+    fn reap_dead(&mut self) {
         let dead: Vec<ThreadId> = self
             .threads
             .iter()
@@ -313,6 +338,15 @@ impl Scheduler {
     }
 
     fn runnable_count(&self) -> usize {
+        debug_assert_eq!(self.live, self.count_live_by_scan(), "live counter drifted");
+
+        self.live
+    }
+
+    // `debug_assert_eq!` still typechecks its arguments in a release build, so
+    // this cannot be `#[cfg]`-gated out; mark it unused instead.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    fn count_live_by_scan(&self) -> usize {
         self.threads
             .values()
             .filter(|thread| thread.lock().state != ThreadState::Dead)
@@ -324,14 +358,14 @@ impl Scheduler {
     }
 }
 
-pub struct ContextSwitch {
+struct ContextSwitch {
     pub previous_slot: *mut usize,
     pub next_rsp: usize,
 }
 
-pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+static SCHEDULER: InterruptMutex<Scheduler> = InterruptMutex::new(Scheduler::new());
 
-pub fn init() {
+pub(crate) fn init() {
     SCHEDULER.lock().init();
 }
 
@@ -341,7 +375,7 @@ pub fn spawn(name: &str, entry: extern "C" fn(), priority: Priority) -> ThreadId
     SCHEDULER.lock().spawn(pid, name, entry, priority)
 }
 
-pub fn spawn_in_process(
+pub(crate) fn spawn_in_process(
     pid: ProcessId,
     name: &str,
     entry: extern "C" fn(),
@@ -350,19 +384,19 @@ pub fn spawn_in_process(
     SCHEDULER.lock().spawn(pid, name, entry, priority)
 }
 
-pub fn yield_now() {
+pub(crate) fn yield_now() {
     let switch = SCHEDULER.lock().yield_to();
 
     apply(switch);
 }
 
-pub fn sleep(duration_ticks: u64) {
+pub(crate) fn sleep(duration_ticks: u64) {
     let switch = SCHEDULER.lock().sleep_for(duration_ticks);
 
     apply(switch);
 }
 
-pub fn exit() -> ! {
+pub(crate) fn exit() -> ! {
     let switch = SCHEDULER.lock().retire_current();
 
     apply(switch);
@@ -372,11 +406,11 @@ pub fn exit() -> ! {
     }
 }
 
-pub fn account_tick() {
+fn account_tick() {
     SCHEDULER.lock().account_tick();
 }
 
-pub fn reap_dead() {
+fn reap_dead() {
     SCHEDULER.lock().reap_dead();
 }
 

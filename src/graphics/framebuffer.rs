@@ -1,5 +1,6 @@
 use core::fmt;
-use spin::Mutex;
+
+use crate::arch::lock::InterruptMutex;
 
 const FONT: &[u8] = include_bytes!("font.bin");
 const FONT_WIDTH: u32 = 8;
@@ -8,7 +9,7 @@ const FONT_HEIGHT: u32 = 16;
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Color {
+pub(crate) enum Color {
     Black = 0,
     Blue = 1,
     Green = 2,
@@ -28,7 +29,7 @@ pub enum Color {
 }
 
 impl Color {
-    pub const fn to_rgb(self) -> u32 {
+    const fn to_rgb(self) -> u32 {
         match self {
             Color::Black => 0x000000,
             Color::Blue => 0x0000AA,
@@ -51,13 +52,13 @@ impl Color {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ColorCode {
+struct ColorCode {
     pub foreground: Color,
     pub background: Color,
 }
 
 impl ColorCode {
-    pub const fn new(foreground: Color, background: Color) -> Self {
+    pub(crate) const fn new(foreground: Color, background: Color) -> Self {
         Self {
             foreground,
             background,
@@ -65,7 +66,7 @@ impl ColorCode {
     }
 }
 
-pub struct Framebuffer {
+pub(crate) struct Framebuffer {
     pub addr: *mut u8,
     pub width: u32,
     pub height: u32,
@@ -75,7 +76,7 @@ pub struct Framebuffer {
 
 unsafe impl Send for Framebuffer {}
 
-pub struct Writer {
+pub(crate) struct Writer {
     pub framebuffer: Option<Framebuffer>,
     cursor_col: u32,
     cursor_row: u32,
@@ -85,7 +86,7 @@ pub struct Writer {
 unsafe impl Send for Writer {}
 
 impl Writer {
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             framebuffer: None,
             cursor_col: 0,
@@ -94,7 +95,7 @@ impl Writer {
         }
     }
 
-    pub fn init(&mut self, addr: *mut u8, width: u32, height: u32, pitch: u32, bpp: u8) {
+    pub(crate) fn init(&mut self, addr: *mut u8, width: u32, height: u32, pitch: u32, bpp: u8) {
         self.framebuffer = Some(Framebuffer {
             addr,
             width,
@@ -111,21 +112,21 @@ impl Writer {
         }
     }
 
-    pub fn cols(&self) -> u32 {
+    fn cols(&self) -> u32 {
         match self.framebuffer {
             Some(ref fb) => fb.width / FONT_WIDTH,
             None => 80,
         }
     }
 
-    pub fn rows(&self) -> u32 {
+    fn rows(&self) -> u32 {
         match self.framebuffer {
             Some(ref fb) => fb.height / FONT_HEIGHT,
             None => 25,
         }
     }
 
-    pub fn put_pixel(&self, x: u32, y: u32, color: u32) {
+    fn put_pixel(&self, x: u32, y: u32, color: u32) {
         if let Some(ref fb) = self.framebuffer {
             if x >= fb.width || y >= fb.height {
                 return;
@@ -162,7 +163,7 @@ impl Writer {
         }
     }
 
-    /// Row r sits at pixel row r * FONT_HEIGHT, so scrolling moves pixels.
+    // Row r sits at pixel row r * FONT_HEIGHT, so scrolling moves pixels.
     fn row_y(&self, row: u32) -> u32 {
         row * FONT_HEIGHT
     }
@@ -231,7 +232,7 @@ impl Writer {
         }
     }
 
-    /// Only whole text rows move, so a partial last row is left alone.
+    // Only whole text rows move, so a partial last row is left alone.
     fn scroll(&mut self) {
         let Some(ref fb) = self.framebuffer else {
             return;
@@ -253,7 +254,7 @@ impl Writer {
         }
     }
 
-    pub fn write_byte(&mut self, byte: u8) {
+    pub(crate) fn write_byte(&mut self, byte: u8) {
         let cols = self.cols();
 
         match byte {
@@ -300,7 +301,7 @@ impl Writer {
         }
     }
 
-    pub fn write_bytes(&mut self, bytes: &[u8]) {
+    pub(crate) fn write_bytes(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             match byte {
                 0x20..=0x7e | b'\n' | b'\r' | 0x08 => {
@@ -314,11 +315,11 @@ impl Writer {
         }
     }
 
-    pub fn write_string(&mut self, s: &str) {
+    fn write_string(&mut self, s: &str) {
         self.write_bytes(s.as_bytes());
     }
 
-    pub fn fill_rect(&self, x: u32, y: u32, width: u32, height: u32, color: u32) {
+    pub(crate) fn fill_rect(&self, x: u32, y: u32, width: u32, height: u32, color: u32) {
         let Some(ref fb) = self.framebuffer else {
             return;
         };
@@ -354,9 +355,20 @@ impl fmt::Write for Writer {
     }
 }
 
-pub static WRITER: Mutex<Writer> = Mutex::new(Writer::new());
+pub(crate) static WRITER: InterruptMutex<Writer> = InterruptMutex::new(Writer::new());
 
-pub fn init_framebuffer(addr: u64, width: u32, height: u32, pitch: u32, bpp: u8) {
+// Physical range the framebuffer occupies, or `None` before init.
+pub(crate) fn framebuffer_range() -> Option<(u64, u64)> {
+    let writer = WRITER.lock();
+    let fb = writer.framebuffer.as_ref()?;
+
+    Some((
+        fb.addr as u64,
+        fb.addr as u64 + (fb.height * fb.pitch) as u64,
+    ))
+}
+
+pub(crate) fn init_framebuffer(addr: u64, width: u32, height: u32, pitch: u32, bpp: u8) {
     x86_64::instructions::interrupts::without_interrupts(|| {
         WRITER
             .lock()

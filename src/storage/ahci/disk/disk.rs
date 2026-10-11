@@ -21,10 +21,10 @@ fn text(bytes: &[u8]) -> &str {
     core::str::from_utf8(&bytes[..end]).unwrap_or("?").trim()
 }
 
-/// Copyable: a command needs only the MMIO base and port index. All disks
-/// share one `DMA` block, so one transfer at a time.
+// Copyable: a command needs only the MMIO base and port index. All disks share
+// one `DMA` block, so one transfer at a time.
 #[derive(Clone, Copy)]
-pub struct Disk {
+pub(crate) struct Disk {
     // `pub(super)` on exactly the fields the sibling `impl` blocks touch:
     // `command.rs` drives the transfer, `table.rs` reads capacity and port.
     // `abar`, `model` and `serial` stay private to this module.
@@ -177,23 +177,23 @@ impl Disk {
         Ok(())
     }
 
-    pub fn port(&self) -> usize {
+    pub(crate) fn port(&self) -> usize {
         self.port
     }
 
-    pub fn model(&self) -> &str {
+    pub(crate) fn model(&self) -> &str {
         text(&self.model)
     }
 
-    pub fn serial(&self) -> &str {
+    pub(crate) fn serial(&self) -> &str {
         text(&self.serial)
     }
 
-    pub fn sectors(&self) -> u64 {
+    pub(crate) fn sectors(&self) -> u64 {
         self.sectors
     }
 
-    pub fn sector_size(&self) -> u64 {
+    pub(crate) fn sector_size(&self) -> u64 {
         self.block_size as u64
     }
 
@@ -201,7 +201,7 @@ impl Disk {
         self.sectors * self.block_size as u64
     }
 
-    pub fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str> {
+    pub(crate) fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str> {
         let mut done = 0;
 
         while done < buffer.len() {
@@ -219,7 +219,7 @@ impl Disk {
         Ok(())
     }
 
-    pub fn write_at(&mut self, offset: u64, buffer: &[u8]) -> Result<(), &'static str> {
+    pub(crate) fn write_at(&mut self, offset: u64, buffer: &[u8]) -> Result<(), &'static str> {
         let mut done = 0;
 
         while done < buffer.len() {

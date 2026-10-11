@@ -1,4 +1,4 @@
-.PHONY: all setup kernel boot disk run clean fmt fmt-check clippy lint check file
+.PHONY: all setup kernel boot disk run clean fmt fmt-check clippy lint check file test verify verify-full
 
 KERNEL_TARGET := x86_64.json
 KERNEL := target/x86_64/release/beanieos
@@ -21,9 +21,8 @@ OVMF_VARS := OVMF_VARS.4m.fd
 all: $(DISK)
 
 setup:
-	rustup default stable
 	rustup toolchain install nightly
-	rustup +nightly component add llvm-tools-preview
+	rustup +nightly component add llvm-tools-preview rust-src
 	yay -S --needed qemu-system-x86 qemu-desktop dosfstools mtools parted
 
 boot: $(BOOT_OBJ)
@@ -45,7 +44,7 @@ file:
 kernel: boot timer linker.ld
 	touch src/main.rs
 	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld" \
-	cargo +nightly build --release \
+	cargo +nightly build --release --features kernel \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)
@@ -114,16 +113,25 @@ fmt-check:
 
 clippy: boot timer
 	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld" \
-	cargo +nightly clippy --release \
+	cargo +nightly clippy --release --features kernel \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)
 
 lint: fmt-check clippy
 
+test:
+	cargo +nightly test
+
+verify:
+	./scripts/verify.sh
+
+verify-full:
+	./scripts/verify.sh --full
+
 check: boot timer
 	RUSTFLAGS="-C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld" \
-	cargo +nightly check --release \
+	cargo +nightly check --release --features kernel \
 		-Zbuild-std=core,alloc \
 		-Zjson-target-spec \
 		--target $(KERNEL_TARGET)
