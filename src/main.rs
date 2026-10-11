@@ -43,6 +43,20 @@ pub extern "C" fn rust_entry(magic: u32, mbi_addr: u32) -> ! {
 fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -> ! {
     init(&boot_info, mbi_addr, mbi_size);
     kinfo!("Kernel initialized successfully");
+
+    x86_64::instructions::interrupts::enable();
+
+    let start = arch::interrupts::timer_ticks();
+
+    loop {
+        if arch::interrupts::timer_ticks().wrapping_sub(start) >= 10 {
+            kinfo!("timer fired, {} ticks", arch::interrupts::timer_ticks());
+            break;
+        }
+
+        x86_64::instructions::hlt();
+    }
+
     loop {
         x86_64::instructions::hlt();
     }
@@ -84,7 +98,7 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
     mmu.init_heap().expect("could not map the kernel heap");
 
     arch::gdt::init();
-    arch::interrupts::init_idt();
+    arch::interrupts::init_idt(boot_info);
 
     demo_direct_map();
 

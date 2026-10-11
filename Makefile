@@ -1,6 +1,7 @@
 TARGET := x86_64.json
 KERNEL := target/x86_64/release/beanieos
 BOOT_OBJ := target/boot.o
+TIMER_OBJ := target/timer.o
 
 LIMINE := limine
 OUT := out
@@ -16,7 +17,7 @@ KERNEL_OFFSET := 33554432
 CARGO := cargo +nightly
 CARGO_FLAGS := --release --features kernel -Zbuild-std=core,alloc \
 	-Zjson-target-spec --target $(TARGET)
-RUSTFLAGS := -C link-arg=$(BOOT_OBJ) -C link-arg=-Tlinker.ld
+RUSTFLAGS := -C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld
 
 .PHONY: all setup check kernel disk run symbols clean
 
@@ -31,10 +32,14 @@ $(BOOT_OBJ): src/arch/boot.s
 	@mkdir -p $(@D)
 	as --64 $< -o $@
 
-check: $(BOOT_OBJ) linker.ld
+$(TIMER_OBJ): src/arch/interrupts/timer.s
+	@mkdir -p $(@D)
+	as --64 $< -o $@
+
+check: $(BOOT_OBJ) $(TIMER_OBJ) linker.ld
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) check $(CARGO_FLAGS)
 
-kernel: $(BOOT_OBJ) linker.ld
+kernel: $(BOOT_OBJ) $(TIMER_OBJ) linker.ld
 	touch src/main.rs
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build $(CARGO_FLAGS)
 
