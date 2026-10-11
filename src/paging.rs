@@ -19,8 +19,8 @@ pub const DIRECT_MAP_SIZE: u64 = 4 << 30;
 pub const DIRECT_MAP_TABLES: u64 = DIRECT_MAP_SIZE / P2_HUGE_SPAN;
 
 pub const MMIO_P3_INDEX: u64 = 0;
-pub const MMIO_BASE: u64 = 0xFFFF_F800_0000_0000;
-pub const MMIO_WINDOW: u64 = KERNEL_VIRTUAL_BASE - MMIO_BASE;
+pub const MMIO_BASE: u64 = 0xFFFF_FFFF_8000_0000 - (1 << 30);
+pub const MMIO_WINDOW: u64 = 1 << 30;
 
 pub const HEAP_OFFSET: u64 = 1 << 30;
 pub const HEAP_BASE: u64 = DIRECT_MAP_BASE + HEAP_OFFSET;
@@ -62,4 +62,11 @@ pub const fn direct_to_phys(virt: u64) -> u64 {
 pub const fn phys_to_direct(phys: u64) -> u64 {
     assert!(phys < DIRECT_MAP_SIZE, "physical address outside the direct map");
     phys + DIRECT_MAP_BASE
+}
+pub const fn align_up(addr: u64) -> u64 {
+    (addr + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
+}
+
+pub const fn align_down(addr: u64) -> u64 {
+    addr & !(PAGE_SIZE - 1)
 }
