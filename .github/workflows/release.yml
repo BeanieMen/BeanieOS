@@ -1,10 +1,12 @@
 name: BeanieOS Release
-run-name: "BeanieOS Development Build #${{ github.run_number }}"
+run-name: "BeanieOS Build - ${{ github.ref_type == 'tag' && github.ref_name || format('Development #{0}', github.run_number) }}"
 
 on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -34,9 +36,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v0.1.0-dev.${GITHUB_RUN_NUMBER}" \
-            out/beanieos.img \
-            --title "BeanieOS v0.1.0-dev.${GITHUB_RUN_NUMBER}" \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --notes "Automated build from commit ${GITHUB_SHA}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="$GITHUB_REF_NAME"
+            gh release create "$VERSION" \
+              out/beanieos.img \
+              --title "BeanieOS $VERSION" \
+              --target "$GITHUB_SHA" \
+              --notes "Stable BeanieOS release $VERSION from commit ${GITHUB_SHA}"
+          else
+            VERSION="v0.1.0-dev.${GITHUB_RUN_NUMBER}"
+            gh release create "$VERSION" \
+              out/beanieos.img \
+              --title "BeanieOS $VERSION" \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --notes "Automated development build from commit ${GITHUB_SHA}"
+          fi
