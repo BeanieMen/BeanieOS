@@ -4,3 +4,4 @@ pub mod scheduler;
 pub mod thread;
 pub mod userland;
 pub mod elf;
+pub mod exec;

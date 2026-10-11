@@ -20,16 +20,25 @@ macro_rules! syscalls {
 }
 
 syscalls! {
-    Exit = 0,
+    // Linux x86_64
+    Read = 0,
     Write = 1,
-    Read = 2,
-    Open = 3,
-    Close = 4,
-    Mkdir = 5,
-    Getdents = 6,
-    Yield = 7,
-    Getpid = 8,
-    Unlink = 9,
-    Rmdir = 10,
-    Create = 11,
+    Open = 2,
+    Close = 3,
+    Lseek = 8,
+    ArchPrctl = 158,
+    SchedYield = 24,
+    Getpid = 39,
+    Exit = 60,
+    Execve = 59,
+    Poll = 7,
+    Getdents64 = 217,
+
+    // not part of the musl contract
+    Mkdir = 300,
+    Rmdir = 301,
+    Unlink = 302,
+    Create = 303,
+    OpenDir = 304,
+
 }

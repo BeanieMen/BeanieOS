@@ -49,6 +49,9 @@ pub struct Elf64ProgramHeader {
 pub struct LoadedProcess {
     pub entry_point: u64,
     pub user_stack_top: u64,
+    pub phdr_vaddr: u64,
+    pub phdr_count: u64,
+    pub phdr_entry_size: u64,
 }
 
 pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess, &'static str> {
@@ -74,6 +77,7 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
     let ph_size = header.phentsize as usize;
     let ph_count = header.phnum as usize;
     let ph_table_offset = header.phoff as usize;
+    let mut phdr_vaddr = 0u64;
 
     for i in 0..ph_count {
         let ph_offset = ph_table_offset + i * ph_size;
@@ -84,6 +88,10 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
         if ph.p_type != PT_LOAD {
             continue;
         }
+        if phdr_vaddr == 0 {
+            phdr_vaddr = ph.p_vaddr - ph.p_offset + ph_table_offset as u64;
+        }
+
         let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
         if ph.p_flags & PF_W != 0 {
             flags |= PageTableFlags::WRITABLE;
@@ -140,7 +148,7 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
         }
     }
 
-    const STACK_PAGES: u64 = 4; // 4*4096 16kib 
+    const STACK_PAGES: u64 = 16; 
     let stack_bottom = USER_STACK_TOP - STACK_PAGES * 4096;
     let stack_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE;
 
@@ -159,5 +167,8 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
     Ok(LoadedProcess {
         entry_point: header.entry,
         user_stack_top,
+        phdr_vaddr,
+        phdr_entry_size: ph_size as u64,
+        phdr_count: ph_count as u64,
     })
 }

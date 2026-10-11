@@ -179,7 +179,7 @@ impl File {
         Ok(written)
     }
 
-    fn seek(&mut self, offset: u64) -> Result<u64, &'static str> {
+    pub(crate) fn seek(&mut self, offset: u64) -> Result<u64, &'static str> {
         self.offset = offset;
 
         Ok(self.offset)
@@ -187,5 +187,9 @@ impl File {
 
     pub(crate) fn tell(&self) -> u64 {
         self.offset
+    }
+
+    pub(crate) fn size(&self) -> u64 {
+        self.inode.lock().size
     }
 }

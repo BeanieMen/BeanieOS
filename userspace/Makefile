@@ -1,17 +1,20 @@
 CC := gcc
-CFLAGS := -Wall -Wextra -O2 -nostdlib -ffreestanding -fno-pie -no-pie -fno-stack-protector -Iinclude -m64
+CFLAGS := -Wall -Wextra -O2 -nostdlib -ffreestanding -fno-pie -no-pie \
+	-fno-stack-protector -Iinclude -m64
 LDFLAGS := -nostdlib -static -T linker.ld
 
 BUILD_DIR := bin
-TARGET := $(BUILD_DIR)/init
 
-SRCS := src/crt0.s src/init.c
+C_SRCS := $(sort $(wildcard src/*.c))
+BINS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(C_SRCS))
 
-all: $(TARGET)
+ASM_SRC := src/crt0.s
 
-$(TARGET): $(SRCS) linker.ld
+all: $(BINS)
+
+$(BUILD_DIR)/%: src/%.c $(ASM_SRC) linker.ld include/syscall.h
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SRCS) -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $(ASM_SRC) $< -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)

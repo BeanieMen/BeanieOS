@@ -63,6 +63,11 @@ pub(crate) fn register_vectors(idt: &mut InterruptDescriptorTable) {
     }
 }
 
+const KEY_UP: u8 = 0x80;
+const KEY_DOWN: u8 = 0x81;
+const KEY_LEFT: u8 = 0x82;
+const KEY_RIGHT: u8 = 0x83;
+
 const SCANCODE_MAP: [u8; 128] = {
     let mut map = [0; 128];
 
@@ -121,6 +126,11 @@ const SCANCODE_MAP: [u8; 128] = {
     map[0x35] = b'/';
 
     map[0x39] = b' ';
+
+    map[0x48] = KEY_UP;
+    map[0x50] = KEY_DOWN;
+    map[0x4B] = KEY_LEFT;
+    map[0x4D] = KEY_RIGHT;
 
     map
 };
