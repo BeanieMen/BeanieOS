@@ -2,16 +2,23 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+extern crate alloc;
+
 use core::panic::PanicInfo;
 
 use multiboot2::BootInformation;
 
 mod arch;
 mod console;
+mod hal;
 mod graphics;
 mod logger;
 mod memory;
 mod paging;
+mod storage;
+mod syscall;
+mod task;
+mod userspace;
 
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 
@@ -46,20 +53,51 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
 
     x86_64::instructions::interrupts::enable();
 
-    let start = arch::interrupts::timer_ticks();
+    task::process::init();
+    task::scheduler::init();
+
+    let init = task::process::create("init", "/");
+
+    task::scheduler::spawn_in_process(
+        init,
+        "rgb_square",
+        userspace::rgb_square_task,
+        task::identity::Priority::Normal,
+    );
+
+    let user = task::process::create("user", "/");
+
+    task::scheduler::spawn_in_process(
+        user,
+        "usertask",
+        user_task,
+        task::identity::Priority::Normal,
+    );
 
     loop {
-        if arch::interrupts::timer_ticks().wrapping_sub(start) >= 10 {
-            kinfo!("timer fired, {} ticks", arch::interrupts::timer_ticks());
-            break;
+        task::scheduler::yield_now();
+        x86_64::instructions::hlt();
+    }
+}
+
+extern "C" fn user_task() {
+    match task::userland::verify_release() {
+        Ok(()) => kinfo!("address space release: no frames leaked"),
+        Err(why) => kerror!("address space release: {why}"),
+    }
+
+    let Some(space) = task::userland::build() else {
+        kerror!("could not build a user address space");
+        loop {
+            task::scheduler::yield_now();
         }
+    };
 
-        x86_64::instructions::hlt();
-    }
+    task::process::attach_space(task::identity::current_pid(), space.root);
 
-    loop {
-        x86_64::instructions::hlt();
-    }
+    kinfo!("entering ring 3 at {:#x}", task::userland::USER_BASE);
+
+    task::userland::enter(&space)
 }
 
 pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usize) {
@@ -97,8 +135,11 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
 
     mmu.init_heap().expect("could not map the kernel heap");
 
+    hal::init(&mut mmu);
+
     arch::gdt::init();
     arch::interrupts::init_idt(boot_info);
+    syscall::entry::install();
 
     demo_direct_map();
 
@@ -108,6 +149,20 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
     );
     
     kinfo!("framebuffer found at {:#x}", fb_tag.address());
+
+    for route in hal::routes().iter() {
+        if let Some((bar5, size)) = route.bar5_info() {
+            match hal::hal().mmio.mapping_for(bar5) {
+                Some(m) => kinfo!(
+                    "found device: {:#x}..{:#x} mapped at {:#x}",
+                    bar5,
+                    bar5 + size,
+                    m.va
+                ),
+                None => kinfo!("found device: {:#x}..{:#x} NOT MAPPED", bar5, bar5 + size),
+            }
+        }
+    }
 
     kinfo!(
         "heap initialized at {:#x}..{:#x}",
