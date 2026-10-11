@@ -11,7 +11,7 @@ fn tss() -> &'static TaskStateSegment {
     TSS.call_once(|| {
         let mut tss = TaskStateSegment::new();
 
-        const STACK_SIZE: usize = 4096 * 5;
+        const STACK_SIZE: usize = 5 * crate::paging::PAGE_SIZE as usize;
 
         static mut DOUBLE_FAULT_STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
         static mut KERNEL_STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];

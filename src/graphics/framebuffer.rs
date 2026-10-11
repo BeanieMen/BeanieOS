@@ -1,6 +1,7 @@
 use core::fmt;
 
 use crate::arch::lock::InterruptMutex;
+use crate::paging::phys_to_direct;
 
 const FONT: &[u8] = include_bytes!("font.bin");
 const FONT_WIDTH: u32 = 8;
@@ -163,7 +164,6 @@ impl Writer {
         }
     }
 
-    // Row r sits at pixel row r * FONT_HEIGHT, so scrolling moves pixels.
     fn row_y(&self, row: u32) -> u32 {
         row * FONT_HEIGHT
     }
@@ -232,7 +232,6 @@ impl Writer {
         }
     }
 
-    // Only whole text rows move, so a partial last row is left alone.
     fn scroll(&mut self) {
         let Some(ref fb) = self.framebuffer else {
             return;
@@ -357,7 +356,6 @@ impl fmt::Write for Writer {
 
 pub(crate) static WRITER: InterruptMutex<Writer> = InterruptMutex::new(Writer::new());
 
-// Physical range the framebuffer occupies, or `None` before init.
 pub(crate) fn framebuffer_range() -> Option<(u64, u64)> {
     let writer = WRITER.lock();
     let fb = writer.framebuffer.as_ref()?;
@@ -368,10 +366,12 @@ pub(crate) fn framebuffer_range() -> Option<(u64, u64)> {
     ))
 }
 
-pub(crate) fn init_framebuffer(addr: u64, width: u32, height: u32, pitch: u32, bpp: u8) {
+pub(crate) fn init_framebuffer(phys: u64, width: u32, height: u32, pitch: u32, bpp: u8) {
+    let virt = phys_to_direct(phys);
+
     x86_64::instructions::interrupts::without_interrupts(|| {
         WRITER
             .lock()
-            .init(addr as *mut u8, width, height, pitch, bpp);
+            .init(virt as *mut u8, width, height, pitch, bpp);
     });
 }

@@ -14,12 +14,6 @@ we are still currrently in the ring 0 (kernel ring). this readme will be updated
 
 pranjal is a beginner and i am teaching him how stuff works so it might be a bit slower 
 
-# Week2
-
-beanie man : we have a functioning kernel now with a semi proper process system (non standard will make it standard). a shell with basic commands. a proper graphical non vesa framebuffer (yes this is VERY distinct).
-and the biggest task of this week. the fat32 filesystem + drivers to rw storage
-
-pranjal : chaged the theme of the website, designed a bunny emoticon, continued to write docs.
 
 # Demo
 <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
@@ -36,11 +30,11 @@ The features/things for this operating system that will be implemented are
 - multithreading (not started)
 - interrupts (done)
 - bootloader (done)
-- fs (not started)
+- fs + vfs (done)
 - networking (not started)
 - a website (wip under docs)
-- security switching (switching to ring 3, not strated)
-- syscalls (not started)
+- security switching (done)
+- syscalls (wip)
 - display output (we do get a proper display but standardization is required. wip)
 - memory management (mostly done in the knowledge i know of)
 - asynchrnous execution (done, base step for multithreading)
