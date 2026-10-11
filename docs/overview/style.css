@@ -6,6 +6,8 @@ body{margin: 0;
     font-style: normal;
     font-variation-settings:
         "MONO" 1;
+
+    overflow-x: hidden;
 }
 
 main{
@@ -110,11 +112,28 @@ h3{
 
 #welcome{
     position: absolute;
-    top: 60px;
-    left: 30px;
+    top: 95px;
+    left: 0px;
     height: 1500px;
     width: auto;
 
     pointer-events: none;
     user-select: none;
+
+}
+
+main::selection {
+    background-color: rgb(249, 249, 9);
+}
+
+main::-moz-selection {
+    background-color: rgb(249, 249, 9);
+}
+
+.nav-bar::selection{
+    background-color: rgb(218, 6, 6);
+}
+
+.nav-bar::-moz-selection {
+    background-color: rgb(218, 6, 6);
 }
