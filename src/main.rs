@@ -22,6 +22,7 @@ pub extern "C" fn rust_entry(magic: u32, mbi_addr: u32) -> ! {
         }
     }
 
+
     let mbi_total_size = unsafe { (mbi_addr as *const u32).read() as usize };
 
     let boot_info = unsafe {
@@ -39,7 +40,7 @@ pub extern "C" fn rust_entry(magic: u32, mbi_addr: u32) -> ! {
 
 fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -> ! {
     init(&boot_info, mbi_addr, mbi_size);
-
+    kinfo!("Kernel initialized successfully");
     loop {
         x86_64::instructions::hlt();
     }

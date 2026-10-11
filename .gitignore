@@ -9,8 +9,5 @@ blog/
 scripts
 .vscode 
 
-/OVMF_CODE.4m.fd
-/OVMF_VARS.4m.fd
-
 __pycache__/
 *.pyc

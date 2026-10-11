@@ -3,11 +3,12 @@ KERNEL := target/x86_64/release/beanieos
 BOOT_OBJ := target/boot.o
 
 LIMINE := limine
-OVMF_CODE := OVMF_CODE.4m.fd
-OVMF_VARS := out/OVMF_VARS.fd
-
 OUT := out
 DISK := $(OUT)/beanieos.img
+
+OVMF_CODE := OVMF_CODE.4m.fd
+OVMF_VARS_TEMPLATE := OVMF_VARS.4m.fd
+OVMF_VARS := $(OUT)/OVMF_VARS.fd
 
 ESP_OFFSET := 1048576
 KERNEL_OFFSET := 33554432
@@ -56,9 +57,9 @@ $(DISK): kernel
 
 disk: $(DISK)
 
-$(OVMF_VARS): $(OVMF_CODE)
+$(OVMF_VARS): $(OVMF_VARS_TEMPLATE)
 	@mkdir -p $(OUT)
-	cp $(OVMF_CODE) $(OVMF_VARS)
+	cp $(OVMF_VARS_TEMPLATE) $@
 
 run: $(DISK) $(OVMF_VARS)
 	qemu-system-x86_64 \
