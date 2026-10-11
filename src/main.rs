@@ -53,10 +53,29 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
 
     x86_64::instructions::interrupts::enable();
 
+    let disks = storage::ahci::find_disks();
+
+    for disk in disks.iter() {
+        kinfo!(
+            "disk on port {}: {} {} ({} sectors)",
+            disk.port(),
+            disk.model(),
+            disk.serial(),
+            disk.sectors()
+        );
+    }
+
     task::process::init();
     task::scheduler::init();
 
     let init = task::process::create("init", "/");
+
+    task::scheduler::spawn_in_process(
+        init,
+        "storage",
+        storage_task,
+        task::identity::Priority::Normal,
+    );
 
     task::scheduler::spawn_in_process(
         init,
@@ -77,6 +96,85 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     loop {
         task::scheduler::yield_now();
         x86_64::instructions::hlt();
+    }
+}
+
+extern "C" fn storage_task() {
+    let mut disks = storage::ahci::find_disks();
+
+    let Some(disk) = disks.first_mut() else {
+        kerror!("storage: no disk attached");
+        loop {
+            task::scheduler::yield_now();
+        }
+    };
+
+    let partitions = disk.partitions();
+
+    for (index, partition) in partitions.iter().enumerate() {
+        kinfo!(
+            "  partition {index}: lba {} ({} sectors)",
+            partition.first_lba(),
+            partition.sectors()
+        );
+    }
+
+    let Some(partition) = partitions.get(1) else {
+        kerror!("storage: disk has no second partition");
+        loop {
+            task::scheduler::yield_now();
+        }
+    };
+
+    let (lba, sectors) = (partition.first_lba(), partition.sectors());
+
+    let fat32 = match storage::fs::fat32::Fat32::mount(
+        storage::ahci::disk::partition::Partition::new(*disk, lba, sectors),
+    ) {
+        Ok(fat32) => fat32,
+        Err(why) => {
+            kerror!("FAT32 mount failed: {why}");
+            loop {
+                task::scheduler::yield_now();
+            }
+        }
+    };
+
+    kinfo!("FAT32 mounted at LBA {lba}");
+
+    let opened = task::process::with_current_fds(|fds| {
+        fds.mount(fat32.clone());
+        fds.open_read(b"/TEST.TXT")
+    });
+
+    match opened {
+        Some(Ok(fd)) => {
+            kinfo!("opened /TEST.TXT as fd {fd}");
+
+            let mut buf = [0u8; 256];
+
+            let read = task::process::with_current_fds(|fds| fds.read(fd, &mut buf));
+
+            match read {
+                Some(Ok(n)) => {
+                    kinfo!("/TEST.TXT: {n} bytes");
+
+                    for &byte in &buf[..n] {
+                        print!("{}", byte as char);
+                    }
+
+                    print!("\n");
+                }
+                Some(Err(why)) => kerror!("/TEST.TXT read: {why}"),
+                None => kerror!("no current process"),
+            }
+        }
+        Some(Err(why)) => kerror!("/TEST.TXT: {why}"),
+        None => kerror!("no current process to mount into"),
+    }
+
+    loop {
+        task::scheduler::yield_now();
     }
 }
 

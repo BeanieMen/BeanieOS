@@ -92,6 +92,20 @@ impl Disk {
             return Err("engines did not start");
         }
 
+        // PxSIG only becomes meaningful once FIS receive is running, which is
+        // what the CMD write above just enabled. An ATAPI device answers
+        // IDENTIFY with an abort, so the signature is the only way to tell a
+        // disk from the optical drive sitting on the next port.
+        let signature = reg(base, PX_SIG);
+
+        if signature == SATA_SIGNATURE_CDROM {
+            return Err("port carries an ATAPI device, not a disk");
+        }
+
+        if signature != SATA_SIGNATURE_DISK {
+            return Err("port does not identify as an ATA disk");
+        }
+
         let mut disk = Disk {
             dma,
             abar,

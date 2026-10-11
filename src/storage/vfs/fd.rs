@@ -1,7 +1,5 @@
 use alloc::{sync::Arc, vec::Vec};
 
-use spin::Mutex;
-
 use super::file::{File, OpenFlags};
 use super::inode::FileType;
 use super::mount::{FileSystem, MountTable};

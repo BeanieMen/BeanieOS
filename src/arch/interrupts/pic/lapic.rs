@@ -46,7 +46,7 @@ pub(super) unsafe fn init() {
         value | LAPIC_SVR_ENABLE | (SPURIOUS_VECTOR as u32) << 12,
     );
 
-    crate::kinfo!("lapic id {}", id());
+    crate::kinfo!("lapic id {}", unsafe { id() });
     crate::kinfo!("lapic base {:#x}", lapic_base());
 }
 

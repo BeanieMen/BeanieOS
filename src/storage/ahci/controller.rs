@@ -4,7 +4,7 @@ use super::disk::disk::Disk;
 use super::regs::*;
 use crate::hal::dma::{AHCI_DMA, AhciDma};
 use crate::hal::pci::Device;
-use crate::{kdebug, kinfo};
+use crate::{kinfo, kwarn};
 
 /// the spec allows 1 ms for GHC.HR to set, the emulator is slower.
 const HR_SET_MS: u64 = 1_000;
@@ -78,7 +78,7 @@ impl AhciController {
 
             match Disk::attach(self.dma, self.abar, port) {
                 Ok(disk) => disks.push(disk),
-                Err(why) => kdebug!("  port {port}: {why}"),
+                Err(why) => kwarn!("  port {port}: {why}"),
             }
         }
 

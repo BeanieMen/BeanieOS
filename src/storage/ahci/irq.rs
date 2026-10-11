@@ -67,7 +67,19 @@ pub(crate) fn wait(base: usize) -> Result<(), &'static str> {
         interrupts::enable();
     }
 
-    while !DONE.load(Ordering::Acquire) {
+    loop {
+        // PxCI bit 0 is the spec's own completion condition: the HBA clears it
+        // when it retires the slot, whether or not an interrupt was raised.
+        // Polling it is what makes this work at all, because nothing on this
+        // platform routes the device's INTx to a GSI we can see.
+        if reg(base, PX_CI) & 1 == 0 {
+            break;
+        }
+
+        if DONE.load(Ordering::Acquire) {
+            break;
+        }
+
         if ticks() >= deadline {
             let is = reg(base, PX_IS);
             let ci = reg(base, PX_CI);

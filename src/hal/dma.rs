@@ -21,10 +21,13 @@ impl Default for Dma {
     }
 }
 
-/// Command list: 32 entries of 4 bytes, one per port.
+/// Command list: 32 entries of 4 bytes, one per port. AHCI wants the list
+/// itself to be 1024 bytes even though 32 entries is only 128, so the spare
+/// space is kept rather than relying on whatever follows in .bss.
 const CLB_ENTRIES: usize = 32;
 const CLB_ENTRY_SIZE: usize = 4;
-const CLB_SIZE: usize = CLB_ENTRIES * CLB_ENTRY_SIZE;
+const CLB_USED: usize = CLB_ENTRIES * CLB_ENTRY_SIZE;
+const CLB_SIZE: usize = 1024;
 
 /// Where the region descriptor table starts in a command table.
 pub(crate) const CMD_TBL_HDR: usize = 0x80;
@@ -82,7 +85,7 @@ impl AhciDma {
 
     pub(crate) fn clear(&self) {
         for (buffer, size) in [
-            (self.command_list.get() as *mut u8, CLB_SIZE),
+            (self.command_list.get() as *mut u8, CLB_USED),
             (self.command_table.get() as *mut u8, CMD_TBL_HDR + 16),
             (self.receive_area.get() as *mut u8, FB_SIZE),
         ] {

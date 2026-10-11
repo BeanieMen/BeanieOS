@@ -21,6 +21,7 @@ pub(crate) const PX_IS: usize = 0x10;
 pub(crate) const PX_IE: usize = 0x14;
 pub(crate) const PX_CMD: usize = 0x18;
 pub(crate) const PX_TFD: usize = 0x20;
+pub(crate) const PX_SIG: usize = 0x24;
 pub(crate) const PX_SSTS: usize = 0x28;
 pub(crate) const PX_SERR: usize = 0x30;
 pub(crate) const PX_CI: usize = 0x38;
@@ -39,30 +40,57 @@ pub(crate) const TFD_ERR: u32 = 1 << 0;
 pub(crate) const SSTS_DET_MASK: u32 = 0x0f;
 pub(crate) const SSTS_DET_PHY_UP: u32 = 0x3;
 
-const IS_ERR: u32 = 1 << 0;
-const IS_HOST_BUS_DATA_ERROR: u32 = 1 << 1;
-const IS_COMMAND_COMPLETE: u32 = 1 << 8;
-const IS_INTERFACE_ERROR: u32 = 1 << 24;
-const IS_HOST_BUS_FATAL_ERROR: u32 = 1 << 25;
-const IS_HBA_FATAL_ERROR: u32 = 1 << 26;
-const IS_SYSTEM_CONTROL_ERROR: u32 = 1 << 27;
-const IS_DIAGNOSTIC: u32 = 1 << 28;
+const IS_D2H_REG_FIS: u32 = 1 << 0;
+const IS_PIO_SETUP_FIS: u32 = 1 << 1;
+const IS_DMA_SETUP_FIS: u32 = 1 << 2;
+const IS_SET_DEVICE_BITS_FIS: u32 = 1 << 3;
+const IS_UNKNOWN_FIS: u32 = 1 << 4;
+const IS_SG_DONE: u32 = 1 << 5;
+const IS_PORT_CONNECT_CHANGE: u32 = 1 << 6;
+const IS_PHYRDY_CHANGE: u32 = 1 << 22;
+const IS_BAD_PMP: u32 = 1 << 23;
+const IS_OVERFLOW: u32 = 1 << 24;
+const IS_INTERFACE_NONFATAL: u32 = 1 << 26;
+const IS_INTERFACE_FATAL: u32 = 1 << 27;
+const IS_HOST_BUS_DATA_ERROR: u32 = 1 << 28;
+const IS_HOST_BUS_FATAL_ERROR: u32 = 1 << 29;
+const IS_TASK_FILE_ERROR: u32 = 1 << 30;
 
-const IS_EMULATOR_FATAL: u32 = (1 << 30) | (1 << 31);
-
-pub(crate) const COMMAND_BITS: u32 = IS_ERR
-    | IS_HOST_BUS_DATA_ERROR
-    | IS_COMMAND_COMPLETE
-    | IS_INTERFACE_ERROR
+/// What PxIE is armed with: the errors plus everything that means progress.
+pub(crate) const COMMAND_BITS: u32 = IS_TASK_FILE_ERROR
     | IS_HOST_BUS_FATAL_ERROR
-    | IS_HBA_FATAL_ERROR
-    | IS_SYSTEM_CONTROL_ERROR
-    | IS_DIAGNOSTIC
-    | IS_EMULATOR_FATAL;
+    | IS_HOST_BUS_DATA_ERROR
+    | IS_INTERFACE_FATAL
+    | IS_INTERFACE_NONFATAL
+    | IS_OVERFLOW
+    | IS_BAD_PMP
+    | IS_PHYRDY_CHANGE
+    | IS_PORT_CONNECT_CHANGE
+    | IS_SG_DONE
+    | IS_UNKNOWN_FIS
+    | IS_SET_DEVICE_BITS_FIS
+    | IS_DMA_SETUP_FIS
+    | IS_PIO_SETUP_FIS
+    | IS_D2H_REG_FIS;
 
-pub(crate) const ERROR_BITS: u32 = COMMAND_BITS & !IS_COMMAND_COMPLETE;
+/// What counts as a failed command. D2H and PIO Setup are how a *successful*
+/// command reports back, so leaving them out is what separates the two.
+pub(crate) const ERROR_BITS: u32 = IS_TASK_FILE_ERROR
+    | IS_HOST_BUS_FATAL_ERROR
+    | IS_HOST_BUS_DATA_ERROR
+    | IS_INTERFACE_FATAL
+    | IS_INTERFACE_NONFATAL
+    | IS_OVERFLOW
+    | IS_BAD_PMP
+    | IS_PHYRDY_CHANGE
+    | IS_PORT_CONNECT_CHANGE
+    | IS_UNKNOWN_FIS;
 
 pub(crate) const SECTOR: u64 = 512;
+
+/// PxSIG after reset: 0x00000101 for an ATA disk, 0xeb140101 for ATAPI.
+pub(crate) const SATA_SIGNATURE_DISK: u32 = 0x0000_0101;
+pub(crate) const SATA_SIGNATURE_CDROM: u32 = 0xeb14_0101;
 
 pub(crate) const ATA_IDENTIFY: u8 = 0xEC;
 pub(crate) const ATA_READ_DMA_EXT: u8 = 0x25;

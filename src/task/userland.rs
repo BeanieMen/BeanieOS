@@ -1,13 +1,13 @@
 use core::arch::naked_asm;
 
 use x86_64::PhysAddr;
-use x86_64::structures::paging::{FrameAllocator, PageTableFlags, PhysFrame};
+use x86_64::structures::paging::{PageTableFlags, PhysFrame};
 
 use crate::arch::gdt::{user_code_selector, user_data_selector};
 use crate::memory::allocator::alloc_frame;
 use crate::memory::mmu::AddressSpace;
 pub(crate) use crate::memory::mmu::{USER_BASE, USER_DATA, USER_STACK_TOP};
-use crate::paging::{PAGE_SIZE, align_down, align_up, phys_to_direct};
+use crate::paging::{PAGE_SIZE, align_down, phys_to_direct};
 
 const USER_CODE: &[u8] = &[
     0xb8, 0x08, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xb8, 0x00, 0x00, 0x00, 0x00, 0xcd, 0x80, 0xeb, 0xfe,
