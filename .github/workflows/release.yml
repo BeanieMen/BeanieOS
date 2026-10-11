@@ -1,0 +1,54 @@
+name: BeanieOS Release
+run-name: "BeanieOS Build - ${{ github.ref_type == 'tag' && github.ref_name || format('Development #{0}', github.run_number) }}"
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install Rust components
+        run: rustup component add llvm-tools-preview rust-src --toolchain nightly
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential llvm dosfstools mtools parted
+
+      - name: Build BeanieOS disk image
+        run: make
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="$GITHUB_REF_NAME"
+            gh release create "$VERSION" \
+              out/beanieos.img \
+              --title "BeanieOS $VERSION" \
+              --target "$GITHUB_SHA" \
+              --notes "Stable BeanieOS release $VERSION from commit ${GITHUB_SHA}"
+          else
+            VERSION="v0.1.0-dev.${GITHUB_RUN_NUMBER}"
+            gh release create "$VERSION" \
+              out/beanieos.img \
+              --title "BeanieOS $VERSION" \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --notes "Automated development build from commit ${GITHUB_SHA}"
+          fi
