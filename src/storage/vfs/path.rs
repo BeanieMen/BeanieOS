@@ -67,7 +67,11 @@ impl Path {
 
             let name = String::from_utf8_lossy(component).into_owned();
 
-            current = Arc::new(Mutex::new(Dentry::new(name, child, Some(current.clone()))));
+            let dentry = Arc::new(Mutex::new(Dentry::new(name, child.clone(), Some(current.clone()))));
+
+            child.lock().dentry = Some(dentry.clone());
+
+            current = dentry;
         }
 
         Ok(Self::new(current))

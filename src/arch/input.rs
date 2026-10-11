@@ -1,6 +1,9 @@
+use alloc::vec::Vec;
+
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::arch::lock::InterruptMutex;
+use crate::task::identity::ThreadId;
 
 const CAPACITY: usize = 256;
 
@@ -49,6 +52,8 @@ impl Ring {
 
 static PENDING: InterruptMutex<Ring> = InterruptMutex::new(Ring::new());
 
+static WAITERS: InterruptMutex<Vec<ThreadId>> = InterruptMutex::new(Vec::new());
+
 pub(crate) fn push_key(key: char) {
     let dropped = {
         let mut ring = PENDING.lock();
@@ -58,6 +63,26 @@ pub(crate) fn push_key(key: char) {
 
     if dropped > 0 {
         DROPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+
+    wake_one();
+}
+
+
+pub(crate) fn add_waiter(id: ThreadId) {
+    WAITERS.lock().push(id);
+}
+
+pub(crate) fn remove_waiter(id: ThreadId) {
+    WAITERS.lock().retain(|waiter| *waiter != id);
+}
+
+fn wake_one() {
+    let waiter = { WAITERS.lock().pop() };
+
+    if let Some(id) = waiter {
+        crate::task::scheduler::wake(id);
     }
 }
 

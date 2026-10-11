@@ -22,9 +22,11 @@ pub(crate) const LAPIC_TIMER_PERIODIC: u32 = 1 << 17;
 pub(crate) const LAPIC_TIMER_DIVIDE_16: u32 = 0b0011;
 
 pub(crate) const PS2_DATA_PORT: u16 = 0x60;
+pub(crate) const PS2_STATUS_PORT: u16 = 0x64;
 
 pub(crate) const LEGACY_PIC0_MASK: u16 = 0x21;
 pub(crate) const LEGACY_PIC1_MASK: u16 = 0xA1;
+pub(crate) const LEGACY_PIC0_COMMAND: u16 = 0x20;
 
 const _: () = assert!(LAPIC_TIMER_VECTOR >= 32);
 const _: () = assert!(KEYBOARD_VECTOR >= 32);

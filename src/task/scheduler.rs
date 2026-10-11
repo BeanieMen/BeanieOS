@@ -225,24 +225,27 @@ impl Scheduler {
     }
 
     fn activate(&mut self, next_id: ThreadId, previous_id: ThreadId) -> Option<ContextSwitch> {
-        let previous_slot = {
+        let (previous_slot, prev_pid) = {
             let previous = self.threads.get(&previous_id)?;
-            previous.lock().rsp_slot()
+            let prev = previous.lock();
+            (prev.rsp_slot(), prev.pid)
         };
 
-        let next_rsp = {
+        let (next_rsp, next_pid) = {
             let next = self.threads.get(&next_id)?;
             let mut next = next.lock();
-
             next.begin_running();
-
-            next.saved_rsp()
+            (next.saved_rsp(), next.pid)
         };
 
         self.current = next_id;
         self.requeue(previous_id);
-
         self.publish_current();
+
+        // Switch address space if switching to a different process
+        if next_pid != prev_pid {
+            crate::task::process::activate_space(next_pid);
+        }
 
         (next_rsp != 0).then_some(ContextSwitch {
             previous_slot,
@@ -305,6 +308,32 @@ impl Scheduler {
         self.ready_queues
             .iter_mut()
             .find_map(|queue| queue.pop_front())
+    }
+
+    fn block_current(&mut self) -> Option<ContextSwitch> {
+        if let Some(current) = self.threads.get(&self.current) {
+            let mut thread = current.lock();
+
+            thread.state = ThreadState::Blocked;
+        }
+
+        self.switch_to_any()
+    }
+
+    fn wake(&mut self, id: ThreadId) {
+        let Some(thread) = self.threads.get(&id) else {
+            return;
+        };
+
+        let mut thread = thread.lock();
+
+        if thread.state != ThreadState::Blocked {
+            return;
+        }
+
+        thread.state = ThreadState::Ready;
+
+        self.ready_queues[thread.priority.index()].push_back(id);
     }
 
     fn requeue(&mut self, id: ThreadId) {
@@ -372,6 +401,20 @@ pub(crate) fn yield_now() {
     let switch = SCHEDULER.lock().yield_to();
 
     apply(switch);
+}
+
+pub(crate) fn block_current() -> bool {
+    let switch = SCHEDULER.lock().block_current();
+
+    let switched = switch.is_some();
+
+    apply(switch);
+
+    switched
+}
+
+pub(crate) fn wake(id: ThreadId) {
+    SCHEDULER.lock().wake(id);
 }
 
 pub(crate) fn sleep(duration_ticks: u64) {

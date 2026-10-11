@@ -6,7 +6,7 @@ use spin::Mutex;
 
 use crate::storage::ahci::disk::block::BlockDevice;
 use crate::storage::vfs::dentry::Dentry;
-use crate::storage::vfs::inode::{FileOperations, FileType, Inode, InodeOperations};
+use crate::storage::vfs::inode::{FileOperations, FileType, Inode, InodeOperations, RawEntry};
 
 pub(crate) const SECTOR: usize = 512;
 pub(crate) const SECTORS: usize = 4096;
@@ -55,6 +55,10 @@ impl FileOperations for Unsupported {
 
     fn write(&self, _: &mut Inode, _: u64, _: &[u8]) -> Result<usize, &'static str> {
         Err("no write on the memory device")
+    }
+
+    fn readdir(&self, _: &Inode, _: u64) -> Result<Option<RawEntry>, &'static str> {
+        Err("no readdir on the memory device")
     }
 }
 

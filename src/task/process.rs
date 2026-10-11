@@ -278,7 +278,7 @@ pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
     }
 }
 
-fn activate_space(pid: ProcessId) {
+pub(crate) fn activate_space(pid: ProcessId) {
     let root = PROCESS_MANAGER
         .lock()
         .get(pid)

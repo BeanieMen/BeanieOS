@@ -31,4 +31,5 @@ syscalls! {
     Getpid = 8,
     Unlink = 9,
     Rmdir = 10,
+    Create = 11,
 }

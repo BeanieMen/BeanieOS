@@ -1,4 +1,4 @@
-use crate::storage::vfs::inode::{FileOperations, Inode, InodeOperations};
+use crate::storage::vfs::inode::{FileOperations, Inode, InodeOperations, RawEntry};
 use crate::storage::vfs::mount::FileSystem;
 use alloc::format;
 use alloc::string::ToString;
@@ -7,7 +7,7 @@ use alloc::{boxed::Box, string::String};
 use spin::Mutex;
 
 use crate::{
-    kerror,
+
     storage::{
         ahci::disk::block::BlockDevice,
         vfs::{dentry::Dentry, inode::FileType},
@@ -39,6 +39,21 @@ fn read_sector<D: BlockDevice>(
     }
 
     device.lock().read_block(lba, &mut out[..len])
+}
+
+fn write_sector<D: BlockDevice>(
+    device: &Arc<Mutex<D>>,
+    lba: u64,
+    bytes_per_sector: u16,
+    data: &[u8],
+) -> Result<(), &'static str> {
+    let len = bytes_per_sector as usize;
+
+    if data.len() != len {
+        return Err("write must cover exactly one sector");
+    }
+
+    device.lock().write_block(lba, data)
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +109,81 @@ impl Geometry {
         } else {
             Ok(Some(value))
         }
+    }
+
+    fn set_fat_entry<D: BlockDevice>(
+        &self,
+        device: &Arc<Mutex<D>>,
+        cluster: u32,
+        value: u32,
+    ) -> Result<(), &'static str> {
+        let fat_offset = cluster as u64 * 4;
+
+        let fat_sector = self.reserved_sectors as u64 + fat_offset / self.bytes_per_sector as u64;
+
+        let entry_offset = (fat_offset % self.bytes_per_sector as u64) as usize;
+
+        if entry_offset + 4 > self.bytes_per_sector as usize {
+            return Err("invalid FAT entry");
+        }
+
+        let mut sector = [0u8; MAX_SECTOR];
+
+        read_sector(device, fat_sector, self.bytes_per_sector, &mut sector)?;
+
+        let bytes = (value & FAT_ENTRY_MASK as u32).to_le_bytes();
+
+        sector[entry_offset..entry_offset + 4].copy_from_slice(&bytes);
+
+        let len = self.bytes_per_sector as usize;
+
+        write_sector(device, fat_sector, self.bytes_per_sector, &sector[..len])
+    }
+
+    fn allocate_cluster<D: BlockDevice>(
+        &self,
+        device: &Arc<Mutex<D>>,
+    ) -> Result<u32, &'static str> {
+        let mut sector = [0u8; MAX_SECTOR];
+
+        for index in 0..self.sectors_per_fat as u64 {
+            read_sector(device, self.reserved_sectors as u64 + index, self.bytes_per_sector, &mut sector)?;
+
+            let len = self.bytes_per_sector as usize;
+
+            for offset in (0..len).step_by(4) {
+                let value = u32::from_le_bytes([
+                    sector[offset],
+                    sector[offset + 1],
+                    sector[offset + 2],
+                    sector[offset + 3],
+                ]);
+
+                if value & FAT_ENTRY_MASK as u32 != 0 {
+                    continue;
+                }
+
+                let cluster = (index * len as u64 / 4 + offset as u64 / 4) as u32;
+
+                if cluster < FIRST_DATA_CLUSTER {
+                    continue;
+                }
+
+                self.set_fat_entry(device, cluster, 0x0FFF_FFFF)?;
+
+                return Ok(cluster);
+            }
+        }
+
+        Err("no free cluster")
+    }
+
+    fn free_cluster<D: BlockDevice>(
+        &self,
+        device: &Arc<Mutex<D>>,
+        cluster: u32,
+    ) -> Result<(), &'static str> {
+        self.set_fat_entry(device, cluster, 0)
     }
 }
 
@@ -224,6 +314,14 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
             return false;
         }
 
+        if name == b"." {
+            return entry[0] == b'.' && entry[1] == b' ';
+        }
+
+        if name == b".." {
+            return entry[0] == b'.' && entry[1] == b'.';
+        }
+
         let mut target = [b' '; 11];
 
         let mut parts = name.splitn(2, |b| *b == b'.');
@@ -280,12 +378,275 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                     if Self::short_name_matches(&entry, name) {
                         return Ok(entry);
                     }
+
                 }
             }
 
             match self.geom.next_cluster(&self.device, cluster)? {
                 Some(next) => cluster = next,
                 None => return Err("file not found"),
+            }
+        }
+    }
+
+    /// Walks a directory, returning the entry at `index`.
+    ///
+    /// `index` counts directory slots, not bytes, so a caller can keep it as a
+    /// cookie and resume where it stopped.
+    fn entry_at(&self, start_cluster: u32, index: u64) -> Result<Option<RawEntry>, &'static str> {
+        let mut cluster = start_cluster;
+        let mut seen = 0u64;
+
+        loop {
+            let first_sector = self.geom.cluster_sector(cluster);
+
+            for sector_index in 0..self.geom.sectors_per_cluster {
+                let mut sector = [0u8; MAX_SECTOR];
+
+                read_sector(
+                    &self.device,
+                    first_sector + sector_index as u64,
+                    self.geom.bytes_per_sector,
+                    &mut sector,
+                )?;
+
+                for offset in (0..self.geom.bytes_per_sector as usize).step_by(32) {
+                    let mut entry = [0u8; 32];
+                    entry.copy_from_slice(&sector[offset..offset + 32]);
+
+                    if entry[0] == 0x00 {
+                        return Ok(None);
+                    }
+
+                    let slot = seen;
+                    seen += 1;
+
+                    if slot != index {
+                        continue;
+                    }
+
+                    if entry[0] == 0xE5 || entry[11] == 0x0F || entry[11] & 0x08 != 0 {
+                        return self.entry_at(start_cluster, index + 1);
+                    }
+
+                    let mut name = [b' '; 11];
+                    name.copy_from_slice(&entry[..11]);
+
+                    let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+                    let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
+
+                    let file_type = if entry[11] & 0x10 != 0 {
+                        FileType::Directory
+                    } else {
+                        FileType::Regular
+                    };
+
+                    return Ok(Some(RawEntry {
+                        inode: (((high << 16) | low) as u64) | ((slot as u64) << 32),
+                        file_type,
+                        size: u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]),
+                        name,
+                    }));
+                }
+            }
+
+            match self.geom.next_cluster(&self.device, cluster)? {
+                Some(next) => cluster = next,
+                None => return Ok(None),
+            }
+        }
+    }
+
+    /// Finds a free directory slot, reusing one marked deleted.
+    fn free_slot(&self, start_cluster: u32) -> Result<(u64, usize), &'static str> {
+        let mut cluster = start_cluster;
+
+        loop {
+            let first_sector = self.geom.cluster_sector(cluster);
+
+            for sector_index in 0..self.geom.sectors_per_cluster {
+                let sector_number = first_sector + sector_index as u64;
+
+                let mut sector = [0u8; MAX_SECTOR];
+
+                read_sector(
+                    &self.device,
+                    sector_number,
+                    self.geom.bytes_per_sector,
+                    &mut sector,
+                )?;
+
+                let len = self.geom.bytes_per_sector as usize;
+
+                for offset in (0..len).step_by(32) {
+                    let first = sector[offset];
+
+                    if first == 0x00 || first == 0xE5 {
+                        return Ok((sector_number, offset));
+                    }
+                }
+            }
+
+            match self.geom.next_cluster(&self.device, cluster)? {
+                Some(next) => cluster = next,
+                None => return Err("directory is full"),
+            }
+        }
+    }
+
+    fn directory_entry(name: &[u8], cluster: u32, file_type: FileType) -> Result<[u8; 32], &'static str> {
+        if name.is_empty() || name.len() > 12 {
+            return Err("bad name for FAT32");
+        }
+
+        let mut entry = [b' '; 32];
+
+        let (base, ext) = match name.iter().position(|b| *b == b'.') {
+            Some(dot) => (&name[..dot], &name[dot + 1..]),
+            None => (name, &name[0..0]),
+        };
+
+        if base.is_empty() || base.len() > 8 || ext.len() > 3 {
+            return Err("bad name for FAT32");
+        }
+
+        for (i, byte) in base.iter().enumerate() {
+            entry[i] = byte.to_ascii_uppercase();
+        }
+
+        entry[8] = b' ';
+
+        for (i, byte) in ext.iter().enumerate() {
+            entry[9 + i] = byte.to_ascii_uppercase();
+        }
+
+        entry[11] = if file_type == FileType::Directory {
+            0x10
+        } else {
+            0x20
+        };
+
+        entry[20..22].copy_from_slice(&((cluster >> 16) as u16).to_le_bytes());
+        entry[26..28].copy_from_slice(&(cluster as u16).to_le_bytes());
+        entry[28..32].copy_from_slice(&0u32.to_le_bytes());
+
+        Ok(entry)
+    }
+
+    /// Builds the `.` and `..` pair a new directory starts with.
+    ///
+    /// These two names are not valid 8.3 components, so they are laid down as
+    /// raw name bytes instead of going through `directory_entry`.
+    fn self_entries(
+        parent_cluster: u32,
+        self_cluster: u32,
+        file_type: FileType,
+    ) -> Result<([u8; 32], [u8; 32]), &'static str> {
+        let attr = if file_type == FileType::Directory {
+            0x10u8
+        } else {
+            0x20u8
+        };
+
+        let mut me = [b' '; 32];
+        me[0] = b'.';
+        me[11] = attr;
+        me[20..22].copy_from_slice(&((self_cluster >> 16) as u16).to_le_bytes());
+        me[26..28].copy_from_slice(&(self_cluster as u16).to_le_bytes());
+        me[28..32].copy_from_slice(&0u32.to_le_bytes());
+
+        let mut up = [b' '; 32];
+        up[0] = b'.';
+        up[1] = b'.';
+        up[11] = attr;
+        up[20..22].copy_from_slice(&((parent_cluster >> 16) as u16).to_le_bytes());
+        up[26..28].copy_from_slice(&(parent_cluster as u16).to_le_bytes());
+        up[28..32].copy_from_slice(&0u32.to_le_bytes());
+
+        Ok((me, up))
+    }
+
+    fn is_empty_dir(
+        device: &Arc<Mutex<D>>,
+        geom: Geometry,
+        cluster: u32,
+    ) -> Result<bool, &'static str> {
+        let mut cluster = cluster;
+
+        loop {
+            let first_sector = geom.cluster_sector(cluster);
+
+            for sector_index in 0..geom.sectors_per_cluster {
+                let mut sector = [0u8; MAX_SECTOR];
+
+                read_sector(
+                    device,
+                    first_sector + sector_index as u64,
+                    geom.bytes_per_sector,
+                    &mut sector,
+                )?;
+
+                for offset in (0..geom.bytes_per_sector as usize).step_by(32) {
+                    let byte = sector[offset];
+
+                    if byte == 0x00 {
+                        return Ok(true);
+                    }
+
+                    if byte == 0xE5 || sector[offset + 11] == 0x0F {
+                        continue;
+                    }
+
+                    if byte == b'.' && (sector[offset + 1] == b' ' || sector[offset + 1] == b'.') {
+                        continue;
+                    }
+
+                    return Ok(false);
+                }
+            }
+
+            match geom.next_cluster(device, cluster)? {
+                Some(next) => cluster = next,
+                None => return Ok(true),
+            }
+        }
+    }
+
+    /// Marks an entry deleted by setting its first byte to 0xE5.
+    fn mark_deleted(
+        device: &Arc<Mutex<D>>,
+        geom: Geometry,
+        dir_cluster: u32,
+        entry: &mut [u8; 32],
+    ) -> Result<(), &'static str> {
+        let mut cluster = dir_cluster;
+
+        loop {
+            let first_sector = geom.cluster_sector(cluster);
+
+            for sector_index in 0..geom.sectors_per_cluster {
+                let sector_number = first_sector + sector_index as u64;
+
+                let mut sector = [0u8; MAX_SECTOR];
+
+                read_sector(device, sector_number, geom.bytes_per_sector, &mut sector)?;
+
+                let len = geom.bytes_per_sector as usize;
+
+                for offset in (0..len).step_by(32) {
+                    if sector[offset..offset + 32] == *entry {
+                        sector[offset] = 0xE5;
+                        write_sector(device, sector_number, geom.bytes_per_sector, &sector[..len])?;
+                        entry[0] = 0xE5;
+
+                        return Ok(());
+                    }
+                }
+            }
+
+            match geom.next_cluster(device, cluster)? {
+                Some(next) => cluster = next,
+                None => return Err("entry vanished"),
             }
         }
     }
@@ -342,27 +703,130 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
     }
     fn create(
         &self,
-        _inode: &mut Inode,
-        _name: &[u8],
-        _file_type: FileType,
+        inode: &mut Inode,
+        name: &[u8],
+        file_type: FileType,
     ) -> Result<Arc<Mutex<Inode>>, &'static str> {
-        kerror!("FAT32: create not implemented");
-        Err("not implemented")
+        if inode.file_type != FileType::Directory {
+            return Err("not a directory");
+        }
+
+        let parent_cluster = inode.cluster;
+
+        let cluster = self.geom.allocate_cluster(&self.device)?;
+
+        if file_type == FileType::Directory {
+            let first_sector = self.geom.cluster_sector(cluster);
+            let len = self.geom.bytes_per_sector as usize;
+
+            let mut sector = [0u8; MAX_SECTOR];
+            sector[len..].fill(0);
+
+            for sector_index in 0..self.geom.sectors_per_cluster {
+                write_sector(
+                    &self.device,
+                    first_sector + sector_index as u64,
+                    self.geom.bytes_per_sector,
+                    &sector[..len],
+                )?;
+            }
+
+            let (me, up) = Self::self_entries(parent_cluster, cluster, file_type)?;
+
+            write_sector(&self.device, first_sector, self.geom.bytes_per_sector, &sector[..len])?;
+
+            Fat32FileOps {
+                device: self.device.clone(),
+                geom: self.geom,
+            }
+            .write_within_sector(first_sector, 0, &me)?;
+
+            Fat32FileOps {
+                device: self.device.clone(),
+                geom: self.geom,
+            }
+            .write_within_sector(first_sector, 32, &up)?;
+        }
+
+        let entry = Self::directory_entry(name, cluster, file_type)?;
+
+        let (sector_number, offset) = self.free_slot(parent_cluster)?;
+
+        Fat32FileOps {
+            device: self.device.clone(),
+            geom: self.geom,
+        }
+        .write_within_sector(sector_number, offset, &entry)?;
+
+        Ok(Arc::new(Mutex::new(Inode {
+            id: cluster as u64,
+            cluster,
+            file_type,
+            size: 0,
+            inode_ops: Box::leak(Box::new(Fat32InodeOps {
+                device: self.device.clone(),
+                geom: self.geom,
+            })),
+            file_ops: Box::leak(Box::new(Fat32FileOps {
+                device: self.device.clone(),
+                geom: self.geom,
+            })),
+            dentry: None,
+        })))
     }
 
-    fn mkdir(&self, _inode: &mut Inode, _name: &[u8]) -> Result<Arc<Mutex<Inode>>, &'static str> {
-        kerror!("FAT32: mkdir not implemented");
-        Err("not implemented")
+    fn mkdir(&self, inode: &mut Inode, name: &[u8]) -> Result<Arc<Mutex<Inode>>, &'static str> {
+        self.create(inode, name, FileType::Directory)
     }
 
-    fn rmdir(&self, _inode: &mut Inode, _name: &[u8]) -> Result<(), &'static str> {
-        kerror!("FAT32: rmdir not implemented");
-        Err("not implemented")
+    fn rmdir(&self, inode: &mut Inode, name: &[u8]) -> Result<(), &'static str> {
+        if inode.file_type != FileType::Directory {
+            return Err("not a directory");
+        }
+
+        let mut entry = self.find_entry(inode.cluster, name)?;
+
+        let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+        let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
+        let cluster = (high << 16) | low;
+
+        if entry[11] & 0x10 == 0 {
+            return Err("not a directory");
+        }
+
+        if !Self::is_empty_dir(&self.device, self.geom, cluster)? {
+            return Err("directory not empty");
+        }
+
+        Self::mark_deleted(&self.device, self.geom, inode.cluster, &mut entry)?;
+
+        self.geom.free_cluster(&self.device, cluster)?;
+
+        Ok(())
     }
 
-    fn unlink(&self, _inode: &mut Inode, _name: &[u8]) -> Result<(), &'static str> {
-        kerror!("FAT32: unlink not implemented");
-        Err("not implemented")
+    fn unlink(&self, inode: &mut Inode, name: &[u8]) -> Result<(), &'static str> {
+        if inode.file_type != FileType::Directory {
+            return Err("not a directory");
+        }
+
+        let mut entry = self.find_entry(inode.cluster, name)?;
+
+        if entry[11] & 0x10 != 0 {
+            return Err("is a directory");
+        }
+
+        let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+        let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
+        let cluster = (high << 16) | low;
+
+        Self::mark_deleted(&self.device, self.geom, inode.cluster, &mut entry)?;
+
+        if cluster >= FIRST_DATA_CLUSTER {
+            self.geom.free_cluster(&self.device, cluster)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -408,7 +872,90 @@ impl<D: BlockDevice> Fat32FileOps<D> {
     }
 }
 
+impl<D: BlockDevice> Fat32FileOps<D> {
+    fn write_within_sector(
+        &self,
+        sector_number: u64,
+        offset_in_sector: usize,
+        data: &[u8],
+    ) -> Result<(), &'static str> {
+        let mut sector = [0u8; MAX_SECTOR];
+
+        read_sector(
+            &self.device,
+            sector_number,
+            self.geom.bytes_per_sector,
+            &mut sector,
+        )?;
+
+        let end = offset_in_sector + data.len();
+
+        if end > self.geom.bytes_per_sector as usize {
+            return Err("write crosses the end of a sector");
+        }
+
+        sector[offset_in_sector..end].copy_from_slice(data);
+
+        let len = self.geom.bytes_per_sector as usize;
+
+        write_sector(
+            &self.device,
+            sector_number,
+            self.geom.bytes_per_sector,
+            &sector[..len],
+        )
+    }
+
+    fn cluster_for_write(
+        &self,
+        inode: &Inode,
+        offset: u64,
+    ) -> Result<u32, &'static str> {
+        let cluster_size =
+            self.geom.bytes_per_sector as u64 * self.geom.sectors_per_cluster as u64;
+
+        let wanted = offset / cluster_size;
+
+        let mut cluster = inode.cluster;
+        let mut index = 0u64;
+
+        loop {
+            if index == wanted {
+                return Ok(cluster);
+            }
+
+            match self.geom.next_cluster(&self.device, cluster)? {
+                Some(next) => {
+                    cluster = next;
+                    index += 1;
+                }
+                None => {
+                    let fresh = self.geom.allocate_cluster(&self.device)?;
+
+                    self.geom
+                        .set_fat_entry(&self.device, cluster, fresh)?;
+
+                    cluster = fresh;
+                    index += 1;
+                }
+            }
+        }
+    }
+}
+
 impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
+    fn readdir(&self, inode: &Inode, offset: u64) -> Result<Option<RawEntry>, &'static str> {
+        if inode.file_type != FileType::Directory {
+            return Err("not a directory");
+        }
+
+        Fat32InodeOps {
+            device: self.device.clone(),
+            geom: self.geom,
+        }
+        .entry_at(inode.cluster, offset)
+    }
+
     fn read(&self, inode: &Inode, offset: u64, buf: &mut [u8]) -> Result<usize, &'static str> {
         if inode.file_type != FileType::Regular {
             return Err("not a regular file");
@@ -468,9 +1015,174 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
         Ok(copied)
     }
 
-    fn write(&self, _inode: &mut Inode, _offset: u64, _buf: &[u8]) -> Result<usize, &'static str> {
-        kerror!("FAT32: write not implemented");
-        Err("not implemented")
+    fn write(&self, inode: &mut Inode, offset: u64, buf: &[u8]) -> Result<usize, &'static str> {
+        if inode.file_type != FileType::Regular {
+            return Err("not a regular file");
+        }
+
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let bytes_per_sector = self.geom.bytes_per_sector as usize;
+        let cluster_size = bytes_per_sector * self.geom.sectors_per_cluster as usize;
+
+        let mut cluster = self.cluster_for_write(inode, offset)?;
+        let mut position = offset as usize;
+        let mut written = 0usize;
+
+        while written < buf.len() {
+            let cluster_offset = position % cluster_size;
+            let count = core::cmp::min(cluster_size - cluster_offset, buf.len() - written);
+
+            let first_sector =
+                self.geom.cluster_sector(cluster) + (cluster_offset / bytes_per_sector) as u64;
+
+            let sector_offset = cluster_offset % bytes_per_sector;
+
+            let mut done = 0usize;
+
+            while done < count {
+                let amount = core::cmp::min(
+                    bytes_per_sector - (sector_offset + done) % bytes_per_sector,
+                    count - done,
+                );
+
+                self.write_within_sector(
+                    first_sector + ((sector_offset + done) / bytes_per_sector) as u64,
+                    (sector_offset + done) % bytes_per_sector,
+                    &buf[written + done..written + done + amount],
+                )?;
+
+                done += amount;
+            }
+
+            written += count;
+            position += count;
+
+            if written < buf.len() && position % cluster_size == 0 {
+                cluster = match self.geom.next_cluster(&self.device, cluster)? {
+                    Some(next) => next,
+                    None => {
+                        let fresh = self.geom.allocate_cluster(&self.device)?;
+
+                        self.geom.set_fat_entry(&self.device, cluster, fresh)?;
+
+                        fresh
+                    }
+                };
+            }
+        }
+
+        let end = offset + buf.len() as u64;
+
+        if end > inode.size {
+            inode.size = end;
+
+            self.write_directory_size(inode)?;
+        }
+
+        Ok(written)
+    }
+}
+
+impl<D: BlockDevice> Fat32FileOps<D> {
+    fn write_directory_size(&self, inode: &Inode) -> Result<(), &'static str> {
+        let Some(dentry) = inode.dentry.as_ref() else {
+            return Ok(());
+        };
+
+        let name = dentry.lock().name.clone();
+
+        let parent = dentry.lock().parent.clone();
+
+        let Some(parent) = parent else {
+            return Ok(());
+        };
+
+        let parent_cluster = {
+            let parent_dentry = parent.lock();
+            let parent_inode = parent_dentry.inode.lock();
+
+            if parent_inode.file_type != FileType::Directory {
+                return Ok(());
+            }
+
+            parent_inode.cluster
+        };
+
+        let name_bytes = name.as_bytes();
+
+        let mut cluster = parent_cluster;
+
+        loop {
+            let first_sector = self.geom.cluster_sector(cluster);
+
+            for sector_index in 0..self.geom.sectors_per_cluster as u64 {
+                let sector_number = first_sector + sector_index;
+
+                let mut sector = [0u8; MAX_SECTOR];
+
+                read_sector(
+                    &self.device,
+                    sector_number,
+                    self.geom.bytes_per_sector,
+                    &mut sector,
+                )?;
+
+                let len = self.geom.bytes_per_sector as usize;
+
+                for offset in (0..len).step_by(32) {
+                    let entry = &sector[offset..offset + 32];
+
+                    if entry[0] == 0x00 {
+                        return Ok(());
+                    }
+
+                    if entry[0] == 0xE5 || entry[11] == 0x0F || entry[11] & 0x08 != 0 {
+                        continue;
+                    }
+
+                    let mut target = [b' '; 11];
+
+                    let mut parts = name_bytes.splitn(2, |b| *b == b'.');
+
+                    let base = parts.next().unwrap_or(&[]);
+                    let ext = parts.next().unwrap_or(&[]);
+
+                    if base.is_empty() || base.len() > 8 || ext.len() > 3 {
+                        continue;
+                    }
+
+                    for (i, byte) in base.iter().enumerate() {
+                        target[i] = byte.to_ascii_uppercase();
+                    }
+
+                    for (i, byte) in ext.iter().enumerate() {
+                        target[8 + i] = byte.to_ascii_uppercase();
+                    }
+
+                    if entry[..11] != target {
+                        continue;
+                    }
+
+                    sector[offset + 28..offset + 32]
+                        .copy_from_slice(&(inode.size as u32).to_le_bytes());
+
+                    return write_sector(
+                        &self.device,
+                        sector_number,
+                        self.geom.bytes_per_sector,
+                        &sector[..len],
+                    );
+                }
+            }
+
+            match self.geom.next_cluster(&self.device, cluster)? {
+                Some(next) => cluster = next,
+                None => return Ok(()),
+            }
+        }
     }
 }
 

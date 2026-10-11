@@ -25,6 +25,32 @@ pub(crate) struct Regs {
     pub rax: u64,
 }
 
+const CPU_FRAME_WORDS: usize = 5;
+
+const REGS_WORDS: usize = core::mem::size_of::<Regs>() / 8;
+
+const ENTRY_BLOCK_WORDS: usize = REGS_WORDS + CPU_FRAME_WORDS;
+
+#[unsafe(no_mangle)]extern "C" fn syscall_entry_prepare(regs: *mut u64) -> usize {
+    let frame = unsafe { regs.add(REGS_WORDS) };
+
+    let code_selector = unsafe { *frame.add(1) };
+
+    if code_selector & 0x3 == 0 {
+        return regs as usize;
+    }
+
+    let Some(stack_top) = crate::task::identity::current_kernel_stack_top() else {
+        return regs as usize;
+    };
+
+    let block = stack_top - ENTRY_BLOCK_WORDS * 8;
+
+    unsafe { core::ptr::copy_nonoverlapping(regs, block as *mut u64, ENTRY_BLOCK_WORDS) };
+
+    block
+}
+
 #[unsafe(naked)]
 pub unsafe extern "C" fn stub() -> ! {
     naked_asm!(
@@ -43,6 +69,9 @@ pub unsafe extern "C" fn stub() -> ! {
         "push r14",
         "push r15",
         "mov rdi, rsp",
+        "call syscall_entry_prepare",
+        "mov rsp, rax",
+        "mov rdi, rsp",
         "call syscall_c",
         "pop r15",
         "pop r14",
@@ -57,11 +86,12 @@ pub unsafe extern "C" fn stub() -> ! {
         "pop rsi",
         "pop rdx",
         "pop rcx",
-        "mov [rsp], rax",
         "add rsp, 8",
+        "mov rax, [rsp - 8]",
         "iretq",
     )
 }
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn syscall_c(regs: *mut Regs) {

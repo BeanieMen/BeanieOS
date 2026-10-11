@@ -4,6 +4,13 @@ use spin::Mutex;
 
 use crate::storage::vfs::inode::{FileType, Inode};
 
+const DT_UNKNOWN: u8 = 0;
+const DT_DIR: u8 = 4;
+const DT_REG: u8 = 8;
+
+/// Header of a directory record: ino, next offset, record length, type.
+const DIRENT_HEADER: usize = 20;
+
 pub(crate) struct OpenFlags {
     pub read: bool,
     pub write: bool,
@@ -13,6 +20,14 @@ pub(crate) struct OpenFlags {
 }
 
 impl OpenFlags {
+    pub(crate) const READ_DIR: Self = Self {
+        read: true,
+        write: false,
+        create: false,
+        truncate: false,
+        append: false,
+    };
+
     pub(crate) const READ: Self = Self {
         read: true,
         write: false,
@@ -51,6 +66,65 @@ impl File {
             offset: 0,
             flags,
         }
+    }
+
+    /// Fills `buf` with `linux_dirent64`-shaped records, one per entry.
+    ///
+    /// The file's offset is the index of the next entry, so a caller that keeps
+    /// reading picks up where the last full buffer ended.
+    pub(crate) fn getdents(&mut self, buf: &mut [u8]) -> Result<usize, &'static str> {
+        if self.inode.lock().file_type != FileType::Directory {
+            return Err("not a directory");
+        }
+
+        let mut written = 0usize;
+
+        loop {
+            let entry = {
+                let inode = self.inode.lock();
+
+                inode.file_ops.readdir(&inode, self.offset)?
+            };
+
+            let Some(entry) = entry else {
+                break;
+            };
+
+            self.offset += 1;
+
+            let name_len = entry.name.iter().position(|b| *b == b' ').unwrap_or(11) + 1;
+
+            let reclen = DIRENT_HEADER + name_len;
+
+            if written + reclen > buf.len() {
+                if written == 0 {
+                    return Err("buffer too small for one entry");
+                }
+
+                break;
+            }
+
+            let d_type = match entry.file_type {
+                FileType::Directory => DT_DIR,
+                FileType::Regular => DT_REG,
+                _ => DT_UNKNOWN,
+            };
+
+            let record = &mut buf[written..written + reclen];
+
+            record[0..8].copy_from_slice(&entry.inode.to_le_bytes());
+            record[8..16].copy_from_slice(&self.offset.to_le_bytes());
+            record[16..18].copy_from_slice(&(reclen as u16).to_le_bytes());
+            record[18] = d_type;
+            record[19] = 0;
+            record[DIRENT_HEADER..DIRENT_HEADER + name_len - 1]
+                .copy_from_slice(&entry.name[..name_len - 1]);
+            record[DIRENT_HEADER + name_len - 1] = 0;
+
+            written += reclen;
+        }
+
+        Ok(written)
     }
 
     pub(crate) fn readable(&self) -> bool {

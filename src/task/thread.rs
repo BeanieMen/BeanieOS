@@ -90,6 +90,12 @@ impl Thread {
         self.state = ThreadState::Running;
         self.timeslice = TIMESLICE_TICKS;
     }
+
+    pub(crate) fn kernel_stack_top(&self) -> Option<usize> {
+        self.stack
+            .as_ref()
+            .map(|stack| stack.as_ptr() as usize + stack.len())
+    }
 }
 
 fn build_initial_frame(sp: usize, entry: extern "C" fn()) {
@@ -114,6 +120,7 @@ fn thread_trampoline_exit() -> ! {
 }
 
 #[unsafe(naked)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn switch_context(old_rsp: *mut usize, new_rsp: usize) {
     naked_asm!(
         "pushfq",

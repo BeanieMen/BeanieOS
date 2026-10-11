@@ -42,8 +42,17 @@ pub(crate) trait InodeOperations: Sync {
     fn rmdir(&self, inode: &mut Inode, name: &[u8]) -> Result<(), &'static str>;
 }
 
+pub(crate) struct RawEntry {
+    pub inode: u64,
+    pub file_type: FileType,
+    pub size: u32,
+    pub name: [u8; 11],
+}
+
 pub(crate) trait FileOperations: Sync {
     fn read(&self, inode: &Inode, offset: u64, buf: &mut [u8]) -> Result<usize, &'static str>;
 
     fn write(&self, inode: &mut Inode, offset: u64, buf: &[u8]) -> Result<usize, &'static str>;
+
+    fn readdir(&self, inode: &Inode, offset: u64) -> Result<Option<RawEntry>, &'static str>;
 }

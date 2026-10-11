@@ -5,6 +5,8 @@ use super::madt;
 const IOAPIC_INDEX_OFFSET: u64 = 0x00;
 const IOAPIC_WINDOW_OFFSET: u64 = 0x10;
 
+const IOAPIC_EOI_REGISTER: u32 = 0x00;
+
 const IOAPIC_ENTRY_STRIDE: u32 = 2;
 
 const IOAPIC_ENTRY_LOW: u32 = 0x10;
@@ -64,6 +66,12 @@ pub(crate) fn mask(gsi: u32) {
 
     unsafe {
         ioapic_write(low, ioapic_read(low) | IOAPIC_ENTRY_MASKED);
+    }
+}
+
+pub(super) unsafe fn send_eoi() {
+    unsafe {
+        ioapic_write(IOAPIC_EOI_REGISTER, 0);
     }
 }
 

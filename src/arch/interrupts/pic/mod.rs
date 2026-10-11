@@ -46,11 +46,16 @@ fn remap_legacy_pic() {
     }
 }
 
-fn disable_legacy_pic() {
+fn mask_legacy_pic() {
     use x86_64::instructions::port::Port;
 
+    const KEYBOARD_IRQ: u8 = 1;
+    const CASCADE_IRQ: u8 = 2;
+
+    let master: u8 = !((1 << KEYBOARD_IRQ) | (1 << CASCADE_IRQ));
+
     unsafe {
-        Port::new(LEGACY_PIC0_MASK).write(0xFFu8);
+        Port::new(LEGACY_PIC0_MASK).write(master);
         Port::new(LEGACY_PIC1_MASK).write(0xFFu8);
     }
 }
@@ -80,11 +85,12 @@ pub(crate) unsafe fn init(acpi_root_addr: usize) {
     }
 
     remap_legacy_pic();
-    disable_legacy_pic();
+    mask_legacy_pic();
 }
 
 pub(crate) unsafe fn eoi() {
     unsafe {
         lapic::send_eoi();
+        ioapic::send_eoi();
     }
 }

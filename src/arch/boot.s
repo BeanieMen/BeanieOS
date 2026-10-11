@@ -25,6 +25,10 @@
 .equ MSR_EFER, 0xC0000080
 .equ EFER_LME, (1 << 8)
 .equ CR4_PAE, (1 << 5)
+.equ CR4_OSFXSR, (1 << 9)
+.equ CR4_OSXMMEXCPT, (1 << 10)
+.equ CR0_MP, (1 << 1)
+.equ CR0_EM, (1 << 2)
 .equ CR0_PG, (1 << 31)
 
 .equ KERNEL_P4_INDEX, 511
@@ -132,6 +136,20 @@ _start:
     mov %cr4, %eax
     or $CR4_PAE, %eax
     mov %eax, %cr4
+
+    # Let SSE reach the hardware. The compiler emits it in user space on its own,
+    # and without these bits every such instruction raises #UD.
+    mov %cr4, %eax
+    or $CR4_OSFXSR, %eax
+    or $CR4_OSXMMEXCPT, %eax
+    mov %eax, %cr4
+
+    mov %cr0, %eax
+    mov $CR0_EM, %edx
+    not %edx
+    and %edx, %eax
+    or $CR0_MP, %eax
+    mov %eax, %cr0
 
     # Enable long mode through EFER.LME.
     mov $MSR_EFER, %ecx

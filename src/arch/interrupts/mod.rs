@@ -40,6 +40,8 @@ pub(crate) fn init_idt(boot_info: &BootInformation<'_>) {
     unsafe {
         pic::init(acpi_root_addr(boot_info));
     }
+
+    crate::arch::keyboard::init();
 }
 
 pub(crate) fn timer_ticks() -> u64 {

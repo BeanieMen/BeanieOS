@@ -53,18 +53,6 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
 
     x86_64::instructions::interrupts::enable();
 
-    let disks = storage::ahci::find_disks();
-
-    for disk in disks.iter() {
-        kinfo!(
-            "disk on port {}: {} {} ({} sectors)",
-            disk.port(),
-            disk.model(),
-            disk.serial(),
-            disk.sectors()
-        );
-    }
-
     task::process::init();
     task::scheduler::init();
 
@@ -183,6 +171,45 @@ extern "C" fn storage_task() {
 
     loop {
         task::scheduler::yield_now();
+
+        let got = task::process::with_current_fds(|fds| {
+            let fd = fds.open_read(b"/OUT.TXT").ok()?;
+
+            let mut buf = [0u8; 2048];
+
+            fds.read(fd, &mut buf).ok().map(|n| (n, buf))
+        });
+
+        let Some(Some((n, buf))) = got else {
+            task::scheduler::sleep(10);
+            continue;
+        };
+
+        if n >= 5 && &buf[..5] == b"RING3" {
+            kinfo!("ring 3 wrote this to the disk through syscalls:");
+
+            for &byte in &buf[..n] {
+                print!("{}", byte as char);
+            }
+
+            print!("\n");
+
+            break;
+        }
+
+        if n >= 1200 {
+            let expected = (0..1200).map(|i| b'A' + (i % 26) as u8).collect::<alloc::vec::Vec<u8>>();
+
+            if buf[..1200] == expected[..] {
+                kinfo!("ring 3 wrote 1200 bytes across the FAT chain; all correct");
+            }
+
+            break;
+        }
+    }
+
+    loop {
+        task::scheduler::yield_now();
     }
 }
 
@@ -208,6 +235,45 @@ extern "C" fn user_task() {
     match task::userland::verify_release() {
         Ok(()) => kinfo!("address space release: no frames leaked"),
         Err(why) => kerror!("address space release: {why}"),
+    }
+
+    let elf_data = task::process::with_current_fds(|fds| {
+        let fd = fds.open_read(b"/INIT").ok()?;
+        let mut buf = alloc::vec![0u8; 65536];
+        let n = fds.read(fd, &mut buf).ok()?;
+        buf.truncate(n);
+        Some(buf)
+    }).flatten();
+
+    if let Some(binary) = elf_data {
+        let mut space = memory::mmu::AddressSpace::new_with_kernel()
+            .expect("could not allocate user address space");
+
+        match task::elf::load_elf(&mut space, &binary) {
+            Ok(loaded) => {
+                task::process::attach_space(task::identity::current_pid(), space.root);
+                kinfo!("loaded /INIT, entering ring 3 at {:#x}", loaded.entry_point);
+                space.activate();
+
+                let ss = u64::from(arch::gdt::user_data_selector().0) | 0x3;
+                let cs = u64::from(arch::gdt::user_code_selector().0) | 0x3;
+
+                unsafe {
+                    task::userland::enter_userland(
+                        loaded.entry_point,
+                        loaded.user_stack_top,
+                        0x202,
+                        ss & 0xffff,
+                        cs & 0xffff,
+                    )
+                }
+            }
+            Err(why) => {
+                kerror!("failed to load /INIT: {why}");
+            }
+        }
+    } else {
+        kerror!("could not find /INIT on disk, falling back to builtin test bytecode");
     }
 
     let Some(space) = task::userland::build() else {

@@ -191,7 +191,14 @@ fn translate_in(root: u64, virt: u64) -> PhysFrame {
         table = entry & PTE_ADDR_MASK;
     }
 
-    PhysFrame::containing_address(PhysAddr::new(table))
+    let leaf = unsafe { read_entry(table, index(virt, P1_LEVEL as usize)) };
+
+    assert!(
+        leaf & PTE_PRESENT != 0,
+        "translate: {virt:#x} has no leaf entry"
+    );
+
+    PhysFrame::containing_address(PhysAddr::new(leaf & PTE_ADDR_MASK))
 }
 
 fn is_shared_slot(index: u64) -> bool {
@@ -234,16 +241,24 @@ pub(crate) struct AddressSpace {
 
 static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
 
-fn remember_kernel_cr3() {
+pub(crate) fn remember_kernel_cr3() {
     let (frame, _) = Cr3::read();
     KERNEL_CR3.store(frame.start_address().as_u64(), Ordering::Release);
 }
 
 pub(crate) fn kernel_cr3() -> PhysFrame {
-    PhysFrame::containing_address(PhysAddr::new(KERNEL_CR3.load(Ordering::Acquire)))
+    let addr = KERNEL_CR3.load(Ordering::Acquire);
+    if addr == 0 {
+        Cr3::read().0
+    } else {
+        PhysFrame::containing_address(PhysAddr::new(addr))
+    }
 }
 
 pub(crate) fn switch_cr3(root: PhysFrame) {
+    if root.start_address().as_u64() == 0 {
+        return;
+    }
     let (current, _) = Cr3::read();
     if current != root {
         unsafe { Cr3::write(root, Cr3Flags::empty()) };
@@ -443,6 +458,7 @@ impl<'a> MMU<'a> {
         init_frames(memory_map, mbi_start, mbi_end);
 
         let (root, _) = Cr3::read();
+        remember_kernel_cr3();
 
         Self {
             mapper: Mapper::new(root),

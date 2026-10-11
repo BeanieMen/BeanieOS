@@ -18,10 +18,16 @@ CARGO := cargo +nightly
 CARGO_FLAGS := --release --features kernel -Zbuild-std=core,alloc \
 	-Zjson-target-spec --target $(TARGET)
 RUSTFLAGS := -C link-arg=$(BOOT_OBJ) -C link-arg=$(TIMER_OBJ) -C link-arg=-Tlinker.ld
+USER_BIN := userspace/bin/init
+USER_SRCS := userspace/src/crt0.s userspace/src/init.c
+USER_HDRS := userspace/include/syscall.h
 
 .PHONY: all setup check kernel disk run symbols clean
 
 all: $(DISK)
+
+$(USER_BIN): $(USER_SRCS) $(USER_HDRS) userspace/linker.ld userspace/Makefile
+	$(MAKE) -C userspace
 
 setup:
 	rustup toolchain install nightly
@@ -43,7 +49,7 @@ kernel: $(BOOT_OBJ) $(TIMER_OBJ) linker.ld
 	touch src/main.rs
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build $(CARGO_FLAGS)
 
-$(DISK): kernel
+$(DISK): kernel $(USER_BIN)
 	@mkdir -p $(OUT)
 	rm -f $@
 	truncate -s 128M $@
@@ -59,6 +65,8 @@ $(DISK): kernel
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/limine.conf ::limine.conf
 	mmd -i $@@@$(KERNEL_OFFSET) ::boot
 	mcopy -i $@@@$(KERNEL_OFFSET) $(KERNEL) ::boot/kernel
+	mcopy -i $@@@$(KERNEL_OFFSET) $(USER_BIN) ::init
+
 
 disk: $(DISK)
 
