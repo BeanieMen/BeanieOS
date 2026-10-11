@@ -84,6 +84,7 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
     mmu.init_heap().expect("could not map the kernel heap");
 
     arch::gdt::init();
+    arch::interrupts::init_idt();
 
     demo_direct_map();
 
