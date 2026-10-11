@@ -11,8 +11,8 @@ body{margin: 0;
 }
 
 main{
-    margin-left: 60px;
-    margin-right: 60px;
+    margin-left: 120px;
+    margin-right: 120px;
 }
 
 .nav-bar{
@@ -84,6 +84,47 @@ section{
 .margined-lines{
     margin-top: 0;
     margin-bottom: 9px;
+}
+
+.download{
+    font-family: "Signika", sans-serif;
+    font-optical-sizing: auto;
+    font-style: normal;
+    font-variation-settings:
+        "GRAD" 0;
+
+    margin: 20px -60px 20px;
+    padding: 0 60px 3.5rem;
+
+    border-bottom: 2px solid black;
+}
+
+.download h2 {
+    color: rgb(253, 73, 70);
+    font-size: 1.7rem;
+    font-weight: 600;
+    margin-bottom: 1.6rem;
+}
+
+.download a{
+    margin: 10px 0 10px 0;
+    color: black;
+    background-color: rgb(101, 255, 247);
+    text-decoration: none;
+    border: 2px solid rgb(18, 222, 233);
+    border-radius: 8px;
+    padding: 10px 13px 10px 13px;
+    font-size: 1rem;
+    font-weight: 300;
+}
+
+.download-button:hover {
+    background-color: aqua;
+    border: 2px solid rgb(35, 240, 240);
+}
+
+.current-status{
+    margin-top: 3vh;
 }
 
 p{
