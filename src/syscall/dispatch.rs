@@ -33,6 +33,7 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6]) -> SyscallResult {
         Syscall::Mkdir => sys_mkdir(args[0]),
         Syscall::Create => sys_create(args[0]),
         Syscall::Execve => sys_execve(args[0], args[1], args[2]),
+ Syscall::Poll => sys_poll(args[0], args[1], args[2]),
         Syscall::Unlink => sys_unlink(args[0]),
         Syscall::Rmdir => sys_rmdir(args[0]),
     }
@@ -126,6 +127,24 @@ fn wait_for_key() {
     if !switched {
         x86_64::instructions::hlt();
     }
+}
+
+fn sys_poll(fds: u64, nfds: u64, _events: u64) -> SyscallResult {
+    if nfds == 0 {
+        return Err(Errno::Invalid);
+    }
+
+    let mut revents = [0u8; 8];
+
+    if fds == 0 && crate::arch::input::pending() > 0 {
+        revents[0] = 1; // POLLIN
+    }
+
+    if entry::copy_to_user(revents.as_ptr() as u64, &revents).is_err() {
+        return Err(Errno::Fault);
+    }
+
+    Ok(revents[0] as u64)
 }
 
 fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {

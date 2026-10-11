@@ -567,6 +567,7 @@ int main(void) {
     print("proper shell loaded as a init proc with multi threading and forking via execve\n");
     print("do run hi to test elf loading and execution\n");
     print("will try and make games soon. tui games\n");
+    print("the game prints like 3 seconds per frame so lwk not playable right now but it is what it is. will optimie soon\n");
     print("Type 'help' for the command list.\n\n");
 
     char *argv[MAX_ARGS];

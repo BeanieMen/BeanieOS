@@ -31,6 +31,7 @@ syscalls! {
     Getpid = 39,
     Exit = 60,
     Execve = 59,
+    Poll = 7,
     Getdents64 = 217,
 
     // not part of the musl contract

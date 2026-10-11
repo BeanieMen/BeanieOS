@@ -12,6 +12,8 @@
 #define SYS_EXECVE   59
 #define SYS_EXIT     60
 #define SYS_GETDENTS 217
+#define SYS_POLL 7
+#define POLLIN   1
 
 // BeanieOS-private. 
 #define SYS_MKDIR    300
@@ -51,6 +53,10 @@ static inline long syscall(long num, long a1, long a2, long a3) {
         : "rcx", "r11", "memory"
     );
     return ret;
+}
+
+static inline long sys_poll(void *fds, unsigned long nfds, unsigned short events) {
+    return syscall(SYS_POLL, (long)fds, nfds, events);
 }
 
 static inline void sys_exit(int code) {

@@ -45,7 +45,7 @@ impl Level {
 
 const MAX_LEVEL: Level = Level::Trace;
 
-static LEVEL_FILTER: AtomicU8 = AtomicU8::new(Level::Debug as u8);
+static LEVEL_FILTER: AtomicU8 = AtomicU8::new(Level::Info as u8);
 
 fn set_level(level: Level) {
     LEVEL_FILTER.store(level as u8, Ordering::Relaxed);
