@@ -45,3 +45,7 @@ pub(crate) fn init_idt(boot_info: &BootInformation<'_>) {
 pub(crate) fn timer_ticks() -> u64 {
     vectors::ticks()
 }
+
+pub(crate) fn key_count() -> u64 {
+    vectors::keys()
+}
