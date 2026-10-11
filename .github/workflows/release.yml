@@ -1,4 +1,5 @@
 name: BeanieOS Release
+run-name: "BeanieOS Development Build #${{ github.run_number }}"
 
 on:
   push:
@@ -33,8 +34,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${GITHUB_RUN_NUMBER}" \
+          gh release create "v0.1.0-dev.${GITHUB_RUN_NUMBER}" \
             out/beanieos.img \
-            --title "BeanieOS Build ${GITHUB_RUN_NUMBER}" \
+            --title "BeanieOS v0.1.0-dev.${GITHUB_RUN_NUMBER}" \
+            --prerelease \
             --target "$GITHUB_SHA" \
             --notes "Automated build from commit ${GITHUB_SHA}"
