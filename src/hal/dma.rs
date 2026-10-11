@@ -21,9 +21,6 @@ impl Default for Dma {
     }
 }
 
-/// Command list: 32 entries of 4 bytes, one per port. AHCI wants the list
-/// itself to be 1024 bytes even though 32 entries is only 128, so the spare
-/// space is kept rather than relying on whatever follows in .bss.
 const CLB_ENTRIES: usize = 32;
 const CLB_ENTRY_SIZE: usize = 4;
 const CLB_USED: usize = CLB_ENTRIES * CLB_ENTRY_SIZE;

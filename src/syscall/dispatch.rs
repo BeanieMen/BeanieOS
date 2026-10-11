@@ -77,6 +77,10 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
         return Err(Errno::Fault);
     }
 
+    if read > 0 {
+        crate::kinfo!("ring 3 read {read} bytes from fd {fd}");
+    }
+
     Ok(read as u64)
 }
 

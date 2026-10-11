@@ -56,7 +56,6 @@ const IS_HOST_BUS_DATA_ERROR: u32 = 1 << 28;
 const IS_HOST_BUS_FATAL_ERROR: u32 = 1 << 29;
 const IS_TASK_FILE_ERROR: u32 = 1 << 30;
 
-/// What PxIE is armed with: the errors plus everything that means progress.
 pub(crate) const COMMAND_BITS: u32 = IS_TASK_FILE_ERROR
     | IS_HOST_BUS_FATAL_ERROR
     | IS_HOST_BUS_DATA_ERROR
@@ -73,8 +72,6 @@ pub(crate) const COMMAND_BITS: u32 = IS_TASK_FILE_ERROR
     | IS_PIO_SETUP_FIS
     | IS_D2H_REG_FIS;
 
-/// What counts as a failed command. D2H and PIO Setup are how a *successful*
-/// command reports back, so leaving them out is what separates the two.
 pub(crate) const ERROR_BITS: u32 = IS_TASK_FILE_ERROR
     | IS_HOST_BUS_FATAL_ERROR
     | IS_HOST_BUS_DATA_ERROR
@@ -88,7 +85,6 @@ pub(crate) const ERROR_BITS: u32 = IS_TASK_FILE_ERROR
 
 pub(crate) const SECTOR: u64 = 512;
 
-/// PxSIG after reset: 0x00000101 for an ATA disk, 0xeb140101 for ATAPI.
 pub(crate) const SATA_SIGNATURE_DISK: u32 = 0x0000_0101;
 pub(crate) const SATA_SIGNATURE_CDROM: u32 = 0xeb14_0101;
 

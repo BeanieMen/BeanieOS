@@ -68,6 +68,8 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     task::process::init();
     task::scheduler::init();
 
+    mount_disk();
+
     let init = task::process::create("init", "/");
 
     task::scheduler::spawn_in_process(
@@ -99,14 +101,16 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     }
 }
 
-extern "C" fn storage_task() {
+type Fat = alloc::sync::Arc<storage::fs::fat32::Fat32<storage::ahci::disk::partition::Partition>>;
+
+static MOUNTED: spin::Mutex<Option<Fat>> = spin::Mutex::new(None);
+
+fn mount_disk() {
     let mut disks = storage::ahci::find_disks();
 
     let Some(disk) = disks.first_mut() else {
         kerror!("storage: no disk attached");
-        loop {
-            task::scheduler::yield_now();
-        }
+        return;
     };
 
     let partitions = disk.partitions();
@@ -121,26 +125,30 @@ extern "C" fn storage_task() {
 
     let Some(partition) = partitions.get(1) else {
         kerror!("storage: disk has no second partition");
-        loop {
-            task::scheduler::yield_now();
-        }
+        return;
     };
 
     let (lba, sectors) = (partition.first_lba(), partition.sectors());
 
-    let fat32 = match storage::fs::fat32::Fat32::mount(
+    match storage::fs::fat32::Fat32::mount(
         storage::ahci::disk::partition::Partition::new(*disk, lba, sectors),
     ) {
-        Ok(fat32) => fat32,
-        Err(why) => {
-            kerror!("FAT32 mount failed: {why}");
-            loop {
-                task::scheduler::yield_now();
-            }
+        Ok(fat32) => {
+            kinfo!("FAT32 mounted at LBA {lba}");
+
+            *MOUNTED.lock() = Some(fat32);
+        }
+        Err(why) => kerror!("FAT32 mount failed: {why}"),
+    }
+}
+
+extern "C" fn storage_task() {
+    let Some(fat32) = MOUNTED.lock().clone() else {
+        kerror!("storage: nothing mounted");
+        loop {
+            task::scheduler::yield_now();
         }
     };
-
-    kinfo!("FAT32 mounted at LBA {lba}");
 
     let opened = task::process::with_current_fds(|fds| {
         fds.mount(fat32.clone());
@@ -179,6 +187,24 @@ extern "C" fn storage_task() {
 }
 
 extern "C" fn user_task() {
+    let Some(fat32) = MOUNTED.lock().clone() else {
+        kerror!("user: nothing mounted");
+        loop {
+            task::scheduler::yield_now();
+        }
+    };
+
+    let mounted = task::process::with_current_fds(|fds| {
+        fds.mount(fat32.clone());
+
+        fds.mount_count()
+    });
+
+    match mounted {
+        Some(count) => kinfo!("user process has {count} mount(s)"),
+        None => kerror!("no current process to mount into"),
+    }
+
     match task::userland::verify_release() {
         Ok(()) => kinfo!("address space release: no frames leaked"),
         Err(why) => kerror!("address space release: {why}"),
