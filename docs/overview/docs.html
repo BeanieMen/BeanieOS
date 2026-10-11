@@ -142,6 +142,30 @@
             font-weight: 700;
         }
 
+        main::selection {
+            background-color: rgb(249, 249, 9);
+        }
+
+        main::-moz-selection {
+            background-color: rgb(249, 249, 9);
+        }
+
+        .nav-bar::selection{
+            background-color: rgb(218, 6, 6);
+        }
+
+        .nav-bar::-moz-selection {
+            background-color: rgb(218, 6, 6);
+        }
+
+        .sidebar::selection {
+            background-color: rgb(158, 249, 0);
+        }
+
+        .sidebar::-moz-selection {
+            background-color: rgb(158, 249, 0);
+        }
+
     </style>
 
 </head>
@@ -198,17 +222,17 @@
         <p>For granular technical documentation, consult the following child pages:</p>
         <ul>
             <li>
-                <a href="overview/getting-started.html">Getting Started & Build System</a> -- Covers Makefile targets (<mark>setup</mark>, <mark>boot</mark>,
+                <a href="getting-started.html">Getting Started & Build System</a> -- Covers Makefile targets (<mark>setup</mark>, <mark>boot</mark>,
                 <mark>kernel</mark>, <mark>disk</mark>, <mark>run</mark>, <mark>lint</mark>), toolchain requirements, the <mark>x86_64.json</mark>
                 target specification, formatting configurations, and version control exclusions.
             </li>
             <li>
-                <a href="overview/dependencies.html">Dependencies and Crate Configuration</a> -- Detals <mark>Cargo.toml</mark> and <mark>Cargo.lock</mark>
+                <a href="dependencies.html">Dependencies and Crate Configuration</a> -- Detals <mark>Cargo.toml</mark> and <mark>Cargo.lock</mark>
                 configurations, including <mark>no_std</mark> crate integrations (<mark>x86_64</mark>, <mark>multiboot2</mark>, <mark>spin</mark>,
                 <mark>linked_list_allocator</mark>, <mark>futures-util</mark>, <mark>pc-keyboard</mark>) and <mark>panic = "abort"</mark> profile setups.
             </li>
             <li>
-                <a href="overview/journal.html">Developer Journal</a> -- Summarize historial notes, learnings, and incremental architectural decisions extracted from
+                <a href="journal.html">Developer Journal</a> -- Summarize historial notes, learnings, and incremental architectural decisions extracted from
                 <mark>JOURNAL.md</mark>.
             </li>
         </ul>
