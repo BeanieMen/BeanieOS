@@ -10,9 +10,11 @@ mod arch;
 mod console;
 mod graphics;
 mod logger;
+mod memory;
 mod paging;
 
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_entry(magic: u32, mbi_addr: u32) -> ! {
@@ -57,6 +59,12 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
         None => panic!("No Multiboot2 framebuffer"),
     };
 
+    let fb_start = fb_tag.address();
+    let fb_end = fb_start + fb_tag.pitch() as u64 * fb_tag.height() as u64;
+
+    memory::allocator::reserve_framebuffer(fb_start, fb_end);
+    memory::mmu::set_framebuffer_range(fb_start, fb_end);
+
     graphics::framebuffer::init_framebuffer(
         fb_tag.address(),
         fb_tag.width(),
@@ -64,8 +72,81 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
         fb_tag.pitch(),
         fb_tag.bpp(),
     );
+
+    let mut mmu = unsafe {
+        memory::mmu::MMU::boot(
+            memory_map,
+            mbi_addr as u64,
+            mbi_addr as u64 + mbi_size as u64,
+        )
+    };
+
+    mmu.init_heap().expect("could not map the kernel heap");
+
     arch::gdt::init();
+
+    demo_direct_map();
+
+    kinfo!(
+        "Boot memory map found with {} regions",
+        memory_map.memory_areas().len()
+    );
     
+    kinfo!("framebuffer found at {:#x}", fb_tag.address());
+
+    kinfo!(
+        "heap initialized at {:#x}..{:#x}",
+        mmu.heap_range().0,
+        mmu.heap_range().1
+    );
+
+    kinfo!("kernel initialized");
+
+    let info = memory::mmu::memory_info();
+    kinfo!(
+        "  framebuffer {:#x}..{:#x}",
+        info.framebuffer.expect("set at boot").0,
+        info.framebuffer.expect("set at boot").1
+    );
+    kinfo!("  kernel     {:#x}..{:#x}", info.kernel.0, info.kernel.1);
+    kinfo!("  boot info  {:#x}..{:#x}", info.boot_info.0, info.boot_info.1);
+    kinfo!(
+        "  heap       {:#x}..{:#x}",
+        info.heap.expect("set by init_heap").0,
+        info.heap.expect("set by init_heap").1
+    );
+}
+
+fn demo_direct_map() {
+    let Some(frame) = memory::allocator::alloc_frame() else {
+        kerror!("no frame to demo with");
+        return;
+    };
+
+    let phys = frame.start_address().as_u64();
+    let virt = paging::phys_to_direct(phys);
+
+    kinfo!("demo frame phys = {phys:#x}");
+    kinfo!("demo frame virt = {virt:#x}");
+    kinfo!(
+        "offset           = {:#x} (DIRECT_MAP_BASE is {:#x})",
+        virt.wrapping_sub(phys),
+        paging::DIRECT_MAP_BASE
+    );
+
+    let ptr = virt as *mut u64;
+    unsafe { ptr.write(0xBEEF_CAFE_1234_5678) };
+
+    let readback = unsafe { ptr.read_volatile() };
+    kinfo!("wrote/read {readback:#x} through the virtual address");
+
+    if readback != 0xBEEF_CAFE_1234_5678 {
+        kerror!("direct map write did not read back");
+    } else {
+        kinfo!("direct map OK: physical {phys:#x} is usable as {virt:#x}");
+    }
+
+    memory::allocator::free_frame(phys);
 }
 
 #[panic_handler]

@@ -1,4 +1,5 @@
 pub const PAGE_SIZE: u64 = 4096;
+pub const LOW_1MIB: u64 = 0x10_0000;
 pub const ENTRY_SIZE: u64 = 8;
 pub const ENTRIES_PER_TABLE: u64 = 512;
 pub const HUGE_PAGE_SIZE: u64 = 2097152;
@@ -23,6 +24,16 @@ pub const MMIO_WINDOW: u64 = KERNEL_VIRTUAL_BASE - MMIO_BASE;
 
 pub const HEAP_OFFSET: u64 = 1 << 30;
 pub const HEAP_BASE: u64 = DIRECT_MAP_BASE + HEAP_OFFSET;
+
+pub const PTE_PRESENT: u64 = 1 << 0;
+pub const PTE_WRITABLE: u64 = 1 << 1;
+pub const PTE_USER: u64 = 1 << 2;
+pub const PTE_HUGE: u64 = 1 << 7;
+
+pub const PTE_LEAF_MASK: u64 = PTE_PRESENT | PTE_WRITABLE;
+pub const PTE_ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+pub const PTE_KERNEL_RW: u64 = PTE_PRESENT | PTE_WRITABLE;
+pub const PTE_USER_RW: u64 = PTE_PRESENT | PTE_WRITABLE | PTE_USER;
 
 const _: () = assert!(IMAGE_P3_INDEX == 510);
 const _: () = assert!(KERNEL_P4_INDEX == 511);

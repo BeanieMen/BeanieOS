@@ -26,3 +26,32 @@ InterruptMutex disables interrupts before testing the flag
 guard restores prior interrupt state on drop
 only user is the framebuffer WRITER
 no IDT, no sti, so interrupts stay masked after boot
+
+
+EXAMPLE: PHYSICAL VS VIRTUAL -- demo_direct_map() in main.rs
+alloc_frame() hands back a *physical* address. phys_to_direct() is the only
+  way to turn that into something dereferenceable.
+  phys  0x00123450
+  virt  0xFFFFFF012345000 ... differ by exactly DIRECT_MAP_BASE
+writes a magic value through the virtual pointer and reads it back, so the
+  claim is checked rather than asserted
+two windows exist, and they are NOT interchangeable:
+  phys_to_direct   phys -> DIRECT_MAP_BASE + phys   (0xFFFFFF0000000000+)
+                   for frames the pool hands out; P4[510]
+  phys_to_image    phys -> KERNEL_VIRTUAL_BASE + phys
+                   only valid for addresses the linker produced; P4[511]
+rule that keeps this from silently breaking: dereference via phys_to_direct,
+  navigate via physical. The identity map (P4[0] -> low 8 GiB) is still wired
+  during boot, so a missing conversion will NOT fault there -- it will appear to
+  work. Removing that identity map is what actually tests the discipline.
+
+EXAMPLE: PHYSICAL VS VIRTUAL (demo_direct_map in main.rs)
+alloc_frame() returns physical; phys_to_direct() turns it into a pointer
+  phys 0x12345000 -> virt 0xFFFFFF012345000 (differ by DIRECT_MAP_BASE)
+kernel image uses a *different* window: KERNEL_VIRTUAL_BASE + phys
+  phys 0x12345000 -> virt 0xFFFFFFFF8012345000 (that is kernel_to_phys, not
+  phys_to_direct -- they are two different windows, not one)
+the write/read-back in the demo is the actual proof: if the direct map were
+  wrong, the store faults instead of printing, rather than silently reading RAM
+through the identity map (P4[0] still covers the low 8 GiB during boot, so a
+  missing conversion would *appear* to work until that map is removed)

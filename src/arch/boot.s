@@ -248,7 +248,7 @@ gdt64_pointer:
     .short gdt64_end - gdt64 - 1
     .long gdt64_phys
 
-.section .multiboot_header
+.section .multiboot_header,"a",@progbits
 .align 8
 
 .global multiboot_header
