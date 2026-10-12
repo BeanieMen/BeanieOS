@@ -153,14 +153,13 @@ h3{
 
 #welcome{
     position: absolute;
-    top: 95px;
-    left: 0px;
-    height: 1500px;
+    top: 35px;
+    left: 35px;
+    
     width: auto;
-
+    height: 45px;
     pointer-events: none;
     user-select: none;
-
 }
 
 main::selection {
@@ -177,4 +176,17 @@ main::-moz-selection {
 
 .nav-bar::-moz-selection {
     background-color: rgb(218, 6, 6);
+}
+
+.heading-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 1rem;
+}
+
+.bunny {
+    height: 3em;
+    width: auto;
+    object-fit: contain;
 }
