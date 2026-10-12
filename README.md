@@ -6,14 +6,19 @@ we wanna make it easier for future rust devs to make an os. there arent that man
 
 the docs + guide + download website will guide users on how to start on osdev and build on this os itself or they can just use an iso and run it (will make one after this is in a usable state)
 
-demo link : https://beanie-os.vercel.app/
+we currently have a functioning kernel, interrupt handling, memory management, a basic process system, and a command-line shell. Its non-VESA graphical framebuffer and FAT32 filesystem with read/write support are also implemented.
 
-we are still currrently in the ring 0 (kernel ring). this readme will be updated whenever me and pranjal make progress on this
+development is ongoing, with work focused on process system standardization, filesystem reliability, shell functionality, userspace, and hardware support.
 
 # Note
 
 pranjal is a beginner and i am teaching him how stuff works so it might be a bit slower 
 
+# Website 
+[Visit the BeanieOS website](https://beanie-os.vercel.app/)
+
+# Releases
+[View available releases](https://github.com/BeanieMen/BeanieOS/releases)
 
 # Demo
 <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
@@ -70,11 +75,11 @@ it might ask for installing toolchains. this project ONLY works with `cargo +nig
 
 ## BeanieMan: Infra + OS 
 
-BeanieMan is handling the os dev parts and writing the docs
+BeanieMan is handling the os dev parts 
 
 ## Pranjal: UI/UX + Art
 
-Pranjal is handling everything related to art, frontend.
+Pranjal is handling everything related to art, frontend and writing the docs.
 
 
 we both are going out of our comfort zones to learn something new so i hope thirdspace helps us in this journey
