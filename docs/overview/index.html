@@ -43,25 +43,27 @@
 
         </section>
 
+
         <section class="download">
 
-            <h2>Download the latest version</h2>
-            <a href="https://github.com/BeanieMen/BeanieOS/releases/tag/v0.1.0-dev.6" class="download-button">Download BeanieOS 0.1.0</a>
+            <h2>Get BeanieOS</h2>
+            <a href="https://github.com/BeanieMen/BeanieOS/releases" class="download-button">Download BeanieOS 0.1.0</a>
 
         </section>
+
 
         <section class="current-status">
 
             <h3>Current Status</h3>
 
-            <p>BeanieOS is under active development. The core foundations of the operating system are now functional, with development moving towards processes, 
-                storage, userspace, and eventually a more complete system environment.
+            <p>
+                BeanieOS is an experimental Rust-based operating system with a functioning kernel, interrupt handling, memory management, 
+                a basic process system, and a command-line shell. Its graphical framebuffer is working, and FAT32 filesystem and storage 
+                read/write support are implemented. Development is focused on standardizing the process system, expanding shell 
+                functionality, and building out userspace.
             </p>
 
         </section>
-
-
-        
 
 
         <section class="core-system">
@@ -70,7 +72,7 @@
 
             <div>
                 <span>Bootloader -</span>
-                <span class="status">Done</span>
+                <span class="status">Complete</span>
             </div>
 
             <div>
@@ -90,12 +92,12 @@
 
             <div>
                 <span>Basic Process System -</span>
-                <span class="status">Working, currently non-standard</span>
+                <span class="status">Working, standardization in progress</span>
             </div>
 
             <div>
                 <span>Shell -</span>
-                <span class="status">Basic commands working</span>
+                <span class="status">Basic commands implemented</span>
             </div>
 
         </section>
@@ -106,13 +108,13 @@
             <h3>Graphics</h3>
 
             <div>
-                <span>Native Graphical Framebuffer -</span>
+                <span>Graphical Framebuffer -</span>
                 <span class="status">Working</span>
             </div>
 
             <div>
-                <span>Graphics Driver -</span>
-                <span class="status">Non-VESA implementation working</span>
+                <span>Graphics Implementation -</span>
+                <span class="status">Non-VESA framebuffer implemented</span>
             </div>
 
         </section>
@@ -124,12 +126,12 @@
 
             <div>
                 <span>Storage Drivers -</span>
-                <span class="status">Read/Write working</span>
+                <span class="status">Read/Write support implemented</span>
             </div>
 
             <div>
                 <span>FAT32 Filesystem -</span>
-                <span class="status">Read/Write working</span>
+                <span class="status">Read/Write support implemented</span>
             </div>
 
         </section>
@@ -140,13 +142,13 @@
             <h3>Architecture</h3>
 
             <div>
-                <span>x86_64 -</span>
-                <span class="status">Current target</span>
+                <span>Target architecture -</span>
+                <span class="status">x86_64</span>
             </div>
 
             <div>
-                <span>Monolithic Kernel -</span>
-                <span class="status">Current architecture</span>
+                <span>Kernel design -</span>
+                <span class="status">Monolithic</span>
             </div>
 
         </section>
@@ -157,10 +159,11 @@
             <h3>Next Up</h3>
 
             <p>- Standardize the process system <br>
-                - Expand shell commands <br>
-                - Improve filesystem support and reliability <br>
-                - Build out userspace <br>
-                - Continue hardware/driver support</p>
+                - Expand shell commands and functionality<br>
+                - Improve filesystem reliability and support<br>
+                - Develop the userspace environment<br>
+                - Expand hardware and driver support
+            </p>
 
         </section>
 
@@ -169,12 +172,14 @@
 
             <h3>Learn BeanieOS</h3>
 
-            <p>Explore the documentation, understand the architecture, build the project and follow its development. <br>
+            <p>Documentation for BeanieOS is under development. Technical guides, architecture details, build instructions, 
+                and usage documentation will be added as the project evolves.<br>
 
             <a href="docs.html">Explore Documentation</a> <br>
-            It's not complete yet. We will implement the docs next week.</p>
+            </p>
 
         </section>
+
     </main>
 </body>
 </html>
