@@ -92,6 +92,8 @@ static void draw(void)
 {
     int y;
 
+    print("\033[H");
+
     print("============== BEANIEOS PONG ==============\r\n");
 
     print("You: ");
@@ -292,14 +294,9 @@ int main(void)
         step();
         build_field();
         draw();
-
-        /*
-         * Approximate frame delay.
-         * Adjust this value for your emulator's speed.
-         */
-        for (volatile int delay = 0; delay < 1000; delay++) {
-            sys_yield();
-        }
+        
+        sys_sleep_ms(64); // 15 fps
+        sys_yield();
     }
 
     return 0;

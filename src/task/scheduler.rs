@@ -1,3 +1,5 @@
+use x86_64::VirtAddr;
+use ::x86_64::instructions::hlt;
 use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc};
 
 use crate::arch::gdt;
@@ -68,7 +70,6 @@ impl Scheduler {
         }
     }
 
-
     pub(crate) fn spawn(
         &mut self,
         pid: ProcessId,
@@ -112,6 +113,19 @@ impl Scheduler {
         id
     }
 
+    fn sleep_for(&mut self, duration_ticks: u64) -> Option<ContextSwitch> {
+        if self.runnable_count() <= 1 {
+            return None;
+        }
+
+        let deadline = self.ticks().saturating_add(duration_ticks);
+
+        if let Some(current) = self.threads.get(&self.current) {
+            current.lock().state = ThreadState::Sleeping(deadline);
+        }
+
+        self.switch_to_any()
+    }
 
     fn account_tick(&mut self) {
         let Some(current) = self.threads.get(&self.current) else {
@@ -165,20 +179,6 @@ impl Scheduler {
         } else {
             current.timeslice -= elapsed;
         }
-    }
-
-    fn sleep_for(&mut self, duration_ticks: u64) -> Option<ContextSwitch> {
-        if self.runnable_count() <= 1 {
-            return None;
-        }
-
-        let deadline = self.ticks().saturating_add(duration_ticks);
-
-        if let Some(current) = self.threads.get(&self.current) {
-            current.lock().state = ThreadState::Sleeping(deadline);
-        }
-
-        self.switch_to_any()
     }
 
     fn retire_current(&mut self) -> Option<ContextSwitch> {
@@ -249,9 +249,9 @@ impl Scheduler {
             let mut next = next.lock();
             next.begin_running();
             if let Some(stack_top) = next.kernel_stack_top() {
-            gdt::set_kernel_stack_top(stack_top as u64);
+                gdt::set_kernel_stack_top(stack_top as u64);
             }
-            x86_64::registers::model_specific::FsBase::write(x86_64::VirtAddr::new(next.fs_base));
+            x86_64::registers::model_specific::FsBase::write(VirtAddr::new(next.fs_base));
             (next.saved_rsp(), next.pid)
         };
 
@@ -269,7 +269,6 @@ impl Scheduler {
             next_rsp,
         })
     }
-
 
     fn wake_sleeping_threads(&mut self) {
         let now = self.ticks();
@@ -364,7 +363,6 @@ pub(crate) fn init() {
     SCHEDULER.lock().init();
 }
 
-
 pub(crate) fn spawn_in_process(
     pid: ProcessId,
     name: &str,
@@ -399,9 +397,22 @@ pub(crate) fn wake(id: ThreadId) {
 }
 
 pub(crate) fn sleep(duration_ticks: u64) {
-    let switch = SCHEDULER.lock().sleep_for(duration_ticks);
-
-    apply(switch);
+    let (switch, deadline) = {
+        let mut sched = SCHEDULER.lock();
+        let deadline = sched.ticks().saturating_add(duration_ticks);
+        let switch = sched.sleep_for(duration_ticks);
+        (switch, deadline)
+    };
+    if let Some(switch) = switch {
+        apply(Some(switch));
+    } else {
+        while crate::arch::interrupts::vectors::ticks() < deadline {
+            hlt();
+        }
+        if let Some(current) = SCHEDULER.lock().threads.get(&SCHEDULER.lock().current) {
+            current.lock().timeslice = TIMESLICE_TICKS;
+        }
+    }
 }
 
 pub(crate) fn exit() -> ! {
@@ -410,14 +421,13 @@ pub(crate) fn exit() -> ! {
     apply(switch);
 
     loop {
-        x86_64::instructions::hlt();
+        hlt();
     }
 }
 
 pub(crate) fn account_tick() {
     SCHEDULER.lock().account_tick();
 }
-
 
 fn apply(switch: Option<ContextSwitch>) {
     if let Some(ContextSwitch {

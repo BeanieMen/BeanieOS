@@ -11,7 +11,7 @@ pub(crate) const LAPIC_TIMER_INITIAL_OFFSET: usize = 0x380;
 pub(crate) const LAPIC_TIMER_CURRENT_OFFSET: usize = 0x390;
 pub(crate) const LAPIC_TIMER_DIVIDE_OFFSET: usize = 0x3E0;
 
-pub(crate) const TICK_MS: u64 = 10;
+pub(crate) const TICK_MS: u64 = 1;
 
 pub(crate) const LAPIC_SVR_ENABLE: u32 = 0x100;
 

@@ -13,6 +13,51 @@ use super::entry;
 use super::error::{Errno, SyscallResult};
 use super::numbers::*;
 
+const TCGETS: u64 = 0x5401;
+const TCSETS: u64 = 0x5402;
+const TCSETSW: u64 = 0x5403;
+const TCSETSF: u64 = 0x5404;
+const TIOCGWINSZ: u64 = 0x5413;
+
+pub const ICANON: u64 = 0x0002;
+pub const ECHO: u64 = 0x0008;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Termios {
+    pub c_iflag: u32,
+    pub c_oflag: u32,
+    pub c_cflag: u32,
+    pub c_lflag: u32,
+    pub c_line: u8,
+    pub c_cc: [u8; 32],
+}
+
+impl Termios {
+    pub const fn default() -> Self {
+        Termios {
+            c_iflag: 0,      // ICRNL | IXON
+            c_oflag: 0,      // OPOST | ONLCR
+            c_cflag: 0,      // CS8 | CREAD
+            c_lflag: 0x8a3b, // ECHO | ICANON | ISIG | IEXTEN
+            c_line: 0,
+            c_cc: [0; 32],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Winsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
+}
+
+pub static TTY_TERMIOS: crate::arch::lock::InterruptMutex<Termios> =
+    crate::arch::lock::InterruptMutex::new(Termios::default());
+
 pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame) -> SyscallResult {
     let Ok(syscall) = Syscall::try_from(number) else {
         return Err(Errno::NoSys);
@@ -28,6 +73,7 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Mmap => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         Syscall::Munmap => sys_mun_map(args[0], args[1]),
         Syscall::Brk => sys_brk(args[0]),
+        Syscall::Nanosleep => sys_nanosleep(args[0], args[1]),
         Syscall::Writev => sys_writev(args[0], args[1], args[2]),
         Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
         Syscall::Fork => sys_fork(frame),
@@ -46,6 +92,35 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Unlink => sys_unlink(args[0]),
         Syscall::Rmdir => sys_rmdir(args[0]),
     }
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+fn sys_nanosleep(req_ptr: u64, _rem: u64) -> SyscallResult {
+    let mut req = Timespec::default();
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(
+            &mut req as *mut Timespec as *mut u8,
+            core::mem::size_of::<Timespec>(),
+        )
+    };
+    if entry::copy_from_user(bytes, req_ptr).is_err() {
+        return Err(Errno::Fault);
+    }
+    if req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1_000_000_000 {
+        return Err(Errno::Invalid);
+    }
+    let ms = (req.tv_sec as u64) * 1000 + (req.tv_nsec as u64) / 1_000_000;
+    let ticks = ms.div_ceil(crate::arch::interrupts::consts::TICK_MS);
+    if ticks > 0 {
+        scheduler::sleep(ticks);
+    }
+    Ok(0)
 }
 
 fn sys_fstat(fd: u64, stat_buf: u64) -> SyscallResult {
@@ -115,8 +190,64 @@ fn sys_mun_map(_addr: u64, _len: u64) -> SyscallResult {
     Ok(0)
 }
 
-fn sys_ioctl(_fd: u64, _request: u64, _arg: u64) -> SyscallResult {
-    Err(Errno::NotTty)
+fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
+    // Only fds 0, 1, 2 are terminal devices
+    if fd > 2 {
+        return Err(Errno::NotTty);
+    }
+
+    match request {
+        TCGETS => {
+            let termios = *TTY_TERMIOS.lock();
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &termios as *const Termios as *const u8,
+                    core::mem::size_of::<Termios>(),
+                )
+            };
+            if entry::copy_to_user(arg, bytes).is_err() {
+                return Err(Errno::Fault);
+            }
+            Ok(0)
+        }
+        TCSETS | TCSETSW | TCSETSF => {
+            let mut termios = Termios::default();
+            let bytes = unsafe {
+                core::slice::from_raw_parts_mut(
+                    &mut termios as *mut Termios as *mut u8,
+                    core::mem::size_of::<Termios>(),
+                )
+            };
+            if entry::copy_from_user(bytes, arg).is_err() {
+                return Err(Errno::Fault);
+            }
+            *TTY_TERMIOS.lock() = termios;
+            Ok(0)
+        }
+        TIOCGWINSZ => {
+            let (rows, cols) = {
+                let writer = crate::graphics::framebuffer::WRITER.lock();
+                (writer.rows() as u16, writer.cols() as u16)
+            };
+            let win = Winsize {
+                ws_row: rows,
+                ws_col: cols,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &win as *const Winsize as *const u8,
+                    core::mem::size_of::<Winsize>(),
+                )
+            };
+            if entry::copy_to_user(arg, bytes).is_err() {
+                return Err(Errno::Fault);
+            }
+            Ok(0)
+        }
+        _ => Err(Errno::Invalid),
+    }
 }
 fn sys_set_tid_address(_tidptr: u64) -> SyscallResult {
     Ok(current_pid().as_u64())
@@ -229,9 +360,7 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
         }
 
         if fd == 1 || fd == 2 {
-            for &byte in &staging[..chunk] {
-                crate::print!("{}", byte as char);
-            }
+            crate::console::write_user_bytes(&staging[..chunk]);
             total_written += chunk;
             continue;
         }
@@ -287,31 +416,74 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
     }
 
     if fd == 0 {
+        let (canonical, echo) = {
+            let termios = TTY_TERMIOS.lock();
+            (
+                (termios.c_lflag as u64 & ICANON) != 0,
+                (termios.c_lflag as u64 & ECHO) != 0,
+            )
+        };
+
         let mut staging = [0u8; 4096];
         let mut read = 0;
         let target_len = (len as usize).min(staging.len());
 
-        while read < target_len {
-            if let Some(ch) = crate::arch::input::pop_key() {
-                staging[read] = ch as u8;
-                read += 1;
-                if ch == '\n' || ch == '\r' {
+        if target_len == 0 {
+            return Ok(0);
+        }
+
+        if !canonical {
+            while read < target_len {
+                if let Some(ch) = crate::arch::input::pop_key() {
+                    staging[read] = ch as u8;
+                    read += 1;
+                } else if read == 0 {
+                    wait_for_key();
+                } else {
                     break;
                 }
-
-                continue;
             }
+        } else {
+            while read < target_len {
+                if let Some(ch) = crate::arch::input::pop_key() {
+                    let byte = ch as u8;
+                    if byte == 0x08 || byte == 0x7f {
+                        if read > 0 {
+                            read -= 1;
+                            if echo {
+                                crate::console::write_user_bytes(b"\x08 \x08");
+                            }
+                        }
+                        continue;
+                    }
 
-            wait_for_key();
+                    staging[read] = byte;
+                    read += 1;
+
+                    if echo {
+                        if byte == b'\r' || byte == b'\n' {
+                            crate::console::write_user_bytes(b"\r\n");
+                        } else {
+                            crate::console::write_user_bytes(&[byte]);
+                        }
+                    }
+
+                    if byte == b'\r' || byte == b'\n' {
+                        staging[read - 1] = b'\n';
+                        break;
+                    }
+                    continue;
+                }
+                wait_for_key();
+            }
         }
 
         if read > 0 && entry::copy_to_user(buf, &staging[..read]).is_err() {
             return Err(Errno::Fault);
         }
-
         return Ok(read as u64);
     }
-
+    
     let mut staging = [0u8; 4096];
 
     let Some(result) = process::with_current_fds(|fds| fds.read(fd, &mut staging[..len as usize]))

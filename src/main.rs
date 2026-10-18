@@ -68,12 +68,13 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         task::identity::Priority::Normal,
     );
 
-    task::scheduler::spawn_in_process(
-        init,
-        "rgb_square",
-        userspace::rgb_square_task,
-        task::identity::Priority::Normal,
-    );
+    // goodbye my beloved rainbow square, you will be missed :(
+    // task::scheduler::spawn_in_process(
+    //     init,
+    //     "rgb_square",
+    //     userspace::rgb_square_task,
+    //     task::identity::Priority::Normal,
+    // );
 
     let user = task::process::create("user", "/");
 
