@@ -10,7 +10,10 @@ use crate::{
     },
     paging::phys_to_direct,
     storage::vfs::fd::FdTable,
-    task::identity::{self, ProcessId, ThreadId},
+    task::{
+        identity::{self, ProcessId, ThreadId},
+        process,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,9 +47,11 @@ pub(crate) struct Process {
     pub space: Option<PhysFrame>,
     pub heap_start: u64,
     pub heap_break: u64,
+    pub mmap_next: u64,
 }
 
-const DEFAULT_HEAP_BASE: u64 = 0x1000_0000; // 256 MiB mark
+pub const DEFAULT_HEAP_BASE: u64 = 0x1000_0000; // 256 MiB mark
+pub const DEFAULT_MMAP_BASE: u64 = 0x7000_0000_0000; // High canonical user virt addr
 
 impl Process {
     fn boot() -> Self {
@@ -63,6 +68,7 @@ impl Process {
             space: None,
             heap_start: DEFAULT_HEAP_BASE,
             heap_break: DEFAULT_HEAP_BASE,
+            mmap_next: DEFAULT_MMAP_BASE,
         }
     }
 
@@ -80,6 +86,7 @@ impl Process {
             space: None,
             heap_start: DEFAULT_HEAP_BASE,
             heap_break: DEFAULT_HEAP_BASE,
+            mmap_next: DEFAULT_MMAP_BASE,
         }
     }
 
@@ -140,7 +147,14 @@ impl ProcessManager {
 
     pub(crate) fn create_child(&mut self, parent_pid: ProcessId) -> Option<ProcessId> {
         let parent = self.processes.get(&parent_pid)?;
-        let (parent_name, parent_cwd, parent_fds, parent_heap_start, parent_heap_break) = {
+        let (
+            parent_name,
+            parent_cwd,
+            parent_fds,
+            parent_heap_start,
+            parent_heap_break,
+            parent_mmap_next,
+        ) = {
             let p = parent.lock();
             (
                 p.name.clone(),
@@ -148,6 +162,7 @@ impl ProcessManager {
                 p.fds.clone(),
                 p.heap_start,
                 p.heap_break,
+                p.mmap_next,
             )
         };
 
@@ -159,11 +174,52 @@ impl ProcessManager {
         child.fds = parent_fds.clone();
         child.heap_start = parent_heap_start;
         child.heap_break = parent_heap_break;
-
+        child.mmap_next = parent_mmap_next;
         let child_pid = child.pid;
         self.processes
             .insert(child_pid, Arc::new(InterruptMutex::new(child)));
         Some(child_pid)
+    }
+
+    pub(crate) fn mmap(
+        &mut self,
+        pid: ProcessId,
+        addr: u64,
+        len: u64,
+        _prot: u64,
+        flags: u64,
+    ) -> Result<u64, ()> {
+        if len == 0 {
+            return Err(());
+        }
+
+        let process = self.processes.get_mut(&pid).ok_or(())?;
+        let mut p = process.lock();
+
+        let root = p.space.ok_or(())?;
+        let mut space = mmu::AddressSpace::from_root(root);
+
+        const MAP_FIXED: u64 = 0x10;
+        let target = if flags & MAP_FIXED != 0 && addr != 0 {
+            addr & !4095
+        } else {
+            let next = p.mmap_next;
+            p.mmap_next += (len + 4095) & !4095;
+            next
+        };
+
+        let pages = (len + 4095) / 4096;
+        for i in 0..pages {
+            let virt = target + i * 4096;
+            let frame = alloc_frame().ok_or(())?;
+            let direct = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
+            unsafe {
+                core::ptr::write_bytes(direct, 0, 4096);
+            }
+            space.map(virt, frame, mmu::USER_RW).map_err(|_| ())?;
+        }
+        core::mem::forget(space); // keep the space alive, as the process still owns it
+        Ok(target)
     }
 
     pub(crate) fn update_brk(&mut self, pid: ProcessId, new_brk: u64) -> Result<u64, ()> {
@@ -406,7 +462,11 @@ pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
         guard.space = Some(space);
         guard.heap_start = DEFAULT_HEAP_BASE;
         guard.heap_break = DEFAULT_HEAP_BASE;
+        guard.mmap_next = DEFAULT_MMAP_BASE;
     }
+}
+pub(crate) fn mmap(pid: ProcessId,  addr: u64, len: u64, prot:u64, flags: u64) -> Result<u64, ()> {
+    PROCESS_MANAGER.lock().mmap(pid, addr, len, prot, flags)
 }
 
 pub(crate) fn brk(pid: ProcessId, new_brk: u64) -> Result<u64, ()> {

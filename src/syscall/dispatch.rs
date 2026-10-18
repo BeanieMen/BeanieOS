@@ -24,6 +24,8 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Open => sys_open(args[0], args[1]),
         Syscall::Close => sys_close(args[0]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
+        Syscall::Mmap => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
+        Syscall::Munmap => sys_mun_map(args[0], args[1]),
         Syscall::Brk => sys_brk(args[0]),
         Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
         Syscall::Fork => sys_fork(frame),
@@ -42,6 +44,25 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Unlink => sys_unlink(args[0]),
         Syscall::Rmdir => sys_rmdir(args[0]),
     }
+}
+
+fn sys_mmap(
+    addr: u64,
+    len: u64,
+    prot: u64,
+    flags: u64,
+    _fd: u64,
+    _offset: u64,
+) -> SyscallResult {
+    let pid = current_pid();
+    match process::mmap(pid,addr,len,prot,flags) {
+        Ok(mapped_addr) => Ok(mapped_addr),
+        Err(_) => Err(Errno::NoMem),
+    }
+}
+
+fn sys_mun_map(_addr: u64, _len: u64) -> SyscallResult {
+    Ok(0)
 }
 
 fn sys_ioctl(_fd: u64, _request: u64, _arg: u64) -> SyscallResult {
@@ -66,7 +87,8 @@ fn sys_fork(frame: &entry::SyscallFrame) -> SyscallResult {
         return Err(Errno::NoMem);
     };
 
-    let child_space = crate::memory::mmu::AddressSpace::clone_from_root(root).map_err(|_| Errno::NoMem)?;
+    let child_space =
+        crate::memory::mmu::AddressSpace::clone_from_root(root).map_err(|_| Errno::NoMem)?;
     process::attach_space(child_pid, child_space.root);
     core::mem::forget(child_space);
 

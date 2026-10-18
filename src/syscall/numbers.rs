@@ -26,6 +26,8 @@ syscalls! {
     Open = 2,
     Close = 3,
     Lseek = 8,
+    Mmap = 9,
+    Munmap = 11,
     Brk = 12,
     Ioctl = 16,
     ArchPrctl = 158,
