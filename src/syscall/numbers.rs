@@ -27,6 +27,7 @@ syscalls! {
     Close = 3,
     Lseek = 8,
     Brk = 12,
+    Ioctl = 16,
     ArchPrctl = 158,
     SchedYield = 24,
     Getpid = 39,
@@ -35,8 +36,11 @@ syscalls! {
     Exit = 60,
     Wait4 = 61,
     Poll = 7,
+    
     Getdents64 = 217,
-
+    SetTidAddress = 218,
+    ExitGroup = 231,
+    
     Mkdir = 83,
     Rmdir = 84,
     Create = 85,

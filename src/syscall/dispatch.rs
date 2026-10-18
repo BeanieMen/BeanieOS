@@ -25,13 +25,16 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Close => sys_close(args[0]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
         Syscall::Brk => sys_brk(args[0]),
+        Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
         Syscall::Fork => sys_fork(frame),
         Syscall::Exit => sys_exit(args[0]),
+        Syscall::ExitGroup => sys_exit(args[0]),
         Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
         Syscall::ArchPrctl => sys_arch_prctl(args[0], args[1]),
         Syscall::Getpid => sys_getpid(),
         Syscall::SchedYield => sys_yield(),
         Syscall::Getdents64 => sys_getdents(args[0], args[1], args[2]),
+        Syscall::SetTidAddress => sys_set_tid_address(args[0]),
         Syscall::Mkdir => sys_mkdir(args[0]),
         Syscall::Create => sys_create(args[0]),
         Syscall::Execve => sys_execve(args[0], args[1], args[2]),
@@ -41,6 +44,12 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
     }
 }
 
+fn sys_ioctl(_fd: u64, _request: u64, _arg: u64) -> SyscallResult {
+    Err(Errno::NotTty)
+}
+fn sys_set_tid_address(_tidptr: u64) -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
 fn sys_brk(addr: u64) -> SyscallResult {
     let pid = current_pid();
     match process::brk(pid, addr) {

@@ -12,6 +12,7 @@ pub(crate) enum Errno {
     Fault = 14,
     NotDir = 20,
     IsDir = 21,
+    NotTty = 25,
     Overflow = 75,
 }
 
