@@ -3,9 +3,12 @@ use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    arch::interrupts::vectors::ticks,
-    arch::lock::InterruptMutex,
-    memory::mmu,
+    arch::{interrupts::vectors::ticks, lock::InterruptMutex},
+    memory::{
+        allocator::alloc_frame,
+        mmu::{self, Mapper},
+    },
+    paging::phys_to_direct,
     storage::vfs::fd::FdTable,
     task::identity::{self, ProcessId, ThreadId},
 };
@@ -39,7 +42,11 @@ pub(crate) struct Process {
     pub created_at: u64,
     pub fds: FdTable,
     pub space: Option<PhysFrame>,
+    pub heap_start: u64,
+    pub heap_break: u64,
 }
+
+const DEFAULT_HEAP_BASE: u64 = 0x1000_0000; // 256 MiB mark
 
 impl Process {
     fn boot() -> Self {
@@ -54,6 +61,8 @@ impl Process {
             created_at: ticks(),
             fds: FdTable::new(),
             space: None,
+            heap_start: DEFAULT_HEAP_BASE,
+            heap_break: DEFAULT_HEAP_BASE,
         }
     }
 
@@ -69,6 +78,8 @@ impl Process {
             created_at: ticks(),
             fds: FdTable::new(),
             space: None,
+            heap_start: DEFAULT_HEAP_BASE,
+            heap_break: DEFAULT_HEAP_BASE,
         }
     }
 
@@ -129,18 +140,65 @@ impl ProcessManager {
 
     pub(crate) fn create_child(&mut self, parent_pid: ProcessId) -> Option<ProcessId> {
         let parent = self.processes.get(&parent_pid)?;
-        let (parent_name, parent_cwd, parent_fds) = {
+        let (parent_name, parent_cwd, parent_fds, parent_heap_start, parent_heap_break) = {
             let p = parent.lock();
-            (p.name.clone(), p.cwd.clone(), p.fds.clone())
+            (
+                p.name.clone(),
+                p.cwd.clone(),
+                p.fds.clone(),
+                p.heap_start,
+                p.heap_break,
+            )
         };
 
-        let mut child = Process::new(&alloc::format!("{}-child", parent_name), Some(parent_pid), &parent_cwd);
+        let mut child = Process::new(
+            &alloc::format!("{}-child", parent_name),
+            Some(parent_pid),
+            &parent_cwd,
+        );
         child.fds = parent_fds.clone();
+        child.heap_start = parent_heap_start;
+        child.heap_break = parent_heap_break;
+
         let child_pid = child.pid;
-        self.processes.insert(child_pid, Arc::new(InterruptMutex::new(child)));
+        self.processes
+            .insert(child_pid, Arc::new(InterruptMutex::new(child)));
         Some(child_pid)
     }
 
+    pub(crate) fn update_brk(&mut self, pid: ProcessId, new_brk: u64) -> Result<u64, ()> {
+        let process = self.processes.get_mut(&pid).ok_or(())?;
+        let mut p = process.lock();
+
+        if new_brk == 0 || new_brk < p.heap_start {
+            return Ok(p.heap_break);
+        }
+
+        let root = p.space.ok_or(())?;
+        let mut space = mmu::AddressSpace::from_root(root);
+
+        let old_page = (p.heap_break + 4095) & !4095;
+        let new_page = (new_brk + 4095) & !4095;
+
+        if new_page > old_page {
+            let mut curr = old_page;
+            while curr < new_page {
+                let frame = alloc_frame().ok_or(())?;
+                let direct = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
+
+                unsafe {
+                    core::ptr::write_bytes(direct, 0, 4096);
+                }
+
+                space.map(curr, frame, mmu::USER_RW).map_err(|_| ())?;
+
+                curr += 4096;
+            }
+        }
+        core::mem::forget(space); // keep the space alive, as the process still owns it
+        p.heap_break = new_brk;
+        return Ok(p.heap_break);
+    }
     pub(crate) fn get(&self, pid: ProcessId) -> Option<Arc<InterruptMutex<Process>>> {
         self.processes.get(&pid).cloned()
     }
@@ -297,9 +355,10 @@ pub(crate) fn wait4(target: i64) -> Option<(ProcessId, i32)> {
                 }
             }
 
-            let has_children = manager.processes.values().any(|proc| {
-                proc.lock().ppid == Some(current)
-            });
+            let has_children = manager
+                .processes
+                .values()
+                .any(|proc| proc.lock().ppid == Some(current));
 
             if !has_children {
                 return None;
@@ -343,8 +402,15 @@ fn current_space() -> Option<PhysFrame> {
 
 pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
     if let Some(process) = PROCESS_MANAGER.lock().get(pid) {
-        process.lock().space = Some(space);
+        let mut guard = process.lock();
+        guard.space = Some(space);
+        guard.heap_start = DEFAULT_HEAP_BASE;
+        guard.heap_break = DEFAULT_HEAP_BASE;
     }
+}
+
+pub(crate) fn brk(pid: ProcessId, new_brk: u64) -> Result<u64, ()> {
+    PROCESS_MANAGER.lock().update_brk(pid, new_brk)
 }
 
 pub(crate) fn take_space(pid: ProcessId) -> Option<mmu::AddressSpace> {

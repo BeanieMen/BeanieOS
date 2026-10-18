@@ -7,6 +7,7 @@
 #define SYS_OPEN     2
 #define SYS_CLOSE    3
 #define SYS_LSEEK    8
+#define SYS_BRK      12
 #define SYS_YIELD    24
 #define SYS_GETPID   39
 #define SYS_FORK     57
@@ -59,6 +60,10 @@ static inline long syscall(long num, long a1, long a2, long a3) {
         : "rcx", "r11", "memory"
     );
     return ret;
+}
+
+static inline void *sys_brk(void *addr) {
+    return (void *)syscall(SYS_BRK, (long)addr, 0, 0);
 }
 
 static inline long sys_poll(void *fds, unsigned long nfds, unsigned short events) {

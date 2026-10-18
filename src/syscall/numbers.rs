@@ -26,6 +26,7 @@ syscalls! {
     Open = 2,
     Close = 3,
     Lseek = 8,
+    Brk = 12,
     ArchPrctl = 158,
     SchedYield = 24,
     Getpid = 39,

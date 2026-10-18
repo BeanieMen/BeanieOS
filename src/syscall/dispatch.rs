@@ -24,6 +24,7 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Open => sys_open(args[0], args[1]),
         Syscall::Close => sys_close(args[0]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
+        Syscall::Brk => sys_brk(args[0]),
         Syscall::Fork => sys_fork(frame),
         Syscall::Exit => sys_exit(args[0]),
         Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
@@ -40,6 +41,13 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
     }
 }
 
+fn sys_brk(addr: u64) -> SyscallResult {
+    let pid = current_pid();
+    match process::brk(pid, addr) {
+        Ok(current_break) => Ok(current_break),
+        Err(_) => Err(Errno::NoMem),
+    }
+}
 fn sys_fork(frame: &entry::SyscallFrame) -> SyscallResult {
     let parent_pid = current_pid();
 
