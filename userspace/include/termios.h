@@ -46,14 +46,27 @@ static inline int isatty(int fd) {
 }
 
 static inline void set_raw_mode(int enable) {
-    struct termios t;
-    if (tcgetattr(0, &t) < 0) return;
+    static struct termios saved_termios;
+    static int has_saved = 0;
+
     if (enable) {
-        t.c_lflag &= ~(ICANON | ECHO);
+        if (tcgetattr(0, &saved_termios) == 0) {
+            has_saved = 1;
+            struct termios t = saved_termios;
+            t.c_lflag &= ~(ICANON | ECHO);
+            tcsetattr(0, TCSANOW, &t);
+        }
     } else {
-        t.c_lflag |= (ICANON | ECHO);
+        if (has_saved) {
+            tcsetattr(0, TCSANOW, &saved_termios);
+        } else {
+            struct termios t;
+            if (tcgetattr(0, &t) == 0) {
+                t.c_lflag |= (ICANON | ECHO);
+                tcsetattr(0, TCSANOW, &t);
+            }
+        }
     }
-    tcsetattr(0, TCSANOW, &t);
 }
 
 #endif

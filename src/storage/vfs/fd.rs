@@ -14,8 +14,12 @@ pub(crate) struct FdTable {
 
 impl FdTable {
     pub(crate) fn new() -> Self {
+        let mut slots = Vec::new();
+        slots.push(Some(crate::tty::create_tty_file(OpenFlags::READ)));
+        slots.push(Some(crate::tty::create_tty_file(OpenFlags::WRITE)));
+        slots.push(Some(crate::tty::create_tty_file(OpenFlags::WRITE)));
         FdTable {
-            slots: Vec::new(),
+            slots,
             mounts: MountTable::new(),
         }
     }

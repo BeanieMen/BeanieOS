@@ -4,6 +4,7 @@
       "initialization_options": {
         "check": {
           "command": "check",
+          "allTargets": false,
           "extraArgs": [
             "--target",
             "x86_64.json",
@@ -14,6 +15,7 @@
           ]
         },
         "cargo": {
+          "allTargets": false,
           "targetDir": "target/analyzer",
           "sysroot": "discover"
         }

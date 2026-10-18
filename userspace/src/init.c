@@ -193,6 +193,12 @@ static void input_read_line(void) {
       continue;
     }
 
+    if (c == 0x03) {
+      print("^C\n");
+      input_reset();
+      return;
+    }
+
     if (c == '\r' || c == '\n') {
       print("\n");
       return;

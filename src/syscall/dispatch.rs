@@ -13,50 +13,8 @@ use super::entry;
 use super::error::{Errno, SyscallResult};
 use super::numbers::*;
 
-const TCGETS: u64 = 0x5401;
-const TCSETS: u64 = 0x5402;
-const TCSETSW: u64 = 0x5403;
-const TCSETSF: u64 = 0x5404;
-const TIOCGWINSZ: u64 = 0x5413;
+use crate::tty::{GLOBAL_TTY, TCGETS, TCSETS, TCSETSF, TCSETSW, TIOCGWINSZ, Termios, Winsize};
 
-pub const ICANON: u64 = 0x0002;
-pub const ECHO: u64 = 0x0008;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Termios {
-    pub c_iflag: u32,
-    pub c_oflag: u32,
-    pub c_cflag: u32,
-    pub c_lflag: u32,
-    pub c_line: u8,
-    pub c_cc: [u8; 32],
-}
-
-impl Termios {
-    pub const fn default() -> Self {
-        Termios {
-            c_iflag: 0,
-            c_oflag: 0,
-            c_cflag: 0,
-            c_lflag: 0,
-            c_line: 0,
-            c_cc: [0; 32],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct Winsize {
-    ws_row: u16,
-    ws_col: u16,
-    ws_xpixel: u16,
-    ws_ypixel: u16,
-}
-
-pub static TTY_TERMIOS: crate::arch::lock::InterruptMutex<Termios> =
-    crate::arch::lock::InterruptMutex::new(Termios::default());
 
 pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame) -> SyscallResult {
     let Ok(syscall) = Syscall::try_from(number) else {
@@ -198,7 +156,7 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
 
     match request {
         TCGETS => {
-            let termios = *TTY_TERMIOS.lock();
+            let termios = GLOBAL_TTY.lock().termios;
             let bytes = unsafe {
                 core::slice::from_raw_parts(
                     &termios as *const Termios as *const u8,
@@ -221,7 +179,7 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             if entry::copy_from_user(bytes, arg).is_err() {
                 return Err(Errno::Fault);
             }
-            *TTY_TERMIOS.lock() = termios;
+            GLOBAL_TTY.lock().termios = termios;
             Ok(0)
         }
         TIOCGWINSZ => {
@@ -359,12 +317,6 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
             return Err(Errno::Fault);
         }
 
-        if fd == 1 || fd == 2 {
-            crate::console::write_user_bytes(&staging[..chunk]);
-            total_written += chunk;
-            continue;
-        }
-
         let Some(result) = process::with_current_fds(|fds| fds.write(fd, &staging[..chunk])) else {
             return Err(Errno::BadFd);
         };
@@ -378,18 +330,19 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
 
     Ok(total_written as u64)
 }
-fn wait_for_key() {
+pub(crate) fn wait_for_key() {
     let id = crate::task::identity::current_thread_id();
 
     crate::arch::input::add_waiter(id);
 
     let switched = scheduler::block_current();
 
-    crate::arch::input::remove_waiter(id);
-
     if !switched {
-        x86_64::instructions::hlt();
+        x86_64::instructions::interrupts::enable_and_hlt();
+        x86_64::instructions::interrupts::disable();
     }
+
+    crate::arch::input::remove_waiter(id);
 }
 
 fn sys_poll(fds: u64, nfds: u64, _events: u64) -> SyscallResult {
@@ -399,7 +352,7 @@ fn sys_poll(fds: u64, nfds: u64, _events: u64) -> SyscallResult {
 
     let mut revents = [0u8; 8];
 
-    if crate::arch::input::pending() > 0 {
+    if crate::tty::GLOBAL_TTY.lock().queue.len() > 0 {
         revents[0] = 1;
     }
 
@@ -411,93 +364,43 @@ fn sys_poll(fds: u64, nfds: u64, _events: u64) -> SyscallResult {
 }
 
 fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
+    if len == 0 {
+        return Ok(0);
+    }
+
     if len > 4096 {
         return Err(Errno::Invalid);
     }
 
-    if fd == 0 {
-        let (canonical, echo) = {
-            let termios = TTY_TERMIOS.lock();
-            (
-                (termios.c_lflag as u64 & ICANON) != 0,
-                (termios.c_lflag as u64 & ECHO) != 0,
-            )
-        };
-
-        let mut staging = [0u8; 4096];
-        let mut read = 0;
-        let target_len = (len as usize).min(staging.len());
-
-        if target_len == 0 {
-            return Ok(0);
-        }
-
-        if !canonical {
-            while read < target_len {
-                if let Some(ch) = crate::arch::input::pop_key() {
-                    staging[read] = ch as u8;
-                    read += 1;
-                } else if read == 0 {
-                    wait_for_key();
-                } else {
-                    break;
-                }
-            }
-        } else {
-            while read < target_len {
-                if let Some(ch) = crate::arch::input::pop_key() {
-                    let byte = ch as u8;
-                    if byte == 0x08 || byte == 0x7f {
-                        if read > 0 {
-                            read -= 1;
-                            if echo {
-                                crate::console::write_user_bytes(b"\x08 \x08");
-                            }
-                        }
-                        continue;
-                    }
-
-                    staging[read] = byte;
-                    read += 1;
-
-                    if echo {
-                        if byte == b'\r' || byte == b'\n' {
-                            crate::console::write_user_bytes(b"\r\n");
-                        } else {
-                            crate::console::write_user_bytes(&[byte]);
-                        }
-                    }
-
-                    if byte == b'\r' || byte == b'\n' {
-                        staging[read - 1] = b'\n';
-                        break;
-                    }
-                    continue;
-                }
-                wait_for_key();
-            }
-        }
-
-        if read > 0 && entry::copy_to_user(buf, &staging[..read]).is_err() {
-            return Err(Errno::Fault);
-        }
-        return Ok(read as u64);
-    }
-    
-    let mut staging = [0u8; 4096];
-
-    let Some(result) = process::with_current_fds(|fds| fds.read(fd, &mut staging[..len as usize]))
-    else {
+    let file = process::with_current_fds(|fds| fds.get(fd).cloned());
+    let Some(Ok(mut file)) = file else {
         return Err(Errno::BadFd);
     };
 
-    let read = match result {
-        Ok(read) => read,
-        Err("not a regular file") => return Err(Errno::IsDir),
-        Err(_) => return Err(Errno::Invalid),
+    let mut staging = [0u8; 4096];
+    let to_read = (len as usize).min(staging.len());
+
+    let is_dev = file.inode.lock().file_type == crate::storage::vfs::inode::FileType::Device;
+
+    let read = if is_dev {
+        // Device reads (like TTY) can block; perform outside of process mutex to avoid deadlock
+        match file.read(&mut staging[..to_read]) {
+            Ok(read) => read,
+            Err(_) => return Err(Errno::Invalid),
+        }
+    } else {
+        let Some(result) = process::with_current_fds(|fds| fds.read(fd, &mut staging[..to_read]))
+        else {
+            return Err(Errno::BadFd);
+        };
+        match result {
+            Ok(read) => read,
+            Err("not a regular or device file") => return Err(Errno::IsDir),
+            Err(_) => return Err(Errno::Invalid),
+        }
     };
 
-    if entry::copy_to_user(buf, &staging[..read]).is_err() {
+    if read > 0 && entry::copy_to_user(buf, &staging[..read]).is_err() {
         return Err(Errno::Fault);
     }
 

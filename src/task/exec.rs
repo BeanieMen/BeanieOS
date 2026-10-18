@@ -1,8 +1,6 @@
-use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::arch::interrupts::vectors::ticks;
-use crate::kinfo;
 use crate::memory::mmu::AddressSpace;
 use crate::paging::{PAGE_SIZE, align_down, phys_to_direct};
 use crate::task::elf::{LoadedProcess, load_elf};
@@ -50,13 +48,6 @@ pub(crate) fn execve(
     process::attach_space(identity::current_pid(), space.root);
 
     space.activate();
-
-    kinfo!(
-        "execve: {} -> {:#x}, stack {:#x}",
-        String::from_utf8_lossy(path),
-        loaded.entry_point,
-        stack
-    );
 
     let ss = u64::from(crate::arch::gdt::user_data_selector().0) | 0x3;
     let cs = u64::from(crate::arch::gdt::user_code_selector().0) | 0x3;
