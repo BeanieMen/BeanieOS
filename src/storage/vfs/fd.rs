@@ -2,6 +2,8 @@ use alloc::{sync::Arc, vec::Vec};
 
 use spin::Mutex;
 
+use crate::graphics::vfs::create_fb_file;
+
 use super::file::{File, OpenFlags};
 use super::inode::{FileType, Inode};
 use super::mount::{FileSystem, MountTable};
@@ -117,6 +119,10 @@ impl FdTable {
     }
 
     pub(crate) fn open(&mut self, path: &[u8], flags: OpenFlags) -> Result<u64, &'static str> {
+        if path == b"/dev/fb0" || path == b"dev/fb0" {
+            let fb_file = crate::graphics::vfs::create_fb_file(flags);
+            return Ok(self.alloc(fb_file));
+        }
         let resolved = self.mounts.resolve(path)?;
 
         let inode = resolved.inode();

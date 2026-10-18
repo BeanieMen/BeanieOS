@@ -2,10 +2,15 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::{
+    arch::interrupts::{consts::TICK_MS, vectors::ticks},
     kdebug, kerror,
     memory::mmu::{USER_END, USER_START},
     storage::vfs::file::OpenFlags,
-    task::{identity::current_pid, process, scheduler},
+    task::{
+        identity::current_pid,
+        process::{self, current},
+        scheduler,
+    },
 };
 use x86_64::VirtAddr;
 
@@ -15,8 +20,11 @@ use super::numbers::*;
 
 use crate::tty::{GLOBAL_TTY, TCGETS, TCSETS, TCSETSF, TCSETSW, TIOCGWINSZ, Termios, Winsize};
 
-
-pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &mut entry::SyscallFrame) -> SyscallResult {
+pub(crate) fn dispatch(
+    number: u64,
+    args: [u64; 6],
+    frame: &mut entry::SyscallFrame,
+) -> SyscallResult {
     let Ok(syscall) = Syscall::try_from(number) else {
         return Err(Errno::NoSys);
     };
@@ -53,6 +61,7 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &mut entry::SyscallFr
         Syscall::RtSigprocmask => sys_rt_sigprocmask(args[0], args[1], args[2], args[3]),
         Syscall::RtSigreturn => sys_rt_sigreturn(frame),
         Syscall::Kill => sys_kill(args[0] as i64, args[1]),
+        Syscall::ClockGettime => sys_clock_gettime(args[0], args[1]),
     }
 }
 
@@ -62,7 +71,26 @@ struct Timespec {
     tv_sec: i64,
     tv_nsec: i64,
 }
-
+fn sys_clock_gettime(_clock_id: u64, tp_ptr: u64) -> SyscallResult {
+    let ticks = ticks();
+    let total_ms = ticks * TICK_MS;
+    let sec = (total_ms / 1000) as i64;
+    let nsec = ((total_ms) % 1000 * 1_000_000) as i64;
+    
+    let timespec = Timespec {
+        tv_sec: sec,
+        tv_nsec: nsec,
+    };
+    
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            &timespec as *const Timespec as *const u8,
+            core::mem::size_of::<Timespec>(),
+        )
+    };
+    entry::copy_to_user(tp_ptr, bytes).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
 fn sys_nanosleep(req_ptr: u64, _rem: u64) -> SyscallResult {
     let mut req = Timespec::default();
     let bytes = unsafe {
@@ -81,7 +109,7 @@ fn sys_nanosleep(req_ptr: u64, _rem: u64) -> SyscallResult {
     let ticks = ms.div_ceil(crate::arch::interrupts::consts::TICK_MS);
     for _ in 0..ticks {
         if process::has_pending_signals() {
-            return Err(Errno::Intr)
+            return Err(Errno::Intr);
         }
         scheduler::sleep(1);
     }
@@ -143,8 +171,21 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
     Ok(total_written)
 }
 
-fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, _fd: u64, _offset: u64) -> SyscallResult {
+fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -> SyscallResult {
     let pid = current_pid();
+    let is_fb = process::with_current_fds(|fds| {
+        let file = fds.get(fd).ok()?;
+        Some(file.inode.lock().id == 2)
+    })
+    .flatten()
+    .unwrap_or(false);
+
+    if is_fb {
+        let (start, end) =
+            crate::graphics::framebuffer::framebuffer_range().ok_or(Errno::Invalid)?;
+        let size = (end - start).min(len);
+        return process::mmap_phys(pid, start, size).map_err(|_| Errno::NoMem);
+    }
     match process::mmap(pid, addr, len, prot, flags) {
         Ok(mapped_addr) => Ok(mapped_addr),
         Err(_) => Err(Errno::NoMem),
@@ -156,7 +197,62 @@ fn sys_mun_map(_addr: u64, _len: u64) -> SyscallResult {
 }
 
 fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
-    // Only fds 0, 1, 2 are terminal devices
+    // Framebuffer ioctls (can be on any fd opened to /dev/fb0)
+    match request {
+        crate::graphics::fbdev::FBIOGET_VSCREENINFO => {
+            let writer = crate::graphics::framebuffer::WRITER.lock();
+            let Some(ref fb) = writer.framebuffer else {
+                return Err(Errno::Invalid);
+            };
+            let mut var = crate::graphics::fbdev::FbVarScreeninfo::default();
+            var.xres = fb.width;
+            var.yres = fb.height;
+            var.xres_virtual = fb.width;
+            var.yres_virtual = fb.height;
+            var.bits_per_pixel = fb.bpp as u32;
+            var.red.offset = 16;
+            var.red.length = 8;
+            var.green.offset = 8;
+            var.green.length = 8;
+            var.blue.offset = 0;
+            var.blue.length = 8;
+            drop(writer);
+
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &var as *const _ as *const u8,
+                    core::mem::size_of::<crate::graphics::fbdev::FbVarScreeninfo>(),
+                )
+            };
+            entry::copy_to_user(arg, bytes).map_err(|_| Errno::Fault)?;
+            return Ok(0);
+        }
+        crate::graphics::fbdev::FBIOGET_FSCREENINFO => {
+            let (fb_start, fb_end) =
+                crate::graphics::framebuffer::framebuffer_range().ok_or(Errno::Invalid)?;
+            let writer = crate::graphics::framebuffer::WRITER.lock();
+            let Some(ref fb) = writer.framebuffer else {
+                return Err(Errno::Invalid);
+            };
+            let mut fix = crate::graphics::fbdev::FbFixScreeninfo::default();
+            fix.smem_start = fb_start;
+            fix.smem_len = (fb_end - fb_start) as u32;
+            fix.line_length = fb.pitch;
+            drop(writer);
+
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    &fix as *const _ as *const u8,
+                    core::mem::size_of::<crate::graphics::fbdev::FbFixScreeninfo>(),
+                )
+            };
+            entry::copy_to_user(arg, bytes).map_err(|_| Errno::Fault)?;
+            return Ok(0);
+        }
+        _ => {}
+    }
+
+    // Terminal ioctls (only fds 0, 1, 2)
     if fd > 2 {
         return Err(Errno::NotTty);
     }
@@ -212,7 +308,11 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             Ok(0)
         }
         crate::tty::TIOCGPGRP => {
-            let pgid = GLOBAL_TTY.lock().foreground_pgrp.map(|p| p.as_u64() as i32).unwrap_or(0);
+            let pgid = GLOBAL_TTY
+                .lock()
+                .foreground_pgrp
+                .map(|p| p.as_u64() as i32)
+                .unwrap_or(0);
             entry::copy_to_user(arg, &pgid.to_le_bytes()).map_err(|_| Errno::Fault)?;
             Ok(0)
         }
@@ -226,6 +326,7 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
         _ => Err(Errno::Invalid),
     }
 }
+
 fn sys_set_tid_address(_tidptr: u64) -> SyscallResult {
     Ok(current_pid().as_u64())
 }

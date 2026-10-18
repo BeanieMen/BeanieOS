@@ -507,13 +507,7 @@ impl fmt::Write for Writer {
 pub(crate) static WRITER: InterruptMutex<Writer> = InterruptMutex::new(Writer::new());
 
 pub(crate) fn framebuffer_range() -> Option<(u64, u64)> {
-    let writer = WRITER.lock();
-    let fb = writer.framebuffer.as_ref()?;
-
-    Some((
-        fb.addr as u64,
-        fb.addr as u64 + (fb.height * fb.pitch) as u64,
-    ))
+    crate::memory::mmu::memory_info().framebuffer
 }
 
 pub(crate) fn init_framebuffer(phys: u64, width: u32, height: u32, pitch: u32, bpp: u8) {

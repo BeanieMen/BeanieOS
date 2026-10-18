@@ -45,6 +45,7 @@ syscalls! {
     RtSigprocmask = 14,
     RtSigreturn = 15,
     Kill = 62,
+    ClockGettime = 228,
     
     Getdents64 = 217,
     SetTidAddress = 218,
