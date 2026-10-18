@@ -41,6 +41,10 @@ syscalls! {
     Exit = 60,
     Wait4 = 61,
     Poll = 7,
+    RtSigaction = 13,
+    RtSigprocmask = 14,
+    RtSigreturn = 15,
+    Kill = 62,
     
     Getdents64 = 217,
     SetTidAddress = 218,

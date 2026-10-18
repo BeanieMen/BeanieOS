@@ -158,6 +158,79 @@ pub extern "C" fn syscall_c(frame: *mut SyscallFrame) {
     crate::kdebug!("syscall {number} -> {result:#x}");
 
     frame.regs.rax = result;
+
+    if number != crate::syscall::numbers::Syscall::RtSigreturn as u64 {
+        handle_pending_signals(frame);
+    }
+}
+
+fn handle_pending_signals(frame: &mut SyscallFrame) {
+    let Some(proc) = crate::task::process::current() else {
+        return;
+    };
+    let mut p = proc.lock();
+
+    let active = p.pending_signals & !p.blocked_signals;
+    if active == 0 {
+        return;
+    }
+
+    let sig = active.trailing_zeros() as usize + 1;
+    let sig_mask_bit = 1u64 << (sig - 1);
+    p.pending_signals &= !sig_mask_bit;
+
+    let action = p.sigactions[sig - 1];
+
+    match action.sa_handler {
+        crate::task::signal::SIG_IGN => {}
+        crate::task::signal::SIG_DFL => {
+            match sig {
+                17 /* SIGCHLD */ | 23 /* SIGURG */ => {}
+                _ => {
+                    let pid = p.pid;
+                    drop(p);
+                    crate::task::process::exit(pid, 128 + sig as i32);
+                    crate::task::scheduler::exit();
+                }
+            }
+        }
+        handler_addr => {
+            let saved_mask = p.blocked_signals;
+            p.blocked_signals |= action.sa_mask | sig_mask_bit;
+
+            let ctx = crate::task::signal::SignalUserContext {
+                regs: frame.regs,
+                rip: frame.rip,
+                rflags: frame.rflags,
+                rsp: frame.rsp,
+                mask: saved_mask,
+                sig: sig as u64,
+            };
+
+            drop(p);
+
+            let ctx_size = core::mem::size_of::<crate::task::signal::SignalUserContext>() as u64;
+            let mut new_rsp = (frame.rsp - ctx_size) & !0xF;
+
+            let ctx_bytes = unsafe {
+                core::slice::from_raw_parts(&ctx as *const _ as *const u8, ctx_size as usize)
+            };
+            if copy_to_user(new_rsp, ctx_bytes).is_err() {
+                crate::task::process::exit(crate::task::identity::current_pid(), 139);
+                crate::task::scheduler::exit();
+            }
+
+            if action.sa_restorer != 0 {
+                new_rsp -= 8;
+                let restorer_bytes = action.sa_restorer.to_le_bytes();
+                let _ = copy_to_user(new_rsp, &restorer_bytes);
+            }
+
+            frame.rsp = new_rsp;
+            frame.rip = handler_addr;
+            frame.regs.rdi = sig as u64;
+        }
+    }
 }
 
 pub(crate) fn install() {

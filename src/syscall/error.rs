@@ -5,6 +5,7 @@ pub(crate) type SyscallResult = Result<u64, Errno>;
 pub(crate) enum Errno {
     NoSys = 38,
     BadFd = 9,
+    Intr = 4,
     NoEntry = 2,
     Child = 10,
     Invalid = 22,

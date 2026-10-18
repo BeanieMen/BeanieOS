@@ -142,15 +142,18 @@ impl File {
 
         let inode = self.inode.lock();
 
-        if inode.file_type != FileType::Regular {
-            return Err("not a regular file");
+        if inode.file_type != FileType::Regular && inode.file_type != FileType::Device {
+            return Err("not a regular or device file");
         }
 
+        let is_dev = inode.file_type == FileType::Device;
         let read = inode.file_ops.read(&inode, self.offset, buf)?;
 
         drop(inode);
 
-        self.offset += read as u64;
+        if !is_dev {
+            self.offset += read as u64;
+        }
 
         Ok(read)
     }
@@ -169,12 +172,15 @@ impl File {
         let mut inode = self.inode.lock();
 
         let ops = inode.file_ops;
+        let is_dev = inode.file_type == FileType::Device;
 
         let written = ops.write(&mut inode, offset, buf)?;
 
         drop(inode);
 
-        self.offset = offset + written as u64;
+        if !is_dev {
+            self.offset = offset + written as u64;
+        }
 
         Ok(written)
     }

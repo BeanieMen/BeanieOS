@@ -113,7 +113,7 @@ static void draw(void)
     }
 
     print("+------------------------------------------------------------+\r\n");
-    print("W/S or arrows: move   Q: quit\r\n");
+    print("W/S or arrows: move   Q or Ctrl+C: quit\r\n");
 }
 
 
@@ -289,7 +289,7 @@ int main(void)
     for (;;) {
         key = read_key();
 
-        if (key == 'q' || key == 'Q') {
+        if (key == 'q' || key == 'Q' || key == 3) {
             print("\033[2J\033[H");
             print("Thanks for playing Pong!\r\n");
             print("Final score: You ");

@@ -11,6 +11,7 @@
 #define SYS_MMAP 9
 #define SYS_MUNMAP 11
 #define SYS_BRK 12
+#define SYS_RT_SIGACTION 13
 #define SYS_IOCTL 16
 #define SYS_YIELD 24
 #define SYS_NANOSLEEP 35
@@ -101,6 +102,12 @@ static inline void *sys_mmap(void *addr, unsigned long len, int prot, int flags,
 }
 static inline long sys_ioctl(int fd, unsigned long req, void *arg) {
   return syscall(SYS_IOCTL, fd, (long)req, (long)arg);
+}
+
+static inline int sys_rt_sigaction(int sig, const void *act, void *oldact,
+                                   unsigned long sigsetsize) {
+  return (int)syscall6(SYS_RT_SIGACTION, sig, (long)act, (long)oldact,
+                       sigsetsize, 0, 0);
 }
 
 static inline long sys_munmap(void *addr, unsigned long len) {

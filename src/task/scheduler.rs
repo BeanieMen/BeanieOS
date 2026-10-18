@@ -1,5 +1,4 @@
 use x86_64::VirtAddr;
-use ::x86_64::instructions::hlt;
 use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc};
 
 use crate::arch::gdt;
@@ -114,20 +113,24 @@ impl Scheduler {
     }
 
     fn sleep_for(&mut self, duration_ticks: u64) -> Option<ContextSwitch> {
-        if self.runnable_count() <= 1 {
-            return None;
-        }
-
         let deadline = self.ticks().saturating_add(duration_ticks);
 
         if let Some(current) = self.threads.get(&self.current) {
             current.lock().state = ThreadState::Sleeping(deadline);
         }
 
-        self.switch_to_any()
+        let switch = self.switch_to_any();
+        if switch.is_none() {
+            if let Some(current) = self.threads.get(&self.current) {
+                current.lock().state = ThreadState::Running;
+            }
+        }
+        switch
     }
 
     fn account_tick(&mut self) {
+        self.wake_sleeping_threads();
+
         let Some(current) = self.threads.get(&self.current) else {
             return;
         };
@@ -298,7 +301,14 @@ impl Scheduler {
             thread.state = ThreadState::Blocked;
         }
 
-        self.switch_to_any()
+        let switch = self.switch_to_any();
+        if switch.is_none() {
+            if let Some(current) = self.threads.get(&self.current) {
+                let mut thread = current.lock();
+                thread.state = ThreadState::Running;
+            }
+        }
+        switch
     }
 
     fn wake(&mut self, id: ThreadId) {
@@ -407,10 +417,14 @@ pub(crate) fn sleep(duration_ticks: u64) {
         apply(Some(switch));
     } else {
         while crate::arch::interrupts::vectors::ticks() < deadline {
-            hlt();
+            x86_64::instructions::interrupts::enable_and_hlt();
+            x86_64::instructions::interrupts::disable();
+            SCHEDULER.lock().wake_sleeping_threads();
         }
         if let Some(current) = SCHEDULER.lock().threads.get(&SCHEDULER.lock().current) {
-            current.lock().timeslice = TIMESLICE_TICKS;
+            let mut thread = current.lock();
+            thread.state = ThreadState::Running;
+            thread.timeslice = TIMESLICE_TICKS;
         }
     }
 }
@@ -421,7 +435,7 @@ pub(crate) fn exit() -> ! {
     apply(switch);
 
     loop {
-        hlt();
+        x86_64::instructions::interrupts::enable_and_hlt();
     }
 }
 
