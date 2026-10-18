@@ -173,12 +173,12 @@
 <body>
 
     <div class="nav-bar">
-        <a href="index.html" class="title">
+        <a href="/" class="title">
             <img src="https://cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
             <h1>BeanieOS</h1>
         </a>
         <div class="nav-links">
-            <a href="docs.html" class="docs-link">Documentation</a>
+            <a href="/docs/overview" class="docs-link">Documentation</a>
             <a href="https://github.com/beaniemen/BeanieOS" class="github-link">Github</a>
         </div>
     </div>
@@ -188,57 +188,48 @@
         <h2>Beanie Docs</h2>
 
         <nav>
-            <a href="docs.html">Overview</a>
-            <a href="getting-started.html">-- Getting Started & Build System</a>
-            <a href="dependencies.html">-- Dependencies and Crate Configuration</a>
-            <a href="journal.html">-- Development Journal</a>
-            <a href="docs-website.html">-- Documentation Website (docs/)</a>
+            <a href="/docs/ovrview">Overview</a>
+            <a href="/docs/getting-started">-- Getting Started & Build System</a>
+            <a href="/docs/dependencies">-- Dependencies and Crate Configuration</a>
+            <a href="/docs/journal">-- Development Journal</a>
+            <a href="/docs/website">-- Documentation Website (docs/)</a>
+            <a href="/docs/initialization">Boot and Initialization</a>
+            <a href="/docs/firmware">Firmware, Limine and Disk Image</a>
+            <a href="/docs/assembly">Assembly Entry and Linker Layout</a>
+            <a href="/docs/subsystem">kernel_main and Subsystem Init Order</a>
         </nav>
 
     </aside>
-    
+
     <main>
 
-        <h2>Overview</h2>
-        <p>BeanieOS is a bare-metal <mark>x86_64</mark> hobby kernel implemented entirely in Rust. It operates without a standard library
-        (<mark>#![no_std]</mark>) and without an operating system runtime environment (<mark>#![no_main]</mark>).
-        The kernel boots via Multiboot2 compliant bootloaders, configures foundational CPU structures (GDT, IDT, paging),
-        initializes a memory heap and graphical framebuffer, and hands control over to a cooperative async task executor.</p>
-        
-        <h2>System Architecture Map</h2>
-        <p>The codebase is organised into modular subdirectories corresponding to core kernel esponsibilties, anchored by
-            <mark>src/main.rs</mark> as the primary entry and orchestration point.
+        <h2>Purpose and Scope</h2>
+        <p>This section provides a high-level overview of the boot and initialization sequence for BeanieOS, 
+            tracing the execution path from UEFI firmware execution to the handoff into the kernel's main execution loop. 
+            For comprehensive implementation details, refer to the child pages:
+
+            <ul>
+                <li>
+                    <a href="/docs/firmware">Firmware, Limine and Disk Image</a>
+                </li>
+                <li>
+                    <a href="/docs/assembly">Assembly Entry and Linker Layout</a>
+                </li>
+                <li>
+                    <a href="/docs/subsystem">kernel_main and Subsystem Init Order</a>
+                </li>
+            </ul>
+        </p>
+
+        <h2>High-Level Boot-to-Kernel Flow</h2>
+        <p>The machine boots UEFI using the limine bootloader, which loads the kernel image using the Multiboot2 specification, 
+            parses onfiguration options from <mark>limine/limine.conf</mark>, and hands control over to the kernel entry 
+            point in long mode.
         </p>
         <img src="" alt="">
-        
-        <h2>Boot-to-Executor Flow</h2>
-        <p>The initialization sequence transitions the processor from early bootloader handoff into fully interactive kernel tasks.
-            The control flow begins at <mark>kernel_main</mark>, invokes <mark>init</mark> to setup paging, allocation, graphics, and interrupts,
-            and finally spawns asynchronous tasks into <mark>Executor::run</mark>.
-        </p>
-        <img src="" alt="">
-        
-        <h2>Child Pages</h2>
-        <p>For granular technical documentation, consult the following child pages:</p>
-        <ul>
-            <li>
-                <a href="getting-started.html">Getting Started & Build System</a> -- Covers Makefile targets (<mark>setup</mark>, <mark>boot</mark>,
-                <mark>kernel</mark>, <mark>disk</mark>, <mark>run</mark>, <mark>lint</mark>), toolchain requirements, the <mark>x86_64.json</mark>
-                target specification, formatting configurations, and version control exclusions.
-            </li>
-            <li>
-                <a href="dependencies.html">Dependencies and Crate Configuration</a> -- Detals <mark>Cargo.toml</mark> and <mark>Cargo.lock</mark>
-                configurations, including <mark>no_std</mark> crate integrations (<mark>x86_64</mark>, <mark>multiboot2</mark>, <mark>spin</mark>,
-                <mark>linked_list_allocator</mark>, <mark>futures-util</mark>, <mark>pc-keyboard</mark>) and <mark>panic = "abort"</mark> profile setups.
-            </li>
-            <li>
-                <a href="journal.html">Developer Journal</a> -- Summarize historial notes, learnings, and incremental architectural decisions extracted from
-                <mark>JOURNAL.md</mark>.
-            </li>
-        </ul>
 
     </main>
-
+    
 </body>
 
 </html>

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BeanieOS</title>
 
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,16 +16,15 @@
     <link href="https://fonts.googleapis.com/css2?family=Signika:wght@300..700&display=swap" rel="stylesheet">
 </head>
 
-
 <body>
 
     <div class="nav-bar">
-        <a href="index.html" class="title">
+        <a href="/" class="title">
             <img src="https://cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
             <h1>BeanieOS</h1>
         </a>
         <div class="nav-links">
-            <a href="docs.html">Documentation</a>
+            <a href="/docs/overview">Documentation</a>
             <a href="https://github.com/beaniemen/BeanieOS">Github</a>
         </div>
     </div>
@@ -198,7 +197,7 @@
             <p>Documentation for BeanieOS is under development. Technical guides, architecture details, build instructions, 
                 and usage documentation will be added as the project evolves.<br>
 
-            <a href="docs.html">Explore Documentation</a> <br>
+            <a href="/docs/overview">Explore Documentation</a> <br>
             </p>
 
         </section>
