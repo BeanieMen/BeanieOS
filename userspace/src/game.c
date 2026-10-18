@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "termios.h"
 
 #define W 60
 #define H 20
@@ -135,6 +136,19 @@ static int read_key(void)
         return -1;
     }
 
+    if (c == 0x1b) {
+        if (sys_poll(fds, 1, 0) > 0) {
+            unsigned char seq[2];
+            if (sys_read(0, &seq[0], 1) > 0 && seq[0] == '[') {
+                if (sys_poll(fds, 1, 0) > 0 && sys_read(0, &seq[1], 1) > 0) {
+                    if (seq[1] == 'A') return KEY_UP;
+                    if (seq[1] == 'B') return KEY_DOWN;
+                }
+            }
+        }
+        return -1;
+    }
+
     return (int)c;
 }
 
@@ -259,6 +273,8 @@ int main(void)
 {
     int key;
 
+    set_raw_mode(1);
+
     paddle_y = H / 2 - PADDLE_LEN / 2;
     ai_y = H / 2 - PADDLE_LEN / 2;
 
@@ -283,6 +299,7 @@ int main(void)
             print_number(score_ai);
 
             print("\r\n");
+            set_raw_mode(0);
             return 0;
         }
 
@@ -295,9 +312,10 @@ int main(void)
         build_field();
         draw();
         
-        sys_sleep_ms(64); // 15 fps
+        sys_sleep_ms(16); // ~60 fps
         sys_yield();
     }
 
+    set_raw_mode(0);
     return 0;
 }

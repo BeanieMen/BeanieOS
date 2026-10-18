@@ -36,10 +36,10 @@ pub struct Termios {
 impl Termios {
     pub const fn default() -> Self {
         Termios {
-            c_iflag: 0,      // ICRNL | IXON
-            c_oflag: 0,      // OPOST | ONLCR
-            c_cflag: 0,      // CS8 | CREAD
-            c_lflag: 0x8a3b, // ECHO | ICANON | ISIG | IEXTEN
+            c_iflag: 0,
+            c_oflag: 0,
+            c_cflag: 0,
+            c_lflag: 0,
             c_line: 0,
             c_cc: [0; 32],
         }
