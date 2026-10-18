@@ -159,13 +159,20 @@ fn build_stack(
     write_user(space, terminator, &AT_NULL.to_le_bytes())?;
     write_user(space, terminator + 8, &0u64.to_le_bytes())?;
 
+    // ensure (argc+argv+envp) is 16-byte aligned
+    let total_words = 1 + (argv.len() + 1) + (envp.len() + 1);
+    if total_words % 2 != 0 {
+        at -= 8;
+        write_user(space, at, &0u64.to_le_bytes())?;
+    }
+    
     push_pointer_array(space, &mut at, envp)?;
     push_pointer_array(space, &mut at, argv)?;
 
     at -= 8;
     write_user(space, at, &(argv.len() as u64).to_le_bytes())?;
 
-    Ok(at & !0xf)
+    Ok(at)
 }
 
 fn push_pointer_array(

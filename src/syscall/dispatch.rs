@@ -24,13 +24,19 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Open => sys_open(args[0], args[1]),
         Syscall::Close => sys_close(args[0]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
+        Syscall::Mmap => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
+        Syscall::Munmap => sys_mun_map(args[0], args[1]),
+        Syscall::Brk => sys_brk(args[0]),
+        Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
         Syscall::Fork => sys_fork(frame),
         Syscall::Exit => sys_exit(args[0]),
+        Syscall::ExitGroup => sys_exit(args[0]),
         Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
         Syscall::ArchPrctl => sys_arch_prctl(args[0], args[1]),
         Syscall::Getpid => sys_getpid(),
         Syscall::SchedYield => sys_yield(),
         Syscall::Getdents64 => sys_getdents(args[0], args[1], args[2]),
+        Syscall::SetTidAddress => sys_set_tid_address(args[0]),
         Syscall::Mkdir => sys_mkdir(args[0]),
         Syscall::Create => sys_create(args[0]),
         Syscall::Execve => sys_execve(args[0], args[1], args[2]),
@@ -40,6 +46,38 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
     }
 }
 
+fn sys_mmap(
+    addr: u64,
+    len: u64,
+    prot: u64,
+    flags: u64,
+    _fd: u64,
+    _offset: u64,
+) -> SyscallResult {
+    let pid = current_pid();
+    match process::mmap(pid,addr,len,prot,flags) {
+        Ok(mapped_addr) => Ok(mapped_addr),
+        Err(_) => Err(Errno::NoMem),
+    }
+}
+
+fn sys_mun_map(_addr: u64, _len: u64) -> SyscallResult {
+    Ok(0)
+}
+
+fn sys_ioctl(_fd: u64, _request: u64, _arg: u64) -> SyscallResult {
+    Err(Errno::NotTty)
+}
+fn sys_set_tid_address(_tidptr: u64) -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
+fn sys_brk(addr: u64) -> SyscallResult {
+    let pid = current_pid();
+    match process::brk(pid, addr) {
+        Ok(current_break) => Ok(current_break),
+        Err(_) => Err(Errno::NoMem),
+    }
+}
 fn sys_fork(frame: &entry::SyscallFrame) -> SyscallResult {
     let parent_pid = current_pid();
 
@@ -49,7 +87,8 @@ fn sys_fork(frame: &entry::SyscallFrame) -> SyscallResult {
         return Err(Errno::NoMem);
     };
 
-    let child_space = crate::memory::mmu::AddressSpace::clone_from_root(root).map_err(|_| Errno::NoMem)?;
+    let child_space =
+        crate::memory::mmu::AddressSpace::clone_from_root(root).map_err(|_| Errno::NoMem)?;
     process::attach_space(child_pid, child_space.root);
     core::mem::forget(child_space);
 

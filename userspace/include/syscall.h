@@ -7,6 +7,9 @@
 #define SYS_OPEN     2
 #define SYS_CLOSE    3
 #define SYS_LSEEK    8
+#define SYS_MMAP     9
+#define SYS_MUNMAP   11
+#define SYS_BRK      12
 #define SYS_YIELD    24
 #define SYS_GETPID   39
 #define SYS_FORK     57
@@ -59,6 +62,30 @@ static inline long syscall(long num, long a1, long a2, long a3) {
         : "rcx", "r11", "memory"
     );
     return ret;
+}
+
+static inline long syscall6(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
+    long ret;
+    register long r10 __asm__("r10") = a4;
+    register long r8  __asm__("r8")  = a5;
+    register long r9  __asm__("r9")  = a6;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a" (ret)
+        : "a" (num), "D" (a1), "S" (a2), "d" (a3), "r" (r10), "r" (r8), "r" (r9)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+static inline void *sys_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long offset) {
+    return (void *)syscall6(SYS_MMAP, (long)addr, len, prot, flags, fd, offset);
+}
+static inline long sys_munmap(void *addr, unsigned long len) {
+    return (int)syscall(SYS_MUNMAP, (long)addr, len, 0);
+}
+static inline void *sys_brk(void *addr) {
+    return (void *)syscall(SYS_BRK, (long)addr, 0, 0);
 }
 
 static inline long sys_poll(void *fds, unsigned long nfds, unsigned short events) {
