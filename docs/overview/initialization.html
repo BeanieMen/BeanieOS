@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+
+    <style>
+
+        body{
+            margin: 0;
+            padding: 0;
+
+            font-family: "Public Sans", sans-serif;
+            font-optical-sizing: auto;
+            font-weight: 200;
+            font-style: normal;
+        }
+
+        main{
+            margin-top: 9vh;
+            margin-left: 280px;
+            margin-right: 50px;
+            padding: 25px 50px 60px 60px;
+        }
+
+        h1{
+            margin-bottom: 30px;
+        }
+
+        .sidebar{
+            position: fixed;
+            left: 0;
+            top: 9vh;
+
+            width: 240px;
+            height: 100vh;
+
+            background: white;
+            padding: 30px 10px 0 20px;
+
+            border-right: 1px dashed #333;
+        }
+
+        .sidebar nav{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .sidebar a{
+            color: black;
+            text-decoration: none;
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .sidebar a:hover{
+            background: rgb(238, 237, 237);
+        }
+
+        p {
+            line-height: 1.6;
+        }
+
+        li {
+            line-height: 1.8;
+        }
+
+        mark{
+            background-color: rgb(223, 222, 222);
+            font-weight: 500;
+            padding: 1px 4px;
+            border-radius: 6px;
+        }
+
+        main a{
+            color: black;
+        }
+
+        .nav-bar{
+            position: fixed;
+            top: 0;
+            left: 0;
+
+            width: 100%;
+            height: 9vh;
+            margin: 0 !important;
+            background-color: rgb(44, 42, 42);
+
+            display: flex;
+            gap: 800px;
+
+            padding-left: 1.5vw;
+            padding-right: 1.5vw;
+
+            align-items: center;
+        }
+
+        .nav-bar .title{
+            display: flex;
+            gap: 1px;
+            text-decoration: none;
+            color: white;
+            align-items: center;
+        }
+
+        .nav-bar h1{
+            font-size: 2vw;
+        }
+
+        .nav-bar img{
+            height: 3.2vw;
+            width: auto;
+        }
+
+        .nav-links{
+            display: flex;
+            gap: 100px;
+        }
+
+        .github-link{
+            color: rgba(255, 255, 255, 0.782);
+            text-decoration: none;
+            font-size: 17px;
+        }
+
+        .github-link:hover{
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        .docs-link{
+            font-size: large;
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        main::selection {
+            background-color: rgb(249, 249, 9);
+        }
+
+        main::-moz-selection {
+            background-color: rgb(249, 249, 9);
+        }
+
+        .nav-bar::selection{
+            background-color: rgb(218, 6, 6);
+        }
+
+        .nav-bar::-moz-selection {
+            background-color: rgb(218, 6, 6);
+        }
+
+        .sidebar::selection {
+            background-color: rgb(158, 249, 0);
+        }
+
+        .sidebar::-moz-selection {
+            background-color: rgb(158, 249, 0);
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <div class="nav-bar">
+        <a href="index.html" class="title">
+            <img src="https://cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
+            <h1>BeanieOS</h1>
+        </a>
+        <div class="nav-links">
+            <a href="docs.html" class="docs-link">Documentation</a>
+            <a href="https://github.com/beaniemen/BeanieOS" class="github-link">Github</a>
+        </div>
+    </div>
+
+    <aside class="sidebar">
+
+        <h2>Beanie Docs</h2>
+
+        <nav>
+            <a href="docs.html">Overview</a>
+            <a href="getting-started.html">-- Getting Started & Build System</a>
+            <a href="dependencies.html">-- Dependencies and Crate Configuration</a>
+            <a href="journal.html">-- Development Journal</a>
+            <a href="docs-website.html">-- Documentation Website (docs/)</a>
+            <a href="initialization.html">Boot and Initialization</a>
+            <a href="firmware.html">Firmware, Limine and Disk Image</a>
+            <a href="assembly.html">Assembly Entry and Linker Layout</a>
+            <a href="subsystem.html">kernel_main and Subsystem Init Order</a>
+        </nav>
+
+    </aside>
+
+    <main>
+
+        <h2>Purpose and Scope</h2>
+        <p>This section provides a high-level overview of the boot and initialization sequence for BeanieOS, 
+            tracing the execution path from UEFI firmware execution to the handoff into the kernel's main execution loop. 
+            For comprehensive implementation details, refer to the child pages:
+
+            <ul>
+                <li>
+                    <a href="firmware.html">Firmware, Limine and Disk Image</a>
+                </li>
+                <li>
+                    <a href="assembly.html">Assembly Entry and Linker Layout</a>
+                </li>
+                <li>
+                    <a href="subsystem.html">kernel_main and Subsystem Init Order</a>
+                </li>
+            </ul>
+        </p>
+
+        <h2>High-Level Boot-to-Kernel Flow</h2>
+        <p>The machine boots UEFI using the limine bootloader, which loads the kernel image using the Multiboot2 specification, 
+            parses onfiguration options from <mark>limine/limine.conf</mark>, and hands control over to the kernel entry 
+            point in long mode.
+        </p>
+        <img src="" alt="">
+
+    </main>
+    
+</body>
+
+</html>

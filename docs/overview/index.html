@@ -10,6 +10,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Code:ital,wght,MONO@0,300..800,1;1,300..800,1&display=swap" rel="stylesheet">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Signika:wght@300..700&display=swap" rel="stylesheet">
 </head>
 
 
@@ -40,27 +44,43 @@
         </section>
 
 
+        <section class="download">
+
+            <h2>Get BeanieOS</h2>
+            <a href="https://github.com/BeanieMen/BeanieOS/releases" class="download-button">Download BeanieOS 0.1.0</a>
+
+            <img src="https://cdn.hackclub.com/01a12db2-b37b-7cf9-82cb-950f806ba5ea/beanie_eating.avif" alt="" id="welcome">
+
+        </section>
+
+
         <section class="current-status">
 
-            <h3>Current Status</h3>
+            <div class="heading-row">
+                <h3>Current Status</h3>
+                <img src="https://cdn.hackclub.com/01a12da9-8f41-7335-858f-0f36968e87d8/beanie_happy.avif" alt="" class="bunny">
+            </div>
 
-            <p>BeanieOS is under active development. The core foundations of the operating system are now functional, with development moving towards processes, 
-                storage, userspace, and eventually a more complete system environment.
+            <p>
+                BeanieOS is an experimental Rust-based operating system with a functioning kernel, interrupt handling, memory management, 
+                a basic process system, and a command-line shell. Its graphical framebuffer is working, and FAT32 filesystem and storage 
+                read/write support are implemented. Development is focused on standardizing the process system, expanding shell 
+                functionality, and building out userspace.
             </p>
 
         </section>
 
 
-        <img src="https://cdn.hackclub.com/01a0e5b6-1309-740b-99eb-bc1c73e37b2d/beanie_one_eye.avif" alt="beanie-welcome" id="welcome">
-
-
         <section class="core-system">
 
-            <h3>Core System</h3>
+            <div class="heading-row">
+                <h3>Core System</h3>
+                <img src="https://cdn.hackclub.com/01a12db3-de14-770c-9937-ee3dad849caa/beanie_angry.avif" alt="" class="bunny">
+            </div>
 
             <div>
                 <span>Bootloader -</span>
-                <span class="status">Done</span>
+                <span class="status">Complete</span>
             </div>
 
             <div>
@@ -80,12 +100,12 @@
 
             <div>
                 <span>Basic Process System -</span>
-                <span class="status">Working, currently non-standard</span>
+                <span class="status">Working, standardization in progress</span>
             </div>
 
             <div>
                 <span>Shell -</span>
-                <span class="status">Basic commands working</span>
+                <span class="status">Basic commands implemented</span>
             </div>
 
         </section>
@@ -93,16 +113,19 @@
 
         <section class="graphics">
 
-            <h3>Graphics</h3>
+            <div class="heading-row">
+                <h3>Graphics</h3>
+                <img src="https://cdn.hackclub.com/01a12db3-a123-7f88-baa3-f627ccea5078/beanie_glasses.avif" alt="" class="bunny">
+            </div>
 
             <div>
-                <span>Native Graphical Framebuffer -</span>
+                <span>Graphical Framebuffer -</span>
                 <span class="status">Working</span>
             </div>
 
             <div>
-                <span>Graphics Driver -</span>
-                <span class="status">Non-VESA implementation working</span>
+                <span>Graphics Implementation -</span>
+                <span class="status">Non-VESA framebuffer implemented</span>
             </div>
 
         </section>
@@ -110,16 +133,19 @@
 
         <section class="storage">
 
-            <h3>Storage & File System</h3>
+            <div class="heading-row">
+                <h3>Storage & File System</h3>
+                <img src="https://cdn.hackclub.com/01a12db3-3077-7e02-b88d-48635cd8835b/beanie_ready.avif" alt="" class="bunny">
+            </div>
 
             <div>
                 <span>Storage Drivers -</span>
-                <span class="status">Read/Write working</span>
+                <span class="status">Read/Write support implemented</span>
             </div>
 
             <div>
                 <span>FAT32 Filesystem -</span>
-                <span class="status">Read/Write working</span>
+                <span class="status">Read/Write support implemented</span>
             </div>
 
         </section>
@@ -127,16 +153,19 @@
 
         <section class="architecture">
 
-            <h3>Architecture</h3>
-
-            <div>
-                <span>x86_64 -</span>
-                <span class="status">Current target</span>
+            <div class="heading-row">
+                <h3>Architecture</h3>
+                <img src="https://cdn.hackclub.com/01a12da4-b3c2-70ce-8334-e7306130f6b2/beanie_emotion.avif" alt="" class="bunny">
             </div>
 
             <div>
-                <span>Monolithic Kernel -</span>
-                <span class="status">Current architecture</span>
+                <span>Target architecture -</span>
+                <span class="status">x86_64</span>
+            </div>
+
+            <div>
+                <span>Kernel design -</span>
+                <span class="status">Monolithic</span>
             </div>
 
         </section>
@@ -144,27 +173,36 @@
 
         <section class="next">
 
-            <h3>Next Up</h3>
+            <div class="heading-row">
+                <h3>Next Up</h3>
+                <img src="https://cdn.hackclub.com/01a12db2-9a72-7c2e-b62f-cfccccd83f34/beanie_crying.avif" alt="" class="bunny">
+            </div>
 
             <p>- Standardize the process system <br>
-                - Expand shell commands <br>
-                - Improve filesystem support and reliability <br>
-                - Build out userspace <br>
-                - Continue hardware/driver support</p>
+                - Expand shell commands and functionality<br>
+                - Improve filesystem reliability and support<br>
+                - Develop the userspace environment<br>
+                - Expand hardware and driver support
+            </p>
 
         </section>
 
 
         <section class="documentation">
 
-            <h3>Learn BeanieOS</h3>
+            <div class="heading-row">
+                <h3>Learn BeanieOS</h3>
+                <img src="https://cdn.hackclub.com/01a12db2-e2e5-79ff-9136-812cf6baa2cf/beanie_lol.avif" alt="" class="bunny">
+            </div>
 
-            <p>Explore the documentation, understand the architecture, build the project and follow its development. <br>
+            <p>Documentation for BeanieOS is under development. Technical guides, architecture details, build instructions, 
+                and usage documentation will be added as the project evolves.<br>
 
             <a href="docs.html">Explore Documentation</a> <br>
-            It's not complete yet. We will implement the docs next week.</p>
+            </p>
 
         </section>
+
     </main>
 </body>
 </html>
