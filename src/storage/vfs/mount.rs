@@ -11,6 +11,7 @@ pub(crate) trait FileSystem: Sync + Send {
     fn sync(&self) -> Result<(), &'static str>;
 }
 
+#[derive(Clone)]
 struct Mount {
     root: Arc<Mutex<Dentry>>,
     #[allow(dead_code)]
@@ -50,6 +51,7 @@ impl Mount {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct MountTable {
     mounts: Vec<Mount>,
 }

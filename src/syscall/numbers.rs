@@ -29,16 +29,15 @@ syscalls! {
     ArchPrctl = 158,
     SchedYield = 24,
     Getpid = 39,
-    Exit = 60,
+    Fork = 57,
     Execve = 59,
+    Exit = 60,
+    Wait4 = 61,
     Poll = 7,
     Getdents64 = 217,
 
-    // not part of the musl contract
-    Mkdir = 300,
-    Rmdir = 301,
-    Unlink = 302,
-    Create = 303,
-    OpenDir = 304,
-
+    Mkdir = 83,
+    Rmdir = 84,
+    Create = 85,
+    Unlink = 87,
 }

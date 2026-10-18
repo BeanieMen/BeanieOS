@@ -235,7 +235,7 @@ fn release_tree(root: u64, level: u8) {
         }
     }
 
-    free_frame(table);
+    free_frame(root);
 }
 
 pub(crate) struct AddressSpace {
@@ -350,6 +350,54 @@ impl AddressSpace {
 
     pub(crate) fn from_root(root: PhysFrame) -> Self {
         AddressSpace { root, owned: true }
+    }
+
+    pub(crate) fn clone_from_root(root: PhysFrame) -> Result<Self, MemoryError> {
+        let new_space = Self::new_with_kernel()?;
+        Self::clone_level(root.start_address().as_u64(), new_space.root_addr(), 0)?;
+        Ok(new_space)
+    }
+
+    fn clone_level(src_root: u64, dst_root: u64, level: u8) -> Result<(), MemoryError> {
+        let src_table = phys_to_direct(src_root);
+        let dst_table = phys_to_direct(dst_root);
+
+        for i in 0..ENTRIES_PER_TABLE {
+            if level == 0 && is_shared_slot(i) {
+                continue;
+            }
+
+            let entry = unsafe { read_entry(src_table, i) };
+            if entry & PTE_PRESENT == 0 {
+                continue;
+            }
+
+            let flags = entry & !PTE_ADDR_MASK;
+            let src_child = entry & PTE_ADDR_MASK;
+
+            if level >= P1_LEVEL {
+                let dst_frame = alloc_frame().ok_or(MemoryError::OutOfFrames)?;
+                let dst_phys = dst_frame.start_address().as_u64();
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        phys_to_direct(src_child) as *const u8,
+                        phys_to_direct(dst_phys) as *mut u8,
+                        PAGE_SIZE as usize,
+                    );
+                    write_entry(dst_table, i, dst_phys | flags);
+                }
+            } else if entry & PTE_HUGE != 0 {
+                continue;
+            } else {
+                let dst_child = new_table()?;
+                unsafe {
+                    write_entry(dst_table, i, dst_child | flags);
+                }
+                Self::clone_level(src_child, dst_child, level + 1)?;
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) fn map(

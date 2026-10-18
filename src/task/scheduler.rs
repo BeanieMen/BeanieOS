@@ -1,5 +1,6 @@
 use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc, vec::Vec};
 
+use crate::arch::gdt;
 use crate::arch::interrupts::vectors::ticks;
 use crate::arch::lock::InterruptMutex;
 use crate::task::{
@@ -85,6 +86,25 @@ impl Scheduler {
 
         let thread = Thread::new(pid, name, entry, priority);
         let id = thread.id;
+
+        self.threads
+            .insert(id, Arc::new(InterruptMutex::new(thread)));
+        self.ready_queues[priority.index()].push_back(id);
+        self.live += 1;
+
+        crate::task::process::attach_thread(pid, id);
+
+        id
+    }
+
+    pub(crate) fn spawn_thread(&mut self, thread: Thread) -> ThreadId {
+        if !self.initialized {
+            self.init();
+        }
+
+        let id = thread.id;
+        let pid = thread.pid;
+        let priority = thread.priority;
 
         self.threads
             .insert(id, Arc::new(InterruptMutex::new(thread)));
@@ -228,6 +248,10 @@ impl Scheduler {
         let (previous_slot, prev_pid) = {
             let previous = self.threads.get(&previous_id)?;
             let prev = previous.lock();
+            let prev_fs = x86_64::registers::model_specific::FsBase::read().as_u64();
+            drop(prev);
+            previous.lock().fs_base = prev_fs;
+            let prev = previous.lock();
             (prev.rsp_slot(), prev.pid)
         };
 
@@ -235,6 +259,10 @@ impl Scheduler {
             let next = self.threads.get(&next_id)?;
             let mut next = next.lock();
             next.begin_running();
+            if let Some(stack_top) = next.kernel_stack_top() {
+            gdt::set_kernel_stack_top(stack_top as u64);
+            }
+            x86_64::registers::model_specific::FsBase::write(x86_64::VirtAddr::new(next.fs_base));
             (next.saved_rsp(), next.pid)
         };
 
@@ -397,6 +425,10 @@ pub(crate) fn spawn_in_process(
     SCHEDULER.lock().spawn(pid, name, entry, priority)
 }
 
+pub(crate) fn add_forked_thread(thread: Thread) -> ThreadId {
+    SCHEDULER.lock().spawn_thread(thread)
+}
+
 pub(crate) fn yield_now() {
     let switch = SCHEDULER.lock().yield_to();
 
@@ -433,7 +465,7 @@ pub(crate) fn exit() -> ! {
     }
 }
 
-fn account_tick() {
+pub(crate) fn account_tick() {
     SCHEDULER.lock().account_tick();
 }
 

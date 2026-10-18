@@ -25,7 +25,21 @@ pub(crate) fn keys() -> u64 {
 #[unsafe(no_mangle)]
 extern "C" fn timer_interrupt_rust() {
     TICKS.fetch_add(1, Ordering::Relaxed);
-
+    unsafe {
+        let mut lsr = Port::<u8>::new(0x3fd);
+        while lsr.read() & 1 != 0 {
+            let mut data = Port::<u8>::new(0x3f8);
+            let byte = data.read();
+            let ch = match byte {
+                b'\r' => '\n',
+                0x7f | 0x08 => '\x08',
+                b => b as char,
+            };
+            crate::arch::input::push_key(ch);
+            KEYS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    crate::task::scheduler::account_tick();
     unsafe {
         pic::eoi();
     }

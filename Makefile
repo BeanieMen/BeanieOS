@@ -76,6 +76,8 @@ $(OVMF_VARS): $(OVMF_VARS_TEMPLATE)
 	@mkdir -p $(OUT)
 	cp $(OVMF_VARS_TEMPLATE) $@
 
+QEMU_DISPLAY ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "sdl" || echo "none")
+
 run: $(DISK) $(OVMF_VARS)
 	qemu-system-x86_64 \
 		-machine q35 \
@@ -83,7 +85,8 @@ run: $(DISK) $(OVMF_VARS)
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
 		-drive format=raw,file=$(DISK) \
 		-m 512 \
-		-display sdl
+		-display $(QEMU_DISPLAY) \
+		-serial stdio
 
 symbols: kernel
 	nm $(KERNEL) | grep -E ' (rust_entry|_start|long_mode_start|kernel_start|kernel_end)$$'

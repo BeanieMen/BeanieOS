@@ -127,6 +127,20 @@ impl ProcessManager {
         pid
     }
 
+    pub(crate) fn create_child(&mut self, parent_pid: ProcessId) -> Option<ProcessId> {
+        let parent = self.processes.get(&parent_pid)?;
+        let (parent_name, parent_cwd, parent_fds) = {
+            let p = parent.lock();
+            (p.name.clone(), p.cwd.clone(), p.fds.clone())
+        };
+
+        let mut child = Process::new(&alloc::format!("{}-child", parent_name), Some(parent_pid), &parent_cwd);
+        child.fds = parent_fds.clone();
+        let child_pid = child.pid;
+        self.processes.insert(child_pid, Arc::new(InterruptMutex::new(child)));
+        Some(child_pid)
+    }
+
     pub(crate) fn get(&self, pid: ProcessId) -> Option<Arc<InterruptMutex<Process>>> {
         self.processes.get(&pid).cloned()
     }
@@ -233,6 +247,61 @@ pub(crate) fn wait(target: ProcessId) -> Option<i32> {
             }
 
             if manager.parent_of(target) != Some(current) {
+                return None;
+            }
+        }
+
+        crate::task::scheduler::sleep(1);
+    }
+}
+
+pub(crate) fn create_child(parent_pid: ProcessId) -> Option<ProcessId> {
+    PROCESS_MANAGER.lock().create_child(parent_pid)
+}
+
+pub(crate) fn space_root_of(pid: ProcessId) -> Option<PhysFrame> {
+    PROCESS_MANAGER.lock().get(pid)?.lock().space
+}
+
+pub(crate) fn wait4(target: i64) -> Option<(ProcessId, i32)> {
+    let current = identity::current_pid();
+
+    loop {
+        {
+            let mut manager = PROCESS_MANAGER.lock();
+
+            let target_pid = if target > 0 {
+                let pid = ProcessId(target as u64);
+                if manager.parent_of(pid) != Some(current) {
+                    return None;
+                }
+                Some(pid)
+            } else {
+                manager.processes.iter().find_map(|(&pid, proc)| {
+                    let p = proc.lock();
+                    if p.ppid == Some(current) {
+                        if let ProcessStatus::Zombie(_) = p.status {
+                            Some(pid)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            if let Some(pid) = target_pid {
+                if let Some(code) = manager.reap(pid) {
+                    return Some((pid, code));
+                }
+            }
+
+            let has_children = manager.processes.values().any(|proc| {
+                proc.lock().ppid == Some(current)
+            });
+
+            if !has_children {
                 return None;
             }
         }

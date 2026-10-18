@@ -350,7 +350,7 @@ static void cmd_pid(void) {
     print("\n");
 }
 
-#define DIRENT_HEADER 20
+#define DIRENT_HEADER 19
 #define DT_DIR        4
 
 static void print_name(const char *name, int len) {
@@ -474,11 +474,21 @@ static void cmd_run(const char *arg) {
     envp[0] = 0;
     envp[1] = 0;
 
-    long ret = sys_execve(full, argv, envp);
+    long pid = sys_fork();
+    if (pid < 0) {
+        print("run: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        long ret = sys_execve(full, argv, envp);
+        print("run: execve failed: ");
+        print_num(ret);
+        print("\n");
+        sys_exit(1);
+    }
 
-    print("run: execve returned ");
-    print_num(ret);
-    print("\n");
+    int status = 0;
+    sys_wait4(pid, &status, 0, 0);
 }
 
 static void cmd_clear(void) {

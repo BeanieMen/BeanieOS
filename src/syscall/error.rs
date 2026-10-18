@@ -6,10 +6,12 @@ pub(crate) enum Errno {
     NoSys = 38,
     BadFd = 9,
     NoEntry = 2,
+    Child = 10,
     Invalid = 22,
     NoMem = 12,
     Fault = 14,
     NotDir = 20,
+    IsDir = 21,
     Overflow = 75,
 }
 

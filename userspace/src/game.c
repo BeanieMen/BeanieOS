@@ -17,8 +17,6 @@ static int ball_x, ball_y;
 static int dir_x, dir_y;
 static int score_me, score_ai;
 
-/* String helpers */
-
 static unsigned long strlen(const char *s)
 {
     unsigned long n = 0;
@@ -60,8 +58,6 @@ static void print_number(int n)
     }
 }
 
-/* Ball initialization */
-
 static void reset_ball(void)
 {
     ball_x = W / 2;
@@ -70,8 +66,6 @@ static void reset_ball(void)
     dir_x = 1;
     dir_y = 1;
 }
-
-/* Build the playfield */
 
 static void build_field(void)
 {
@@ -93,14 +87,10 @@ static void build_field(void)
     field[ball_y][ball_x] = 'O';
 }
 
-/* Draw the screen */
 
 static void draw(void)
 {
     int y;
-
-    /* ANSI clear-screen and cursor-home sequences */
-    print("\033[2J\033[H");
 
     print("============== BEANIEOS PONG ==============\r\n");
 
@@ -123,7 +113,6 @@ static void draw(void)
     print("W/S or arrows: move   Q: quit\r\n");
 }
 
-/* Nonblocking input attempt */
 
 static int read_key(void)
 {
@@ -147,7 +136,6 @@ static int read_key(void)
     return (int)c;
 }
 
-/* Move the player's paddle */
 
 static void move_paddle(int key)
 {

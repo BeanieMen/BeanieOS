@@ -9,14 +9,16 @@ const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
 
 /// Header of a directory record: ino, next offset, record length, type.
-const DIRENT_HEADER: usize = 20;
+const DIRENT_HEADER: usize = 19;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OpenFlags {
     pub read: bool,
     pub write: bool,
     pub create: bool,
     pub truncate: bool,
     pub append: bool,
+    pub directory: bool,
 }
 
 impl OpenFlags {
@@ -26,6 +28,7 @@ impl OpenFlags {
         create: false,
         truncate: false,
         append: false,
+        directory: true,
     };
 
     pub(crate) const READ: Self = Self {
@@ -34,6 +37,7 @@ impl OpenFlags {
         create: false,
         truncate: false,
         append: false,
+        directory: false,
     };
 
     pub(crate) const WRITE: Self = Self {
@@ -42,6 +46,7 @@ impl OpenFlags {
         create: false,
         truncate: false,
         append: false,
+        directory: false,
     };
 
     pub(crate) const RDWR: Self = Self {
@@ -50,9 +55,11 @@ impl OpenFlags {
         create: false,
         truncate: false,
         append: false,
+        directory: false,
     };
 }
 
+#[derive(Clone)]
 pub(crate) struct File {
     pub inode: Arc<Mutex<Inode>>,
     pub offset: u64,
@@ -94,8 +101,9 @@ impl File {
 
             let name_len = entry.name.iter().position(|b| *b == b' ').unwrap_or(11) + 1;
 
-            let reclen = DIRENT_HEADER + name_len;
-
+            // align record as linux abi
+            let reclen = (DIRENT_HEADER + name_len + 7) & !7;
+            
             if written + reclen > buf.len() {
                 if written == 0 {
                     return Err("buffer too small for one entry");
@@ -116,10 +124,9 @@ impl File {
             record[8..16].copy_from_slice(&self.offset.to_le_bytes());
             record[16..18].copy_from_slice(&(reclen as u16).to_le_bytes());
             record[18] = d_type;
-            record[19] = 0;
             record[DIRENT_HEADER..DIRENT_HEADER + name_len - 1]
                 .copy_from_slice(&entry.name[..name_len - 1]);
-            record[DIRENT_HEADER + name_len - 1] = 0;
+            record[DIRENT_HEADER + name_len - 1..reclen].fill(0);
 
             written += reclen;
         }

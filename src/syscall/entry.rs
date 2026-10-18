@@ -8,6 +8,7 @@ use crate::syscall::dispatch::dispatch;
 pub(crate) const VECTOR: u8 = 0x80;
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Regs {
     pub r15: u64,
     pub r14: u64,
@@ -25,30 +26,36 @@ pub(crate) struct Regs {
     pub rax: u64,
 }
 
-const CPU_FRAME_WORDS: usize = 5;
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SyscallFrame {
+    pub regs: Regs,
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+}
 
-const REGS_WORDS: usize = core::mem::size_of::<Regs>() / 8;
-
-const ENTRY_BLOCK_WORDS: usize = REGS_WORDS + CPU_FRAME_WORDS;
-
-#[unsafe(no_mangle)]extern "C" fn syscall_entry_prepare(regs: *mut u64) -> usize {
-    let frame = unsafe { regs.add(REGS_WORDS) };
-
-    let code_selector = unsafe { *frame.add(1) };
-
-    if code_selector & 0x3 == 0 {
-        return regs as usize;
-    }
-
-    let Some(stack_top) = crate::task::identity::current_kernel_stack_top() else {
-        return regs as usize;
-    };
-
-    let block = stack_top - ENTRY_BLOCK_WORDS * 8;
-
-    unsafe { core::ptr::copy_nonoverlapping(regs, block as *mut u64, ENTRY_BLOCK_WORDS) };
-
-    block
+#[unsafe(naked)]
+pub unsafe extern "C" fn fork_return_trampoline() -> ! {
+    naked_asm!(
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rbp",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+        "iretq",
+    );
 }
 
 #[unsafe(naked)]
@@ -68,11 +75,10 @@ pub unsafe extern "C" fn stub() -> ! {
         "push r13",
         "push r14",
         "push r15",
-        "mov rdi, rsp",
-        "call syscall_entry_prepare",
-        "mov rsp, rax",
-        "mov rdi, rsp",
+        "sub rsp, 8",
+        "lea rdi, [rsp + 8]",
         "call syscall_c",
+        "add rsp, 8",
         "pop r15",
         "pop r14",
         "pop r13",
@@ -86,25 +92,30 @@ pub unsafe extern "C" fn stub() -> ! {
         "pop rsi",
         "pop rdx",
         "pop rcx",
-        "add rsp, 8",
-        "mov rax, [rsp - 8]",
+        "pop rax",
         "iretq",
     )
 }
 
-
 #[unsafe(no_mangle)]
-pub extern "C" fn syscall_c(regs: *mut Regs) {
-    let regs = unsafe { &mut *regs };
+pub extern "C" fn syscall_c(frame: *mut SyscallFrame) {
+    let frame = unsafe { &mut *frame };
 
-    let number = regs.rax;
-    let args = [regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9];
+    let number = frame.regs.rax;
+    let args = [
+        frame.regs.rdi,
+        frame.regs.rsi,
+        frame.regs.rdx,
+        frame.regs.r10,
+        frame.regs.r8,
+        frame.regs.r9,
+    ];
 
-    let result = super::error::encode(dispatch(number, args));
+    let result = super::error::encode(dispatch(number, args, frame));
 
     crate::kdebug!("syscall {number} -> {result:#x}");
 
-    regs.rax = result;
+    frame.regs.rax = result;
 }
 
 pub(crate) fn install() {

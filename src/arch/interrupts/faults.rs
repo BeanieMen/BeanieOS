@@ -6,6 +6,10 @@ macro_rules! fault_handler {
     ($name:ident, $label:literal) => {
         extern "x86-interrupt" fn $name(stack_frame: x86_64::structures::idt::InterruptStackFrame) {
             crate::kerror!(concat!("EXCEPTION: ", $label, "\n{:#?}"), stack_frame);
+            if stack_frame.code_segment.0 & 3 == 3 {
+                crate::task::process::exit(crate::task::identity::current_pid(), 139);
+                crate::task::scheduler::exit();
+            }
             loop {
                 x86_64::instructions::hlt();
             }
@@ -24,6 +28,10 @@ macro_rules! fault_handler_with_err {
                 error_code,
                 stack_frame
             );
+            if stack_frame.code_segment.0 & 3 == 3 {
+                crate::task::process::exit(crate::task::identity::current_pid(), 139);
+                crate::task::scheduler::exit();
+            }
             loop {
                 x86_64::instructions::hlt();
             }
@@ -80,6 +88,10 @@ extern "x86-interrupt" fn page_fault_handler(
     crate::kerror!("Accessed Address: {:?}", Cr2::read());
     crate::kerror!("Error Code: {:?}", error_code);
     crate::kerror!("{:#?}", stack_frame);
+    if stack_frame.code_segment.0 & 3 == 3 {
+        crate::task::process::exit(crate::task::identity::current_pid(), 139);
+        crate::task::scheduler::exit();
+    }
     loop {
         x86_64::instructions::hlt();
     }

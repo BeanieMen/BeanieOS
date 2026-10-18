@@ -13,7 +13,7 @@ use super::entry;
 use super::error::{Errno, SyscallResult};
 use super::numbers::*;
 
-pub(crate) fn dispatch(number: u64, args: [u64; 6]) -> SyscallResult {
+pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame) -> SyscallResult {
     let Ok(syscall) = Syscall::try_from(number) else {
         return Err(Errno::NoSys);
     };
@@ -24,19 +24,60 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6]) -> SyscallResult {
         Syscall::Open => sys_open(args[0], args[1]),
         Syscall::Close => sys_close(args[0]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
+        Syscall::Fork => sys_fork(frame),
         Syscall::Exit => sys_exit(args[0]),
+        Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
         Syscall::ArchPrctl => sys_arch_prctl(args[0], args[1]),
         Syscall::Getpid => sys_getpid(),
         Syscall::SchedYield => sys_yield(),
         Syscall::Getdents64 => sys_getdents(args[0], args[1], args[2]),
-        Syscall::OpenDir => sys_open_dir(args[0]),
         Syscall::Mkdir => sys_mkdir(args[0]),
         Syscall::Create => sys_create(args[0]),
         Syscall::Execve => sys_execve(args[0], args[1], args[2]),
- Syscall::Poll => sys_poll(args[0], args[1], args[2]),
+        Syscall::Poll => sys_poll(args[0], args[1], args[2]),
         Syscall::Unlink => sys_unlink(args[0]),
         Syscall::Rmdir => sys_rmdir(args[0]),
     }
+}
+
+fn sys_fork(frame: &entry::SyscallFrame) -> SyscallResult {
+    let parent_pid = current_pid();
+
+    let child_pid = process::create_child(parent_pid).ok_or(Errno::NoMem)?;
+
+    let Some(root) = process::space_root_of(parent_pid) else {
+        return Err(Errno::NoMem);
+    };
+
+    let child_space = crate::memory::mmu::AddressSpace::clone_from_root(root).map_err(|_| Errno::NoMem)?;
+    process::attach_space(child_pid, child_space.root);
+    core::mem::forget(child_space);
+
+    let child_thread = crate::task::thread::Thread::new_forked(
+        child_pid,
+        "child",
+        crate::task::identity::Priority::Normal,
+        frame,
+    );
+
+    scheduler::add_forked_thread(child_thread);
+
+    Ok(child_pid.as_u64())
+}
+
+fn sys_wait4(pid: i64, wstatus: u64, _options: u64, _rusage: u64) -> SyscallResult {
+    let Some((child_pid, code)) = process::wait4(pid) else {
+        return Err(Errno::Child);
+    };
+
+    if wstatus != 0 {
+        let status = ((code & 0xff) << 8) as i32;
+        if entry::copy_to_user(wstatus, &status.to_le_bytes()).is_err() {
+            return Err(Errno::Fault);
+        }
+    }
+
+    Ok(child_pid.as_u64())
 }
 const MAX_ARGS: usize = 64;
 const MAX_ARG_LEN: usize = 4096;
@@ -136,15 +177,15 @@ fn sys_poll(fds: u64, nfds: u64, _events: u64) -> SyscallResult {
 
     let mut revents = [0u8; 8];
 
-    if fds == 0 && crate::arch::input::pending() > 0 {
+    if crate::arch::input::pending() > 0 {
         revents[0] = 1; // POLLIN
     }
 
-    if entry::copy_to_user(revents.as_ptr() as u64, &revents).is_err() {
+    if entry::copy_to_user(fds, &revents).is_err() {
         return Err(Errno::Fault);
     }
 
-    Ok(revents[0] as u64)
+    Ok(if revents[0] != 0 { 1 } else { 0 })
 }
 
 fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
@@ -187,6 +228,7 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
 
     let read = match result {
         Ok(read) => read,
+        Err("not a regular file") => return Err(Errno::IsDir),
         Err(_) => return Err(Errno::Invalid),
     };
 
@@ -202,11 +244,29 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
         return Err(Errno::Fault);
     };
 
-    let open_flags = match flags {
-        0 => OpenFlags::READ,
-        1 => OpenFlags::WRITE,
-        2 => OpenFlags::RDWR,
-        _ => return Err(Errno::Invalid),
+    const O_ACCMODE: u64 = 0x3;
+    const O_WRONLY: u64 = 1;
+    const O_RDWR: u64 = 2;
+    const O_CREAT: u64 = 0x40;
+    const O_TRUNC: u64 = 0x200;
+    const O_APPEND: u64 = 0x400;
+    const O_DIRECTORY: u64 = 0x10000;
+
+    let acc = flags & O_ACCMODE;
+    let read = acc == 0 || acc == O_RDWR;
+    let write = acc == O_WRONLY || acc == O_RDWR;
+    let create = (flags & O_CREAT) != 0;
+    let truncate = (flags & O_TRUNC) != 0;
+    let append = (flags & O_APPEND) != 0;
+    let directory = (flags & O_DIRECTORY) != 0;
+
+    let open_flags = OpenFlags {
+        read,
+        write,
+        create,
+        truncate,
+        append,
+        directory,
     };
 
     let Some(result) = process::with_current_fds(|fds| fds.open(&path, open_flags)) else {
@@ -215,7 +275,9 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
 
     match result {
         Ok(fd) => Ok(fd),
-        Err(_) => return Err(Errno::NoEntry),
+        Err("not a directory") => Err(Errno::NotDir),
+        Err("is a directory") => Err(Errno::IsDir),
+        Err(_) => Err(Errno::NoEntry),
     }
 }
 
@@ -250,21 +312,6 @@ fn sys_lseek(fd: u64, offset: i64, whence: u32) -> SyscallResult {
     }
 }
 
-fn sys_open_dir(path: u64) -> SyscallResult {
-    let Ok(path) = entry::user_path(path) else {
-        return Err(Errno::Fault);
-    };
-
-    let Some(result) = process::with_current_fds(|fds| fds.open_dir(&path)) else {
-        return Err(Errno::BadFd);
-    };
-
-    match result {
-        Ok(fd) => Ok(fd),
-        Err(_) => Err(Errno::NoEntry),
-    }
-}
-
 fn sys_arch_prctl(code: u64, addr: u64) -> SyscallResult {
     const ARCH_SET_FS: u64 = 0x1002;
     const ARCH_SET_GS: u64 = 0x1001;
@@ -275,9 +322,7 @@ fn sys_arch_prctl(code: u64, addr: u64) -> SyscallResult {
     if addr < USER_START || addr >= USER_END {
         return Err(Errno::Fault);
     }
-    unsafe {
-        x86_64::registers::model_specific::FsBase::write(VirtAddr::new(addr));
-    }
+    x86_64::registers::model_specific::FsBase::write(VirtAddr::new(addr));
 
     Ok(0)
 }

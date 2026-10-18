@@ -193,6 +193,8 @@ pub(crate) struct Fat32<D: BlockDevice> {
     pub geom: Geometry,
     pub root_cluster: u32,
     pub root: Arc<Mutex<Dentry>>,
+    inode_ops: &'static Fat32InodeOps<D>,
+    file_ops: &'static Fat32FileOps<D>,
 }
 
 impl<D: BlockDevice> Fat32<D> {
@@ -287,13 +289,15 @@ impl<D: BlockDevice> Fat32<D> {
             parent: None,
         }));
 
-        inode.lock().dentry = Some(root.clone());
-
+        inode.lock().dentry = Some(Arc::downgrade(&root));
+         
         Ok(Arc::new(Self {
             device,
             geom,
             root_cluster,
             root,
+            inode_ops,
+            file_ops
         }))
     }
 }
@@ -514,10 +518,9 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
             entry[i] = byte.to_ascii_uppercase();
         }
 
-        entry[8] = b' ';
 
         for (i, byte) in ext.iter().enumerate() {
-            entry[9 + i] = byte.to_ascii_uppercase();
+            entry[8 + i] = byte.to_ascii_uppercase();
         }
 
         entry[11] = if file_type == FileType::Directory {
@@ -651,7 +654,12 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         }
     }
 
-    fn inode_from_entry(&self, entry: &[u8; 32]) -> Arc<Mutex<Inode>> {
+    fn inode_from_entry(
+        &self,
+        entry: &[u8; 32],
+        inode_ops: &'static dyn InodeOperations,
+        file_ops: &'static dyn FileOperations,
+    ) -> Arc<Mutex<Inode>> {
         let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
         let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
 
@@ -664,16 +672,6 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         };
 
         let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as u64;
-
-        let inode_ops = Box::leak(Box::new(Fat32InodeOps {
-            device: self.device.clone(),
-            geom: self.geom,
-        }));
-
-        let file_ops = Box::leak(Box::new(Fat32FileOps {
-            device: self.device.clone(),
-            geom: self.geom,
-        }));
 
         Arc::new(Mutex::new(Inode {
             id: cluster as u64,
@@ -699,7 +697,7 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
 
         let entry = self.find_entry(inode.cluster, name)?;
 
-        Ok(self.inode_from_entry(&entry))
+        Ok(self.inode_from_entry(&entry, inode.inode_ops, inode.file_ops))
     }
     fn create(
         &self,
@@ -763,14 +761,8 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
             cluster,
             file_type,
             size: 0,
-            inode_ops: Box::leak(Box::new(Fat32InodeOps {
-                device: self.device.clone(),
-                geom: self.geom,
-            })),
-            file_ops: Box::leak(Box::new(Fat32FileOps {
-                device: self.device.clone(),
-                geom: self.geom,
-            })),
+            inode_ops: inode.inode_ops,
+            file_ops: inode.file_ops,
             dentry: None,
         })))
     }
@@ -1088,7 +1080,7 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
 
 impl<D: BlockDevice> Fat32FileOps<D> {
     fn write_directory_size(&self, inode: &Inode) -> Result<(), &'static str> {
-        let Some(dentry) = inode.dentry.as_ref() else {
+        let Some(dentry) = inode.dentry.as_ref().and_then(|w| w.upgrade()) else {
             return Ok(());
         };
 

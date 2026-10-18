@@ -1,0 +1,23 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "check": {
+          "command": "check",
+          "extraArgs": [
+            "--target",
+            "x86_64.json",
+            "-Z",
+            "build-std=core,alloc",
+            "-Z",
+            "json-target-spec"
+          ]
+        },
+        "cargo": {
+          "targetDir": "target/analyzer",
+          "sysroot": "discover"
+        }
+      }
+    }
+  }
+}

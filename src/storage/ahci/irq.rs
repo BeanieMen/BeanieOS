@@ -1,7 +1,6 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use x86_64::instructions::interrupts;
-use x86_64::registers::control::Cr0;
 
 use super::regs::*;
 use crate::arch::interrupts::consts::TICK_MS;
@@ -10,8 +9,6 @@ use crate::arch::interrupts::vectors::ticks;
 use crate::kinfo;
 
 const TIMEOUT_MS: u64 = 500;
-
-const CR0_INTERRUPT_ENABLE: u64 = 1;
 
 static ABAR: AtomicUsize = AtomicUsize::new(0);
 static PORTS: AtomicUsize = AtomicUsize::new(0);
@@ -60,7 +57,7 @@ pub extern "x86-interrupt" fn on_interrupt(
 }
 
 pub(crate) fn wait(base: usize) -> Result<(), &'static str> {
-    let was_enabled = Cr0::read().bits() & CR0_INTERRUPT_ENABLE != 0;
+    let was_enabled = interrupts::are_enabled();
     let deadline = ticks() + TIMEOUT_MS.div_ceil(TICK_MS);
 
     if !was_enabled {

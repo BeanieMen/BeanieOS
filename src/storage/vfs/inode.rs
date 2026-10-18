@@ -1,4 +1,4 @@
-use alloc::sync::Arc;
+use alloc::sync::{Arc,Weak};
 
 use spin::Mutex;
 
@@ -22,7 +22,7 @@ pub(crate) struct Inode {
     pub inode_ops: &'static dyn InodeOperations,
     pub file_ops: &'static dyn FileOperations,
 
-    pub dentry: Option<Arc<Mutex<Dentry>>>,
+    pub dentry: Option<Weak<Mutex<Dentry>>>,
 }
 
 pub(crate) trait InodeOperations: Sync {

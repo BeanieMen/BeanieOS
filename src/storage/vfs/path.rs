@@ -69,7 +69,7 @@ impl Path {
 
             let dentry = Arc::new(Mutex::new(Dentry::new(name, child.clone(), Some(current.clone()))));
 
-            child.lock().dentry = Some(dentry.clone());
+            child.lock().dentry = Some(alloc::sync::Arc::downgrade(&dentry));
 
             current = dentry;
         }

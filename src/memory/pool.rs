@@ -3,7 +3,7 @@ use crate::paging::PAGE_SIZE;
 pub const MAX_AREAS: usize = 64;
 
 pub const MAX_AVOID: usize = 3 + MAX_AREAS;
-pub const MAX_FREE: usize = 8192;
+pub const MAX_FREE: usize = 16384; // 64 MiB of free frames
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Area {
@@ -57,6 +57,16 @@ impl FramePool {
             live: 0,
             reused: 0,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.area_len = 0;
+        self.area_idx = 0;
+        self.next = 0;
+        self.avoid_len = 0;
+        self.free_len = 0;
+        self.live = 0;
+        self.reused = 0;
     }
 
     pub fn add_area(&mut self, area: Area) -> bool {

@@ -43,7 +43,7 @@ pub(super) unsafe fn init() {
 
     write32(
         LAPIC_SVR_OFFSET,
-        value | LAPIC_SVR_ENABLE | (SPURIOUS_VECTOR as u32) << 12,
+        value | LAPIC_SVR_ENABLE | (SPURIOUS_VECTOR as u32),
     );
 
     crate::kinfo!("lapic id {}", unsafe { id() });

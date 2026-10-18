@@ -29,6 +29,13 @@ fn tss() -> &'static TaskStateSegment {
     })
 }
 
+pub(crate) fn set_kernel_stack_top(stack_top: u64) {
+    unsafe {
+        (*(tss() as *const _ as *mut TaskStateSegment)).privilege_stack_table[0] =
+            VirtAddr::new(stack_top)
+    };
+}
+
 static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
 
 fn gdt() -> &'static (GlobalDescriptorTable, Selectors) {

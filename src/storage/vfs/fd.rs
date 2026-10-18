@@ -6,6 +6,7 @@ use super::file::{File, OpenFlags};
 use super::inode::{FileType, Inode};
 use super::mount::{FileSystem, MountTable};
 
+#[derive(Clone)]
 pub(crate) struct FdTable {
     slots: Vec<Option<File>>,
     mounts: MountTable,
@@ -32,7 +33,16 @@ impl FdTable {
     }
 
     pub(crate) fn alloc(&mut self, file: File) -> u64 {
-        if let Some(fd) = self.slots.iter().position(|slot| slot.is_none()) {
+        while self.slots.len() < 3 {
+            self.slots.push(None);
+        }
+
+        if let Some(fd) = self
+            .slots
+            .iter()
+            .enumerate()
+            .position(|(i, slot)| i >= 3 && slot.is_none())
+        {
             self.slots[fd] = Some(file);
             return fd as u64;
         }
@@ -110,7 +120,15 @@ impl FdTable {
         {
             let inode = inode.lock();
 
-            if inode.file_type != FileType::Regular {
+            if flags.directory && inode.file_type != FileType::Directory {
+                return Err("not a directory");
+            }
+
+            if inode.file_type == FileType::Directory {
+                if flags.write {
+                    return Err("is a directory");
+                }
+            } else if inode.file_type != FileType::Regular {
                 return Err("not a regular file");
             }
         }
@@ -205,19 +223,7 @@ impl FdTable {
     }
 
     pub(crate) fn open_dir(&mut self, path: &[u8]) -> Result<u64, &'static str> {
-        let resolved = self.mounts.resolve(path)?;
-
-        let inode = resolved.inode();
-
-        {
-            let inode = inode.lock();
-
-            if inode.file_type != FileType::Directory {
-                return Err("not a directory");
-            }
-        }
-
-        Ok(self.alloc(File::new(inode, OpenFlags::READ)))
+        self.open(path, OpenFlags::READ_DIR)
     }
 
     pub(crate) fn len(&self) -> usize {

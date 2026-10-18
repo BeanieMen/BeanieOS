@@ -123,9 +123,9 @@ fn is_reachable(end: u64) -> bool {
 
 pub(crate) fn init_frames(memory_map: &MemoryMapTag, mbi_start: u64, mbi_end: u64) {
     let (kstart, kend) = kernel_phys_range();
-
-    let mut pool = FramePool::new();
-
+    let mut guard = FRAMES.lock();
+    let pool = &mut guard.0;
+    pool.reset();
     for area in memory_map.memory_areas() {
         if area.typ() != MemoryAreaType::Available {
             continue;
@@ -145,19 +145,16 @@ pub(crate) fn init_frames(memory_map: &MemoryMapTag, mbi_start: u64, mbi_end: u6
     pool.avoid(Area::new(kstart, kend));
     pool.avoid(Area::new(mbi_start, mbi_end));
 
-    let dropped = RESERVED.avoid_all(&mut pool);
+    let dropped = RESERVED.avoid_all(pool);
 
     assert_eq!(
         dropped, 0,
         "{dropped} device range(s) could not be reserved; their frames would become allocatable RAM"
     );
 
-   
     if let Some((start, end)) = RESERVED.take_framebuffer() {
         pool.avoid(Area::new(start, end));
     }
-
-    *FRAMES.lock() = FrameSource(pool);
 }
 
 pub(crate) fn alloc_frame() -> Option<PhysFrame> {

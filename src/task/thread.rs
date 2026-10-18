@@ -36,6 +36,7 @@ pub(crate) struct Thread {
     pub priority: Priority,
     #[allow(dead_code)]
     pub stack: Option<Box<[u8]>>,
+    pub fs_base: u64,
     pub timeslice: u64,
     rsp: UnsafeCell<usize>,
 }
@@ -50,6 +51,7 @@ impl Thread {
             priority: Priority::Normal,
             rsp: UnsafeCell::new(0),
             stack: None,
+            fs_base: 0,
             timeslice: TIMESLICE_TICKS,
         }
     }
@@ -69,6 +71,54 @@ impl Thread {
             priority,
             rsp: UnsafeCell::new(sp),
             stack: Some(stack),
+            fs_base: 0,
+            timeslice: TIMESLICE_TICKS,
+        }
+    }
+
+    pub(crate) fn new_forked(
+        pid: ProcessId,
+        name: &str,
+        priority: Priority,
+        parent_frame: &crate::syscall::entry::SyscallFrame,
+    ) -> Self {
+        let stack = vec![0u8; STACK_SIZE].into_boxed_slice();
+        let stack_top = (stack.as_ptr() as usize + STACK_SIZE) & !0xf;
+
+        let frame_size = core::mem::size_of::<crate::syscall::entry::SyscallFrame>();
+        let syscall_frame_sp = stack_top - frame_size;
+
+        let mut child_frame = *parent_frame;
+        child_frame.regs.rax = 0;
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &child_frame as *const crate::syscall::entry::SyscallFrame,
+                syscall_frame_sp as *mut crate::syscall::entry::SyscallFrame,
+                1,
+            );
+        }
+
+        const SWITCH_WORDS: usize = 8;
+        const SWITCH_BYTES: usize = SWITCH_WORDS * 8;
+        let sp = syscall_frame_sp - SWITCH_BYTES;
+
+        let frame = sp as *mut usize;
+        unsafe {
+            core::ptr::write_bytes(frame, 0, SWITCH_WORDS);
+            frame.add(6).write(RFLAGS_IF);
+            frame.add(7).write(crate::syscall::entry::fork_return_trampoline as *const () as usize);
+        }
+
+        Thread {
+            id: ThreadId::new(),
+            pid,
+            name: String::from(name),
+            state: ThreadState::Ready,
+            priority,
+            rsp: UnsafeCell::new(sp),
+            stack: Some(stack),
+            fs_base: x86_64::registers::model_specific::FsBase::read().as_u64(),
             timeslice: TIMESLICE_TICKS,
         }
     }
@@ -94,7 +144,7 @@ impl Thread {
     pub(crate) fn kernel_stack_top(&self) -> Option<usize> {
         self.stack
             .as_ref()
-            .map(|stack| stack.as_ptr() as usize + stack.len())
+            .map(|stack| (stack.as_ptr() as usize + stack.len()) & !0xf)
     }
 }
 
