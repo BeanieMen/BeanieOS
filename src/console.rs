@@ -4,6 +4,27 @@ use crate::graphics::framebuffer::WRITER;
 
 struct SerialPort;
 
+impl SerialPort {
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        use x86_64::instructions::port::Port;
+
+        let mut port = Port::new(0x3f8);
+
+        for &byte in bytes {
+            unsafe { port.write(byte) };
+        }
+    }
+}
+
+pub fn write_user_bytes(bytes: &[u8]) {
+    use x86_64::instructions::interrupts;
+
+    interrupts::without_interrupts(|| {
+        WRITER.lock().write_bytes(bytes);
+        SerialPort.write_bytes(bytes);
+    });
+}
+
 impl core::fmt::Write for SerialPort {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         use x86_64::instructions::port::Port;

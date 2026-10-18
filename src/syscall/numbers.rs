@@ -34,6 +34,7 @@ syscalls! {
     Writev = 20,
     ArchPrctl = 158,
     SchedYield = 24,
+    Nanosleep = 35,
     Getpid = 39,
     Fork = 57,
     Execve = 59,

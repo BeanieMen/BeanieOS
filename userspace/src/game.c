@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "termios.h"
 
 #define W 60
 #define H 20
@@ -92,6 +93,8 @@ static void draw(void)
 {
     int y;
 
+    print("\033[H");
+
     print("============== BEANIEOS PONG ==============\r\n");
 
     print("You: ");
@@ -130,6 +133,19 @@ static int read_key(void)
     bytes = sys_read(0, &c, 1);
 
     if (bytes <= 0) {
+        return -1;
+    }
+
+    if (c == 0x1b) {
+        if (sys_poll(fds, 1, 0) > 0) {
+            unsigned char seq[2];
+            if (sys_read(0, &seq[0], 1) > 0 && seq[0] == '[') {
+                if (sys_poll(fds, 1, 0) > 0 && sys_read(0, &seq[1], 1) > 0) {
+                    if (seq[1] == 'A') return KEY_UP;
+                    if (seq[1] == 'B') return KEY_DOWN;
+                }
+            }
+        }
         return -1;
     }
 
@@ -257,6 +273,8 @@ int main(void)
 {
     int key;
 
+    set_raw_mode(1);
+
     paddle_y = H / 2 - PADDLE_LEN / 2;
     ai_y = H / 2 - PADDLE_LEN / 2;
 
@@ -281,6 +299,7 @@ int main(void)
             print_number(score_ai);
 
             print("\r\n");
+            set_raw_mode(0);
             return 0;
         }
 
@@ -292,15 +311,11 @@ int main(void)
         step();
         build_field();
         draw();
-
-        /*
-         * Approximate frame delay.
-         * Adjust this value for your emulator's speed.
-         */
-        for (volatile int delay = 0; delay < 1000; delay++) {
-            sys_yield();
-        }
+        
+        sys_sleep_ms(16); // ~60 fps
+        sys_yield();
     }
 
+    set_raw_mode(0);
     return 0;
 }

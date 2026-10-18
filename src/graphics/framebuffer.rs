@@ -53,6 +53,13 @@ impl Color {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnsiState {
+    Normal,
+    Escape,
+    Csi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ColorCode {
     pub foreground: Color,
     pub background: Color,
@@ -82,6 +89,9 @@ pub(crate) struct Writer {
     cursor_col: u32,
     cursor_row: u32,
     color_code: ColorCode,
+    ansi_state: AnsiState,
+    ansi_params: [u32; 8],
+    ansi_param_idx: usize,
 }
 
 unsafe impl Send for Writer {}
@@ -93,6 +103,9 @@ impl Writer {
             cursor_col: 0,
             cursor_row: 0,
             color_code: ColorCode::new(Color::Yellow, Color::Black),
+            ansi_state: AnsiState::Normal,
+            ansi_params: [0; 8],
+            ansi_param_idx: 0,
         }
     }
 
@@ -107,20 +120,20 @@ impl Writer {
 
         self.cursor_col = 0;
         self.cursor_row = 0;
-
+        self.ansi_state = AnsiState::Normal;
         unsafe {
             core::ptr::write_bytes(addr, 0, (height * pitch) as usize);
         }
     }
 
-    fn cols(&self) -> u32 {
+    pub(crate) fn cols(&self) -> u32 {
         match self.framebuffer {
             Some(ref fb) => fb.width / FONT_WIDTH,
             None => 80,
         }
     }
 
-    fn rows(&self) -> u32 {
+    pub(crate) fn rows(&self) -> u32 {
         match self.framebuffer {
             Some(ref fb) => fb.height / FONT_HEIGHT,
             None => 25,
@@ -253,38 +266,189 @@ impl Writer {
         }
     }
 
-    pub(crate) fn write_byte(&mut self, byte: u8) {
+    pub(crate) fn clear_screen(&mut self) {
+        let Some(ref fb) = self.framebuffer else {
+            return;
+        };
+
+        let bytes = fb.height as usize * fb.pitch as usize;
+        unsafe {
+            core::ptr::write_bytes(fb.addr, 0, bytes);
+        }
+    }
+
+    pub(crate) fn clear_line(&mut self) {
         let cols = self.cols();
+        let bg = self.color_code.background.to_rgb();
+        for col in self.cursor_col..cols {
+            self.draw_char(col, self.cursor_row, b' ', bg, bg);
+        }
+    }
 
-        match byte {
-            b'\n' => self.new_line(),
-
-            b'\r' => {
-                self.cursor_col = 0;
+    fn handle_sgr(&mut self) {
+        let count = (self.ansi_param_idx + 1).min(8);
+        for i in 0..count {
+            match self.ansi_params[i] {
+                0 => self.color_code = ColorCode::new(Color::White, Color::Black),
+                30 => self.color_code.foreground = Color::Black,
+                31 => self.color_code.foreground = Color::Red,
+                32 => self.color_code.foreground = Color::Green,
+                33 => self.color_code.foreground = Color::Yellow,
+                34 => self.color_code.foreground = Color::Blue,
+                35 => self.color_code.foreground = Color::Magenta,
+                36 => self.color_code.foreground = Color::Cyan,
+                37 | 39 => self.color_code.foreground = Color::White,
+                40 | 49 => self.color_code.background = Color::Black,
+                41 => self.color_code.background = Color::Red,
+                42 => self.color_code.background = Color::Green,
+                43 => self.color_code.background = Color::Yellow,
+                44 => self.color_code.background = Color::Blue,
+                45 => self.color_code.background = Color::Magenta,
+                46 => self.color_code.background = Color::Cyan,
+                47 => self.color_code.background = Color::White,
+                90 => self.color_code.foreground = Color::DarkGray,
+                91 => self.color_code.foreground = Color::LightRed,
+                92 => self.color_code.foreground = Color::LightGreen,
+                93 => self.color_code.foreground = Color::Yellow,
+                94 => self.color_code.foreground = Color::LightBlue,
+                95 => self.color_code.foreground = Color::Pink,
+                96 => self.color_code.foreground = Color::LightCyan,
+                97 => self.color_code.foreground = Color::White,
+                _ => {}
             }
+        }
+    }
 
-            0x08 => {
-                if self.cursor_col > 0 {
-                    self.cursor_col -= 1;
-
-                    let bg = self.color_code.background.to_rgb();
-
-                    self.draw_char(self.cursor_col, self.cursor_row, b' ', bg, bg);
+    pub(crate) fn write_byte(&mut self, byte: u8) {
+        match self.ansi_state {
+            AnsiState::Normal => {
+                if byte == 0x1b {
+                    self.ansi_state = AnsiState::Escape;
+                    return;
+                }
+                match byte {
+                    b'\n' => self.new_line(),
+                    b'\r' => self.cursor_col = 0,
+                    0x08 => {
+                        if self.cursor_col > 0 {
+                            self.cursor_col -= 1;
+                            let bg = self.color_code.background.to_rgb();
+                            self.draw_char(self.cursor_col, self.cursor_row, b' ', bg, bg);
+                        }
+                    }
+                    b'\t' => {
+                        let next_col = (self.cursor_col + 8) & !7;
+                        let cols = self.cols();
+                        self.cursor_col = next_col.min(cols.saturating_sub(1));
+                    }
+                    b => {
+                        let ch = if (0x20..=0x7e).contains(&b) { b } else { 0xfe };
+                        let cols = self.cols();
+                        if self.cursor_col >= cols {
+                            self.new_line();
+                        }
+                        let fg = self.color_code.foreground.to_rgb();
+                        let bg = self.color_code.background.to_rgb();
+                        self.draw_char(self.cursor_col, self.cursor_row, ch, fg, bg);
+                        self.cursor_col += 1;
+                    }
                 }
             }
-
-            byte => {
-                if self.cursor_col >= cols {
-                    self.new_line();
+            AnsiState::Escape => match byte {
+                b'[' => {
+                    self.ansi_state = AnsiState::Csi;
+                    self.ansi_params = [0; 8];
+                    self.ansi_param_idx = 0;
                 }
+                0x1b => {}
+                _ => {
+                    self.ansi_state = AnsiState::Normal;
+                }
+            },
+            AnsiState::Csi => match byte {
+                b'\n' | b'\r' => {
+                    self.ansi_state = AnsiState::Normal;
+                    if byte == b'\n' {
+                        self.new_line();
+                    } else {
+                        self.cursor_col = 0;
+                    }
+                }
+                b'0'..=b'9' => {
+                    let idx = self.ansi_param_idx.min(7);
+                    self.ansi_params[idx] = self.ansi_params[idx] * 10 + (byte - b'0') as u32;
+                }
+                b';' => {
+                    if self.ansi_param_idx < 7 {
+                        self.ansi_param_idx += 1;
+                    }
+                }
+                b'?' => {}
+                b'H' | b'f' => {
+                    let row = if self.ansi_params[0] > 0 {
+                        self.ansi_params[0] - 1
+                    } else {
+                        0
+                    };
+                    let col = if self.ansi_param_idx > 0 && self.ansi_params[1] > 0 {
+                        self.ansi_params[1] - 1
+                    } else {
+                        0
+                    };
+                    let max_rows = self.rows();
+                    let max_cols = self.cols();
+                    self.cursor_row = row.min(max_rows.saturating_sub(1));
+                    self.cursor_col = col.min(max_cols.saturating_sub(1));
+                    self.ansi_state = AnsiState::Normal;
+                }
+                b'J' => {
+                    if self.ansi_params[0] == 2 || self.ansi_params[0] == 0 {
+                        self.clear_screen();
+                        self.cursor_row = 0;
+                        self.cursor_col = 0;
+                    }
+                    self.ansi_state = AnsiState::Normal;
+                }
+                b'K' => {
+                    self.clear_line();
+                    self.ansi_state = AnsiState::Normal;
+                }
+                b'A' => {
+                    let count = self.ansi_params[0].max(1);
+                    self.cursor_row = self.cursor_row.saturating_sub(count);
+                    self.ansi_state = AnsiState::Normal;
+                }
+                b'B' => {
+                    let count = self.ansi_params[0].max(1);
+                    let max_rows = self.rows();
+                    self.cursor_row = (self.cursor_row + count).min(max_rows.saturating_sub(1));
+                    self.ansi_state = AnsiState::Normal;
+                }
+                b'C' => {
+                    let count = self.ansi_params[0].max(1);
+                    let max_cols = self.cols();
+                    self.cursor_col = (self.cursor_col + count).min(max_cols.saturating_sub(1));
+                    self.ansi_state = AnsiState::Normal;
+                }
+                b'D' => {
+                    let count = self.ansi_params[0].max(1);
+                    self.cursor_col = self.cursor_col.saturating_sub(count);
+                    self.ansi_state = AnsiState::Normal;
+                }
+                b'm' => {
+                    self.handle_sgr();
+                    self.ansi_state = AnsiState::Normal;
+                }
+                _ => {
+                    self.ansi_state = AnsiState::Normal;
+                }
+            },
+        }
+    }
 
-                let fg = self.color_code.foreground.to_rgb();
-                let bg = self.color_code.background.to_rgb();
-
-                self.draw_char(self.cursor_col, self.cursor_row, byte, fg, bg);
-
-                self.cursor_col += 1;
-            }
+    pub(crate) fn write_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.write_byte(byte);
         }
     }
 
@@ -297,20 +461,6 @@ impl Writer {
             self.cursor_row += 1;
         } else {
             self.scroll();
-        }
-    }
-
-    pub(crate) fn write_bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            match byte {
-                0x20..=0x7e | b'\n' | b'\r' | 0x08 => {
-                    self.write_byte(byte);
-                }
-
-                _ => {
-                    self.write_byte(0xfe);
-                }
-            }
         }
     }
 
