@@ -51,6 +51,9 @@ impl FileOperations for TtyFileOps {
             if count > 0 {
                 return Ok(count);
             }
+            if crate::task::process::has_pending_signals() {
+                return Err("interrupted");
+            }
             crate::syscall::dispatch::wait_for_key();
         }
         Ok(count)

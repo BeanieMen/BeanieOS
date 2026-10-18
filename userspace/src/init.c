@@ -1,5 +1,4 @@
 #include "syscall.h"
-#include <sys/syscall.h>
 
 #define INPUT_MAX 128
 #define MAX_ARGS 8

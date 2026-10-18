@@ -77,9 +77,7 @@ impl Tty {
         let echo = (self.termios.c_lflag & ECHO) != 0;
 
         if isig && byte == self.termios.c_cc[VINTR] {
-            if echo {
-                crate::console::write_user_bytes(b"^C\r\n");
-            }
+            crate::console::write_user_bytes(b"^C\r\n");
             self.line_len = 0;
             self.queue.clear();
             

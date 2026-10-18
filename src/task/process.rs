@@ -3,7 +3,14 @@ use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    arch::lock::InterruptMutex, memory::{allocator::alloc_frame, mmu}, paging::phys_to_direct, storage::vfs::fd::FdTable, task::{identity::{self, ProcessId, ThreadId}, signal::SigAction},
+    arch::lock::InterruptMutex,
+    memory::{allocator::alloc_frame, mmu},
+    paging::phys_to_direct,
+    storage::vfs::fd::FdTable,
+    task::{
+        identity::{self, ProcessId, ThreadId},
+        signal::SigAction,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,11 +429,20 @@ pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) {
     let manager = PROCESS_MANAGER.lock();
     for proc in manager.processes.values() {
         let mut p = proc.lock();
-        if p.pgid == pgid  || p.pid == pgid {
+        if p.pgid == pgid || p.pid == pgid {
             p.pending_signals |= 1u64 << (sig - 1);
             for &thread_id in &p.threads {
                 crate::task::scheduler::wake(thread_id);
             }
         }
+    }
+}
+
+pub(crate) fn has_pending_signals() -> bool {
+    if let Some(proc) = current() {
+        let p = proc.lock();
+        (p.pending_signals & !p.blocked_signals) != 0
+    } else {
+        false
     }
 }

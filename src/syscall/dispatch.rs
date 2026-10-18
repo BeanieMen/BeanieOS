@@ -79,8 +79,11 @@ fn sys_nanosleep(req_ptr: u64, _rem: u64) -> SyscallResult {
     }
     let ms = (req.tv_sec as u64) * 1000 + (req.tv_nsec as u64) / 1_000_000;
     let ticks = ms.div_ceil(crate::arch::interrupts::consts::TICK_MS);
-    if ticks > 0 {
-        scheduler::sleep(ticks);
+    for _ in 0..ticks {
+        if process::has_pending_signals() {
+            return Err(Errno::Intr)
+        }
+        scheduler::sleep(1);
     }
     Ok(0)
 }
@@ -399,9 +402,9 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
     let is_dev = file.inode.lock().file_type == crate::storage::vfs::inode::FileType::Device;
 
     let read = if is_dev {
-        // Device reads (like TTY) can block; perform outside of process mutex to avoid deadlock
         match file.read(&mut staging[..to_read]) {
             Ok(read) => read,
+            Err("interrupted") => return Err(Errno::Intr),
             Err(_) => return Err(Errno::Invalid),
         }
     } else {
