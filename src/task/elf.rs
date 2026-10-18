@@ -9,10 +9,7 @@ const ELF_CLASS_64: u8 = 2;
 const ELF_DATA_2LSB: u8 = 1;
 const EM_X86_64: u16 = 0x3e;
 const PT_LOAD: u32 = 1;
-
-const PF_X: u32 = 1 << 0;
 const PF_W: u32 = 1 << 1;
-const PF_R: u32 = 1 << 2;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -59,7 +56,6 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
         return Err("ELF file too small for header");
     }
 
-    // validate header
     let header = unsafe { &*(binary.as_ptr() as *const ElfHeader) };
     if header.ident[0..4] != ELF_MAGIC {
         return Err("invalid ELF magic");
@@ -162,7 +158,7 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
         }
     }
 
-    let user_stack_top = (USER_STACK_TOP - 16) & !0xf; // align to 16 bytes
+    let user_stack_top = (USER_STACK_TOP - 16) & !0xf;
 
     Ok(LoadedProcess {
         entry_point: header.entry,

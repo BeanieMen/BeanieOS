@@ -1,13 +1,12 @@
 use core::arch::naked_asm;
 
-use x86_64::PhysAddr;
-use x86_64::structures::paging::{PageTableFlags, PhysFrame};
+use x86_64::structures::paging::PageTableFlags;
 
 use crate::arch::gdt::{user_code_selector, user_data_selector};
 use crate::memory::allocator::alloc_frame;
 use crate::memory::mmu::AddressSpace;
 pub(crate) use crate::memory::mmu::{USER_BASE, USER_DATA, USER_STACK_TOP};
-use crate::paging::{PAGE_SIZE, align_down, phys_to_direct};
+use crate::paging::{PAGE_SIZE, phys_to_direct};
 
 const USER_CODE: &[u8] = &[
     0xbf, 0x00, 0x00, 0x50, 0x00, 0xbe, 0x00, 0x00, 0x00, 0x00, 0x31, 0xd2, 0xb8, 0x03, 0x00,
@@ -23,26 +22,13 @@ const USER_CODE: &[u8] = &[
 const PATH: &[u8] = b"/TEST.TXT\0";
 const OUT_PATH: &[u8] = b"/OUT.TXT\0";
 const MARKER: &[u8] = b"RING3 WROTE THIS OVER AHCI\n";
-const MARKER_LEN: usize = 26;
 const LONG_LEN: usize = 1200;
-
-const PATH_ADDR: u64 = USER_DATA;
-const PATH_WRITE_ADDR: u64 = USER_DATA + 0x40;
-const MARKER_ADDR: u64 = USER_DATA + 0x100;
-const BUF_ADDR: u64 = USER_DATA + 0x200;
 
 const PATH_OFF: usize = 0x00;
 const OUT_PATH_OFF: usize = 0x40;
 const MARKER_OFF: usize = 0x100;
 
-const SUPERVISOR: PageTableFlags = crate::memory::mmu::KERNEL_RW;
-
 const USER: PageTableFlags = crate::memory::mmu::USER_RW;
-
-#[unsafe(naked)]
-pub unsafe extern "C" fn stack_pointer() -> u64 {
-    naked_asm!("mov rax, rsp", "ret")
-}
 
 #[unsafe(naked)]
 pub unsafe extern "C" fn enter_userland(rip: u64, rsp: u64, rflags: u64, ss: u64, cs: u64) -> ! {
@@ -56,10 +42,6 @@ pub unsafe extern "C" fn enter_userland(rip: u64, rsp: u64, rflags: u64, ss: u64
         "mov [rsp + 32], rcx",
         "iretq",
     )
-}
-
-fn page_of(addr: u64) -> PhysFrame {
-    PhysFrame::containing_address(PhysAddr::new(align_down(addr)))
 }
 
 pub(crate) fn build() -> Option<AddressSpace> {

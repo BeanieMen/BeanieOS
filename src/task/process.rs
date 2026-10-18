@@ -3,35 +3,17 @@ use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    arch::{interrupts::vectors::ticks, lock::InterruptMutex},
-    memory::{
-        allocator::alloc_frame,
-        mmu::{self, Mapper},
-    },
+    arch::lock::InterruptMutex,
+    memory::{allocator::alloc_frame, mmu},
     paging::phys_to_direct,
     storage::vfs::fd::FdTable,
-    task::{
-        identity::{self, ProcessId, ThreadId},
-        process,
-    },
+    task::identity::{self, ProcessId, ThreadId},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProcessStatus {
     Running,
     Zombie(i32),
-    Dead,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ProcessInfo {
-    pub pid: ProcessId,
-    pub ppid: Option<ProcessId>,
-    pub name: String,
-    pub status: ProcessStatus,
-    pub cwd: String,
-    pub threads_count: usize,
-    pub uptime_ticks: u64,
 }
 
 pub(crate) struct Process {
@@ -42,7 +24,6 @@ pub(crate) struct Process {
     pub cwd: String,
     pub threads: Vec<ThreadId>,
     pub exit_code: Option<i32>,
-    pub created_at: u64,
     pub fds: FdTable,
     pub space: Option<PhysFrame>,
     pub heap_start: u64,
@@ -50,8 +31,8 @@ pub(crate) struct Process {
     pub mmap_next: u64,
 }
 
-pub const DEFAULT_HEAP_BASE: u64 = 0x1000_0000; // 256 MiB mark
-pub const DEFAULT_MMAP_BASE: u64 = 0x7000_0000_0000; // High canonical user virt addr
+pub const DEFAULT_HEAP_BASE: u64 = 0x1000_0000;
+pub const DEFAULT_MMAP_BASE: u64 = 0x7000_0000_0000;
 
 impl Process {
     fn boot() -> Self {
@@ -63,7 +44,6 @@ impl Process {
             cwd: String::from("/"),
             threads: Vec::new(),
             exit_code: None,
-            created_at: ticks(),
             fds: FdTable::new(),
             space: None,
             heap_start: DEFAULT_HEAP_BASE,
@@ -81,7 +61,6 @@ impl Process {
             cwd: String::from(cwd),
             threads: Vec::new(),
             exit_code: None,
-            created_at: ticks(),
             fds: FdTable::new(),
             space: None,
             heap_start: DEFAULT_HEAP_BASE,
@@ -94,16 +73,6 @@ impl Process {
         if !self.threads.contains(&id) {
             self.threads.push(id);
         }
-    }
-
-    pub(crate) fn detach_thread(&mut self, id: ThreadId) {
-        if let Some(index) = self.threads.iter().position(|&thread| thread == id) {
-            self.threads.remove(index);
-        }
-    }
-
-    fn live_threads(&self) -> usize {
-        self.threads.len()
     }
 }
 
@@ -218,7 +187,7 @@ impl ProcessManager {
             }
             space.map(virt, frame, mmu::USER_RW).map_err(|_| ())?;
         }
-        core::mem::forget(space); // keep the space alive, as the process still owns it
+        core::mem::forget(space);
         Ok(target)
     }
 
@@ -251,9 +220,9 @@ impl ProcessManager {
                 curr += 4096;
             }
         }
-        core::mem::forget(space); // keep the space alive, as the process still owns it
+        core::mem::forget(space);
         p.heap_break = new_brk;
-        return Ok(p.heap_break);
+        Ok(p.heap_break)
     }
     pub(crate) fn get(&self, pid: ProcessId) -> Option<Arc<InterruptMutex<Process>>> {
         self.processes.get(&pid).cloned()
@@ -281,49 +250,12 @@ impl ProcessManager {
 
         let code = match process.lock().status {
             ProcessStatus::Zombie(code) => code,
-            ProcessStatus::Dead => return None,
             ProcessStatus::Running => return None,
         };
 
         self.processes.remove(&pid);
 
         Some(code)
-    }
-
-    fn kill(&mut self, pid: ProcessId) -> Result<(), &'static str> {
-        if pid == ProcessId::KERNEL {
-            return Err("Cannot kill kernel process");
-        }
-
-        match self.processes.get(&pid) {
-            Some(process) => {
-                process.lock().status = ProcessStatus::Dead;
-                self.processes.remove(&pid);
-                Ok(())
-            }
-            None => Err("PID not found"),
-        }
-    }
-
-    pub(crate) fn list(&self) -> Vec<ProcessInfo> {
-        let now = ticks();
-
-        self.processes
-            .values()
-            .map(|process| {
-                let process = process.lock();
-
-                ProcessInfo {
-                    pid: process.pid,
-                    ppid: process.ppid,
-                    name: process.name.clone(),
-                    status: process.status,
-                    cwd: process.cwd.clone(),
-                    threads_count: process.live_threads(),
-                    uptime_ticks: now.saturating_sub(process.created_at),
-                }
-            })
-            .collect()
     }
 }
 
@@ -339,34 +271,6 @@ pub(crate) fn create(name: &str, cwd: &str) -> ProcessId {
 
 pub(crate) fn exit(pid: ProcessId, code: i32) {
     PROCESS_MANAGER.lock().exit(pid, code);
-}
-
-pub(crate) fn reap(pid: ProcessId) -> Option<i32> {
-    PROCESS_MANAGER.lock().reap(pid)
-}
-
-pub(crate) fn wait(target: ProcessId) -> Option<i32> {
-    let current = identity::current_pid();
-
-    loop {
-        // The manager lock is dropped before every sleep. `Scheduler::spawn` and
-        // `Scheduler::remove` both reach back into PROCESS_MANAGER, so the
-        // scheduler's lock is always outer; holding this one across the sleep
-        // would invert that and deadlock against any thread being created.
-        {
-            let mut manager = PROCESS_MANAGER.lock();
-
-            if let Some(code) = manager.reap(target) {
-                return Some(code);
-            }
-
-            if manager.parent_of(target) != Some(current) {
-                return None;
-            }
-        }
-
-        crate::task::scheduler::sleep(1);
-    }
 }
 
 pub(crate) fn create_child(parent_pid: ProcessId) -> Option<ProcessId> {
@@ -431,29 +335,8 @@ pub(crate) fn attach_thread(pid: ProcessId, thread: ThreadId) {
     }
 }
 
-pub(crate) fn detach_thread(pid: ProcessId, thread: ThreadId) {
-    if let Some(process) = PROCESS_MANAGER.lock().get(pid) {
-        process.lock().detach_thread(thread);
-    }
-}
-
-fn kill(pid: ProcessId) -> Result<(), &'static str> {
-    PROCESS_MANAGER.lock().kill(pid)
-}
-
-pub(crate) fn list() -> Vec<ProcessInfo> {
-    PROCESS_MANAGER.lock().list()
-}
-
 pub(crate) fn current() -> Option<Arc<InterruptMutex<Process>>> {
     PROCESS_MANAGER.lock().get(identity::current_pid())
-}
-
-fn current_space() -> Option<PhysFrame> {
-    let process = current()?;
-    let guard = process.lock();
-
-    guard.space
 }
 
 pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
@@ -465,7 +348,7 @@ pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
         guard.mmap_next = DEFAULT_MMAP_BASE;
     }
 }
-pub(crate) fn mmap(pid: ProcessId,  addr: u64, len: u64, prot:u64, flags: u64) -> Result<u64, ()> {
+pub(crate) fn mmap(pid: ProcessId, addr: u64, len: u64, prot: u64, flags: u64) -> Result<u64, ()> {
     PROCESS_MANAGER.lock().mmap(pid, addr, len, prot, flags)
 }
 
@@ -490,16 +373,6 @@ pub(crate) fn activate_space(pid: ProcessId) {
     match root {
         Some(frame) => mmu::activate_root(frame),
         None => mmu::activate_root(mmu::kernel_cr3()),
-    }
-}
-
-fn current_cr3() -> usize {
-    let process = PROCESS_MANAGER.lock().get(identity::current_pid());
-    let space = process.and_then(|process| process.lock().space);
-
-    match space {
-        Some(frame) => frame.start_address().as_u64() as usize,
-        None => mmu::kernel_cr3().start_address().as_u64() as usize,
     }
 }
 

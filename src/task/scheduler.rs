@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc};
 
 use crate::arch::gdt;
 use crate::arch::interrupts::vectors::ticks;
@@ -68,10 +68,6 @@ impl Scheduler {
         }
     }
 
-    fn gs_base_agrees(&self) -> bool {
-        self.thread_ptr(self.current)
-            .is_some_and(|current_ptr| identity::current_thread() == current_ptr)
-    }
 
     pub(crate) fn spawn(
         &mut self,
@@ -116,13 +112,6 @@ impl Scheduler {
         id
     }
 
-    fn current_id(&self) -> ThreadId {
-        self.current
-    }
-
-    pub(crate) fn current_pid(&self) -> ProcessId {
-        identity::current_pid()
-    }
 
     fn account_tick(&mut self) {
         let Some(current) = self.threads.get(&self.current) else {
@@ -281,41 +270,6 @@ impl Scheduler {
         })
     }
 
-    fn remove(&mut self, id: ThreadId) -> bool {
-        let Some(thread) = self.threads.get(&id) else {
-            return false;
-        };
-
-        let (pid, ptr) = {
-            let mut guard = thread.lock();
-            (guard.pid, &mut *guard as *mut Thread)
-        };
-
-        if identity::current_thread() == ptr {
-            return false;
-        }
-
-        if self.threads.remove(&id).is_none() {
-            return false;
-        }
-
-        crate::task::process::detach_thread(pid, id);
-
-        true
-    }
-
-    fn reap_dead(&mut self) {
-        let dead: Vec<ThreadId> = self
-            .threads
-            .iter()
-            .filter(|(_, thread)| thread.lock().state == ThreadState::Dead)
-            .map(|(id, _)| *id)
-            .collect();
-
-        for id in dead {
-            self.remove(id);
-        }
-    }
 
     fn wake_sleeping_threads(&mut self) {
         let now = self.ticks();
@@ -410,11 +364,6 @@ pub(crate) fn init() {
     SCHEDULER.lock().init();
 }
 
-pub fn spawn(name: &str, entry: extern "C" fn(), priority: Priority) -> ThreadId {
-    let pid = identity::current_pid();
-
-    SCHEDULER.lock().spawn(pid, name, entry, priority)
-}
 
 pub(crate) fn spawn_in_process(
     pid: ProcessId,
@@ -469,9 +418,6 @@ pub(crate) fn account_tick() {
     SCHEDULER.lock().account_tick();
 }
 
-fn reap_dead() {
-    SCHEDULER.lock().reap_dead();
-}
 
 fn apply(switch: Option<ContextSwitch>) {
     if let Some(ContextSwitch {

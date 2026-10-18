@@ -3,7 +3,6 @@ use crate::task::scheduler;
 
 static RGB_TICKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
-/// One leg of the colour cycle: green to red, then back, and so on.
 const RAMP: u32 = 255;
 const LEGS: u32 = 6;
 const RAMP_TICKS: u32 = RAMP + 1;

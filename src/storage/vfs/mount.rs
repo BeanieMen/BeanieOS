@@ -92,6 +92,7 @@ impl MountTable {
         Path::resolve(mount.root.clone(), path)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn sync_all(&self) -> Result<(), &'static str> {
         for mount in &self.mounts {
             mount.fs.sync()?;

@@ -8,7 +8,6 @@ const DT_UNKNOWN: u8 = 0;
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
 
-/// Header of a directory record: ino, next offset, record length, type.
 const DIRENT_HEADER: usize = 19;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,16 +74,12 @@ impl File {
         }
     }
 
-    /// Fills `buf` with `linux_dirent64`-shaped records, one per entry.
-    ///
-    /// The file's offset is the index of the next entry, so a caller that keeps
-    /// reading picks up where the last full buffer ended.
     pub(crate) fn getdents(&mut self, buf: &mut [u8]) -> Result<usize, &'static str> {
         if self.inode.lock().file_type != FileType::Directory {
             return Err("not a directory");
         }
 
-        let mut written = 0usize;
+        let mut written = 0;
 
         loop {
             let entry = {
@@ -100,8 +95,6 @@ impl File {
             self.offset += 1;
 
             let name_len = entry.name.iter().position(|b| *b == b' ').unwrap_or(11) + 1;
-
-            // align record as linux abi
             let reclen = (DIRENT_HEADER + name_len + 7) & !7;
             
             if written + reclen > buf.len() {

@@ -4,10 +4,10 @@ pub mod madt;
 
 use super::consts::{LEGACY_PIC0_MASK, LEGACY_PIC1_MASK};
 
-static mut cascade_offset: (u8, u8) = (0, 0);
+static mut CASCADE_OFFSET: (u8, u8) = (0, 0);
 
 pub(crate) fn legacy_cascade() -> (u8, u8) {
-    unsafe { cascade_offset }
+    unsafe { CASCADE_OFFSET }
 }
 
 fn remap_legacy_pic() {
@@ -39,7 +39,7 @@ fn remap_legacy_pic() {
         command1.write(0x01);
         data1.write(0x02);
 
-        cascade_offset = (SLAVE_OFFSET + 2, MASTER_OFFSET + 2);
+        CASCADE_OFFSET = (SLAVE_OFFSET + 2, MASTER_OFFSET + 2);
 
         mask0.write(0);
         mask1.write(0);

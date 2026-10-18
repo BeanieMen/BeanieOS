@@ -16,13 +16,8 @@ use crate::{
 
 const MAX_SECTOR: usize = 4096;
 
-/// A FAT32 entry is 32 bits, of which the top 4 are reserved.
 const FAT_ENTRY_MASK: u64 = 0x0FFF_FFFF;
-
-/// First cluster number. 0 is free, 1 is reserved, and the data starts at 2.
 const FIRST_DATA_CLUSTER: u32 = 2;
-
-/// End-of-chain and bad-cluster markers, above the reserved value range.
 const CLUSTER_EOC_MIN: u32 = 0x0FFF_FFF8;
 const CLUSTER_BAD: u32 = 0x0FFF_FFF7;
 
@@ -399,7 +394,8 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
     /// cookie and resume where it stopped.
     fn entry_at(&self, start_cluster: u32, index: u64) -> Result<Option<RawEntry>, &'static str> {
         let mut cluster = start_cluster;
-        let mut seen = 0u64;
+        let mut valid_count = 0u64;
+        let mut raw_slot = 0u64;
 
         loop {
             let first_sector = self.geom.cluster_sector(cluster);
@@ -422,35 +418,35 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                         return Ok(None);
                     }
 
-                    let slot = seen;
-                    seen += 1;
+                    let slot = raw_slot;
+                    raw_slot += 1;
 
-                    if slot != index {
+                    if entry[0] == 0xE5 || entry[11] == 0x0F || entry[11] & 0x08 != 0 {
                         continue;
                     }
 
-                    if entry[0] == 0xE5 || entry[11] == 0x0F || entry[11] & 0x08 != 0 {
-                        return self.entry_at(start_cluster, index + 1);
+                    if valid_count == index {
+                        let mut name = [b' '; 11];
+                        name.copy_from_slice(&entry[..11]);
+
+                        let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+                        let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
+
+                        let file_type = if entry[11] & 0x10 != 0 {
+                            FileType::Directory
+                        } else {
+                            FileType::Regular
+                        };
+
+                        return Ok(Some(RawEntry {
+                            inode: (((high << 16) | low) as u64) | (slot << 32),
+                            file_type,
+                            size: u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]),
+                            name,
+                        }));
                     }
 
-                    let mut name = [b' '; 11];
-                    name.copy_from_slice(&entry[..11]);
-
-                    let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
-                    let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
-
-                    let file_type = if entry[11] & 0x10 != 0 {
-                        FileType::Directory
-                    } else {
-                        FileType::Regular
-                    };
-
-                    return Ok(Some(RawEntry {
-                        inode: (((high << 16) | low) as u64) | ((slot as u64) << 32),
-                        file_type,
-                        size: u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]),
-                        name,
-                    }));
+                    valid_count += 1;
                 }
             }
 
@@ -461,7 +457,6 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         }
     }
 
-    /// Finds a free directory slot, reusing one marked deleted.
     fn free_slot(&self, start_cluster: u32) -> Result<(u64, usize), &'static str> {
         let mut cluster = start_cluster;
 
@@ -615,7 +610,6 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         }
     }
 
-    /// Marks an entry deleted by setting its first byte to 0xE5.
     fn mark_deleted(
         device: &Arc<Mutex<D>>,
         geom: Geometry,

@@ -31,18 +31,6 @@ pub(crate) fn current_thread_id() -> ThreadId {
     unsafe { (*thread).id }
 }
 
-#[inline]
-pub(crate) fn current_kernel_stack_top() -> Option<usize> {
-    let thread = current_thread();
-
-    if thread.is_null() {
-        return None;
-    }
-
-    // SAFETY: GS base holds a `*mut Thread` the scheduler keeps alive while the
-    // thread can run.
-    unsafe { (*thread).kernel_stack_top() }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ProcessId(pub u64);
