@@ -23,10 +23,12 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Write => sys_write(args[0], args[1], args[2]),
         Syscall::Open => sys_open(args[0], args[1]),
         Syscall::Close => sys_close(args[0]),
+        Syscall::Fstat => sys_fstat(args[0], args[1]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
         Syscall::Mmap => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         Syscall::Munmap => sys_mun_map(args[0], args[1]),
         Syscall::Brk => sys_brk(args[0]),
+        Syscall::Writev => sys_writev(args[0], args[1], args[2]),
         Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
         Syscall::Fork => sys_fork(frame),
         Syscall::Exit => sys_exit(args[0]),
@@ -46,16 +48,64 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
     }
 }
 
-fn sys_mmap(
-    addr: u64,
-    len: u64,
-    prot: u64,
-    flags: u64,
-    _fd: u64,
-    _offset: u64,
-) -> SyscallResult {
+fn sys_fstat(fd: u64, stat_buf: u64) -> SyscallResult {
+    let mut stat = [0u8; 144];
+
+    if fd <= 2 {
+        stat[16..24].copy_from_slice(&1u64.to_le_bytes());
+        stat[24..28].copy_from_slice(&0o020666u32.to_le_bytes());
+        stat[56..64].copy_from_slice(&1024u64.to_le_bytes());
+    } else {
+        let (size, is_dir, ino) = process::with_current_fds(|fds| {
+            let file = fds.get(fd).ok()?;
+            let inode = file.inode.lock();
+            let is_dir = inode.file_type == crate::storage::vfs::inode::FileType::Directory;
+            Some((inode.size, is_dir, inode.id))
+        })
+        .flatten()
+        .ok_or(Errno::BadFd)?;
+
+        let mode = if is_dir { 0o040755u32 } else { 0o100644u32 };
+        let blocks = (size + 511) / 512;
+
+        stat[8..16].copy_from_slice(&ino.to_le_bytes());
+        stat[16..24].copy_from_slice(&1u64.to_le_bytes());
+        stat[24..28].copy_from_slice(&mode.to_le_bytes());
+        stat[48..56].copy_from_slice(&size.to_le_bytes());
+        stat[56..64].copy_from_slice(&4096u64.to_le_bytes());
+        stat[64..72].copy_from_slice(&blocks.to_le_bytes());
+    }
+
+    entry::copy_to_user(stat_buf, &stat).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+
+fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
+    if iovcnt > 1024 {
+        return Err(Errno::Invalid);
+    }
+
+    let mut total_written = 0;
+
+    for i in 0..iovcnt {
+        let slot = iov_ptr.checked_add(i * 16).ok_or(Errno::Fault)?;
+        let mut iov_buf = [0u8; 16];
+        entry::copy_from_user(&mut iov_buf, slot).map_err(|_| Errno::Fault)?;
+
+        let base = u64::from_le_bytes(iov_buf[0..8].try_into().unwrap());
+        let len = u64::from_le_bytes(iov_buf[8..16].try_into().unwrap());
+
+        if len == 0 {
+            continue;
+        }
+        total_written += sys_write(fd, base, len)?;
+    }
+    Ok(total_written)
+}
+
+fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, _fd: u64, _offset: u64) -> SyscallResult {
     let pid = current_pid();
-    match process::mmap(pid,addr,len,prot,flags) {
+    match process::mmap(pid, addr, len, prot, flags) {
         Ok(mapped_addr) => Ok(mapped_addr),
         Err(_) => Err(Errno::NoMem),
     }
@@ -119,7 +169,6 @@ fn sys_wait4(pid: i64, wstatus: u64, _options: u64, _rusage: u64) -> SyscallResu
     Ok(child_pid.as_u64())
 }
 const MAX_ARGS: usize = 64;
-const MAX_ARG_LEN: usize = 4096;
 
 fn read_string_array(array: u64, limit: usize) -> Result<Vec<Vec<u8>>, ()> {
     let mut out = Vec::new();
@@ -167,34 +216,39 @@ fn sys_exit(code: u64) -> ! {
 }
 
 fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
-    if len > 4096 {
-        return Err(Errno::Invalid);
-    }
-
+    let mut total_written = 0;
+    let target = len as usize;
     let mut staging = [0u8; 4096];
-    let capped = len as usize;
 
-    if entry::copy_from_user(&mut staging[..capped], buf).is_err() {
-        return Err(Errno::Fault);
-    }
+    while total_written < target {
+        let chunk = core::cmp::min(target - total_written, 4096);
+        let curr_buf = buf + total_written as u64;
 
-    if fd == 1 || fd == 2 {
-        for &byte in &staging[..capped] {
-            crate::print!("{}", byte as char);
+        if entry::copy_from_user(&mut staging[..chunk], curr_buf).is_err() {
+            return Err(Errno::Fault);
         }
-        return Ok(capped as u64);
+
+        if fd == 1 || fd == 2 {
+            for &byte in &staging[..chunk] {
+                crate::print!("{}", byte as char);
+            }
+            total_written += chunk;
+            continue;
+        }
+
+        let Some(result) = process::with_current_fds(|fds| fds.write(fd, &staging[..chunk])) else {
+            return Err(Errno::BadFd);
+        };
+
+        match result {
+            Ok(n) if n > 0 => total_written += n,
+            Ok(_) => break,
+            Err(_) => return Err(Errno::Invalid),
+        }
     }
 
-    let Some(result) = process::with_current_fds(|fds| fds.write(fd, &staging[..capped])) else {
-        return Err(Errno::BadFd);
-    };
-
-    match result {
-        Ok(written) => Ok(written as u64),
-        Err(_) => Err(Errno::Invalid),
-    }
+    Ok(total_written as u64)
 }
-
 fn wait_for_key() {
     let id = crate::task::identity::current_thread_id();
 
@@ -217,7 +271,7 @@ fn sys_poll(fds: u64, nfds: u64, _events: u64) -> SyscallResult {
     let mut revents = [0u8; 8];
 
     if crate::arch::input::pending() > 0 {
-        revents[0] = 1; // POLLIN
+        revents[0] = 1;
     }
 
     if entry::copy_to_user(fds, &revents).is_err() {
@@ -234,7 +288,7 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
 
     if fd == 0 {
         let mut staging = [0u8; 4096];
-        let mut read = 0usize;
+        let mut read = 0;
         let target_len = (len as usize).min(staging.len());
 
         while read < target_len {
@@ -353,7 +407,6 @@ fn sys_lseek(fd: u64, offset: i64, whence: u32) -> SyscallResult {
 
 fn sys_arch_prctl(code: u64, addr: u64) -> SyscallResult {
     const ARCH_SET_FS: u64 = 0x1002;
-    const ARCH_SET_GS: u64 = 0x1001;
 
     if code != ARCH_SET_FS {
         return Err(Errno::Invalid);
@@ -450,7 +503,6 @@ fn sys_rmdir(path: u64) -> SyscallResult {
     }
 }
 
-/// `touch`, expressed as a create that tolerates an existing file.
 fn sys_create(path: u64) -> SyscallResult {
     let Ok(path) = entry::user_path(path) else {
         return Err(Errno::Fault);

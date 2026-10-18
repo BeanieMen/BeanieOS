@@ -170,7 +170,6 @@ impl FdTable {
         Ok(())
     }
 
-    /// Creates an empty regular file, or returns the handle if it is already there.
     pub(crate) fn touch(&mut self, path: &[u8]) -> Result<(), &'static str> {
         let (parent, name) = self.parent_of(path)?;
 

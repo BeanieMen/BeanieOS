@@ -4,8 +4,6 @@ use spin::Mutex;
 
 use super::dentry::Dentry;
 
-type InodeId = u64;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileType {
     Regular,
@@ -15,7 +13,7 @@ pub(crate) enum FileType {
 }
 
 pub(crate) struct Inode {
-    pub id: InodeId,
+    pub id: u64,
     pub file_type: FileType,
     pub size: u64,
     pub cluster: u32,

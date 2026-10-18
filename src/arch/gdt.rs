@@ -6,6 +6,17 @@ use x86_64::structures::tss::TaskStateSegment;
 pub(crate) const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
 static TSS: Once<TaskStateSegment> = Once::new();
+#[repr(C)]
+pub(crate) struct CpuScratch {
+    pub kernel_stack_top: u64,
+    pub user_rsp: u64,
+}
+
+#[unsafe(no_mangle)]
+pub(crate) static mut CPU_SCRATCH: CpuScratch = CpuScratch {
+    kernel_stack_top: 0,
+    user_rsp: 0,
+};
 
 fn tss() -> &'static TaskStateSegment {
     TSS.call_once(|| {
@@ -30,6 +41,9 @@ fn tss() -> &'static TaskStateSegment {
 }
 
 pub(crate) fn set_kernel_stack_top(stack_top: u64) {
+    unsafe {
+        CPU_SCRATCH.kernel_stack_top = stack_top;
+    }
     unsafe {
         (*(tss() as *const _ as *mut TaskStateSegment)).privilege_stack_table[0] =
             VirtAddr::new(stack_top)
@@ -92,7 +106,7 @@ pub(crate) fn init() {
     gdt.0.load();
     unsafe {
         CS::set_reg(gdt.1.code_selector);
-        DS::set_reg(SegmentSelector(0)); // unused stuff
+        DS::set_reg(SegmentSelector(0));
         ES::set_reg(SegmentSelector(0));
         FS::set_reg(SegmentSelector(0));
         GS::set_reg(SegmentSelector(0));

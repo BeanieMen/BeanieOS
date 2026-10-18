@@ -1,5 +1,7 @@
 use core::arch::naked_asm;
 
+use x86_64::registers::model_specific;
+
 use crate::arch::gdt::kernel_code_selector;
 use crate::arch::interrupts::idt_addr;
 use crate::memory::mmu::{USER_END, USER_START};
@@ -40,6 +42,46 @@ pub(crate) struct SyscallFrame {
 #[unsafe(naked)]
 pub unsafe extern "C" fn fork_return_trampoline() -> ! {
     naked_asm!(
+        "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+        "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rax", "iretq",
+    );
+}
+
+#[unsafe(naked)]
+pub unsafe extern "C" fn syscall_entry() -> ! {
+    naked_asm!(
+        // 1. Swap to kernel GS to access CPU_SCRATCH
+        "swapgs",
+        "mov gs:[8], rsp", // Save user rsp to CPU_SCRATCH.user_rsp
+        "mov rsp, gs:[0]", // Load kernel_stack_top into rsp
+        // 2. Build the standard iretq frame
+        "push 0x2b",   // User SS (selector 5 | 3)
+        "push gs:[8]", // User RSP
+        "swapgs",      // Restore user GS
+        "push r11",    // User RFLAGS (saved by CPU in r11)
+        "push 0x23",   // User CS (selector 4 | 3)
+        "push rcx",    // User RIP (saved by CPU in rcx)
+        // 3. Save GPRs to match SyscallFrame
+        "push rax",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push rbp",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        "xor eax, eax", // Reset SS to 0 for Ring 0 to prevent #GP on nested interrupt iretq
+        "mov ss, eax",
+        "sub rsp, 8", // Align stack to 16 bytes for System V ABI call
+        "lea rdi, [rsp + 8]",
+        "call syscall_c",
+        "add rsp, 8",
         "pop r15",
         "pop r14",
         "pop r13",
@@ -119,15 +161,24 @@ pub extern "C" fn syscall_c(frame: *mut SyscallFrame) {
 }
 
 pub(crate) fn install() {
-    let addr = stub as usize as u64;
+    use x86_64::VirtAddr;
+    use x86_64::registers::model_specific::{Efer, EferFlags, KernelGsBase, LStar, SFMask};
+    use x86_64::registers::rflags::RFlags;
+
+    unsafe {
+        Efer::update(|efer| *efer |= EferFlags::SYSTEM_CALL_EXTENSIONS);
+        LStar::write(VirtAddr::new(syscall_entry as *const () as usize as u64));
+        let star_val = (0x08u64 << 32) | (0x10u64 << 48);
+        model_specific::Msr::new(0xc0000081).write(star_val);
+        SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::DIRECTION_FLAG);
+        KernelGsBase::write(VirtAddr::from_ptr(&raw const crate::arch::gdt::CPU_SCRATCH));
+    }
+    let addr = stub as *const () as usize as u64;
     let selector = u64::from(kernel_code_selector().0);
 
-    let low =
-        (addr & 0xffff) | (selector << 16) | (0xee << 40) | (((addr >> 16) & 0xffff) << 48);
-
-    let high = (addr >> 32) as u64;
-
-    let base = idt_addr() + VECTOR as u64 * 16;
+    let low = (addr & 0xffff) | (selector << 16) | (0xee << 40) | (((addr >> 16) & 0xffff) << 48);
+    let high = addr >> 32;
+    let base = idt_addr() + u64::from(VECTOR) * 16;
 
     unsafe {
         core::ptr::write_volatile(base as *mut u64, low);

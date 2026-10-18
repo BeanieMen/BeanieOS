@@ -17,13 +17,6 @@ impl Path {
         self.dentry.lock().inode.clone()
     }
 
-    pub(crate) fn parent(&self) -> Option<Arc<Mutex<Dentry>>> {
-        self.dentry.lock().parent.clone()
-    }
-
-    pub(crate) fn name(&self) -> String {
-        self.dentry.lock().name.clone()
-    }
 
     pub(crate) fn resolve(root: Arc<Mutex<Dentry>>, path: &[u8]) -> Result<Self, &'static str> {
         if path.is_empty() {
