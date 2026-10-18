@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include <sys/syscall.h>
 
 #define INPUT_MAX 128
 #define MAX_ARGS 8
@@ -486,16 +487,32 @@ static void cmd_run(int argc, char **argv) {
     print("run: fork failed\n");
     return;
   }
+#ifndef TIOCSPGRP
+#define TIOCSPGRP 0x5410
+#endif
+
   if (pid == 0) {
+    int child_pid = (int)sys_getpid();
+    sys_ioctl(0, TIOCSPGRP, &child_pid);
     long ret = sys_execve(full, child_argv, envp);
     print("run: execve failed: ");
     print_num(ret);
     print("\n");
     sys_exit(1);
   }
-
+  int p = (int)pid;
+  sys_ioctl(0, TIOCSPGRP, &p);
   int status = 0;
   sys_wait4(pid, &status, 0, 0);
+  int shell_pid = (int)sys_getpid();
+  sys_ioctl(0, TIOCSPGRP, &shell_pid);
+
+  int exit_code = (status >> 8) & 0xff;
+  if (exit_code != 0) {
+    print("run: child exited with code ");
+    print_num(exit_code);
+    print("\n");
+  }
 }
 
 static void cmd_clear(void) {

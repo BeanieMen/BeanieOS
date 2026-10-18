@@ -8,6 +8,8 @@ pub const TCSETS: u64 = 0x5402;
 pub const TCSETSW: u64 = 0x5403;
 pub const TCSETSF: u64 = 0x5404;
 pub const TIOCGWINSZ: u64 = 0x5413;
+pub const TIOCGPGRP: u64 = 0x540F;
+pub const TIOCSPGRP: u64 = 0x5410;
 
 pub const ICANON: u32 = 0o000002;
 pub const ECHO: u32 = 0o000010;
@@ -34,7 +36,7 @@ impl Termios {
             c_iflag: 0,
             c_oflag: 0,
             c_cflag: 0,
-            c_lflag: 0, // Raw by default for standalone shell
+            c_lflag: ISIG,
             c_line: 0,
             c_cc: cc,
         }
@@ -55,6 +57,7 @@ pub struct Tty {
     pub line_buf: [u8; 4096],
     pub line_len: usize,
     pub queue: VecDeque<u8>,
+    pub foreground_pgrp: Option<crate::task::identity::ProcessId>,
 }
 
 impl Tty {
@@ -64,25 +67,25 @@ impl Tty {
             line_buf: [0; 4096],
             line_len: 0,
             queue: VecDeque::new(),
+            foreground_pgrp: None,
         }
     }
 
-    /// Feeds a raw hardware byte (from PS/2 or Serial) into the TTY line discipline
     pub fn push_byte(&mut self, byte: u8) {
         let isig = (self.termios.c_lflag & ISIG) != 0;
         let canon = (self.termios.c_lflag & ICANON) != 0;
         let echo = (self.termios.c_lflag & ECHO) != 0;
 
-        // Check for interrupt signal (Ctrl+C = 0x03)
         if isig && byte == self.termios.c_cc[VINTR] {
-            // Echo ^C on screen
             if echo {
                 crate::console::write_user_bytes(b"^C\r\n");
             }
-            // Clear current input line
             self.line_len = 0;
             self.queue.clear();
-            // TODO: deliver SIGINT to foreground process
+            
+            if let Some(pgid) = self.foreground_pgrp {
+                crate::task::process::send_signal_pgrp(pgid, crate::task::signal::SIGINT);
+            }
             return;
         }
 

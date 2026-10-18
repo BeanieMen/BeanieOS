@@ -16,7 +16,7 @@ use super::numbers::*;
 use crate::tty::{GLOBAL_TTY, TCGETS, TCSETS, TCSETSF, TCSETSW, TIOCGWINSZ, Termios, Winsize};
 
 
-pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame) -> SyscallResult {
+pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &mut entry::SyscallFrame) -> SyscallResult {
     let Ok(syscall) = Syscall::try_from(number) else {
         return Err(Errno::NoSys);
     };
@@ -49,6 +49,10 @@ pub(crate) fn dispatch(number: u64, args: [u64; 6], frame: &entry::SyscallFrame)
         Syscall::Poll => sys_poll(args[0], args[1], args[2]),
         Syscall::Unlink => sys_unlink(args[0]),
         Syscall::Rmdir => sys_rmdir(args[0]),
+        Syscall::RtSigaction => sys_rt_sigaction(args[0], args[1], args[2], args[3]),
+        Syscall::RtSigprocmask => sys_rt_sigprocmask(args[0], args[1], args[2], args[3]),
+        Syscall::RtSigreturn => sys_rt_sigreturn(frame),
+        Syscall::Kill => sys_kill(args[0] as i64, args[1]),
     }
 }
 
@@ -202,6 +206,18 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             if entry::copy_to_user(arg, bytes).is_err() {
                 return Err(Errno::Fault);
             }
+            Ok(0)
+        }
+        crate::tty::TIOCGPGRP => {
+            let pgid = GLOBAL_TTY.lock().foreground_pgrp.map(|p| p.as_u64() as i32).unwrap_or(0);
+            entry::copy_to_user(arg, &pgid.to_le_bytes()).map_err(|_| Errno::Fault)?;
+            Ok(0)
+        }
+        crate::tty::TIOCSPGRP => {
+            let mut pgid_bytes = [0u8; 4];
+            entry::copy_from_user(&mut pgid_bytes, arg).map_err(|_| Errno::Fault)?;
+            let pgid = i32::from_le_bytes(pgid_bytes);
+            GLOBAL_TTY.lock().foreground_pgrp = Some(crate::task::identity::ProcessId(pgid as u64));
             Ok(0)
         }
         _ => Err(Errno::Invalid),
@@ -591,4 +607,113 @@ fn sys_create(path: u64) -> SyscallResult {
         Ok(()) => Ok(0),
         Err(_) => Err(Errno::NoEntry),
     }
+}
+
+fn sys_kill(pid: i64, sig: u64) -> SyscallResult {
+    if sig > 64 {
+        return Err(Errno::Invalid);
+    }
+    if pid <= 0 {
+        return Err(Errno::Invalid);
+    }
+    crate::task::process::send_signal(crate::task::identity::ProcessId(pid as u64), sig as usize);
+    Ok(0)
+}
+
+fn sys_rt_sigaction(sig: u64, act_ptr: u64, oldact_ptr: u64, sigsetsize: u64) -> SyscallResult {
+    if sig == 0 || sig > 64 || sigsetsize != 8 {
+        return Err(Errno::Invalid);
+    }
+    if sig == 9 || sig == 19 {
+        return Err(Errno::Invalid);
+    }
+
+    let proc = process::current().ok_or(Errno::Fault)?;
+    let mut p = proc.lock();
+    let idx = (sig - 1) as usize;
+
+    if oldact_ptr != 0 {
+        let old = p.sigactions[idx];
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                &old as *const _ as *const u8,
+                core::mem::size_of::<crate::task::signal::SigAction>(),
+            )
+        };
+        entry::copy_to_user(oldact_ptr, bytes).map_err(|_| Errno::Fault)?;
+    }
+
+    if act_ptr != 0 {
+        let mut act = crate::task::signal::SigAction::default();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(
+                &mut act as *mut _ as *mut u8,
+                core::mem::size_of::<crate::task::signal::SigAction>(),
+            )
+        };
+        entry::copy_from_user(bytes, act_ptr).map_err(|_| Errno::Fault)?;
+        p.sigactions[idx] = act;
+    }
+
+    Ok(0)
+}
+
+fn sys_rt_sigprocmask(how: u64, set_ptr: u64, oldset_ptr: u64, sigsetsize: u64) -> SyscallResult {
+    if sigsetsize != 8 {
+        return Err(Errno::Invalid);
+    }
+
+    let proc = process::current().ok_or(Errno::Fault)?;
+    let mut p = proc.lock();
+
+    if oldset_ptr != 0 {
+        let old = p.blocked_signals;
+        entry::copy_to_user(oldset_ptr, &old.to_le_bytes()).map_err(|_| Errno::Fault)?;
+    }
+
+    if set_ptr != 0 {
+        let mut new_set_bytes = [0u8; 8];
+        entry::copy_from_user(&mut new_set_bytes, set_ptr).map_err(|_| Errno::Fault)?;
+        let set = u64::from_le_bytes(new_set_bytes);
+
+        const SIG_BLOCK: u64 = 0;
+        const SIG_UNBLOCK: u64 = 1;
+        const SIG_SETMASK: u64 = 2;
+
+        match how {
+            SIG_BLOCK => p.blocked_signals |= set,
+            SIG_UNBLOCK => p.blocked_signals &= !set,
+            SIG_SETMASK => p.blocked_signals = set,
+            _ => return Err(Errno::Invalid),
+        }
+
+        // SIGKILL and SIGSTOP cannot be blocked
+        p.blocked_signals &= !((1u64 << (9 - 1)) | (1u64 << (19 - 1)));
+    }
+
+    Ok(0)
+}
+
+fn sys_rt_sigreturn(frame: &mut entry::SyscallFrame) -> SyscallResult {
+    let mut ctx = core::mem::MaybeUninit::<crate::task::signal::SignalUserContext>::uninit();
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(
+            ctx.as_mut_ptr() as *mut u8,
+            core::mem::size_of::<crate::task::signal::SignalUserContext>(),
+        )
+    };
+
+    entry::copy_from_user(bytes, frame.rsp).map_err(|_| Errno::Fault)?;
+    let ctx = unsafe { ctx.assume_init() };
+
+    frame.regs = ctx.regs;
+    frame.rip = ctx.rip;
+    frame.rsp = ctx.rsp;
+    frame.rflags = ctx.rflags;
+
+    if let Some(proc) = process::current() {
+        proc.lock().blocked_signals = ctx.mask;
+    }
+
+    Ok(frame.regs.rax)
 }

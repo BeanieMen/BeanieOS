@@ -3,11 +3,7 @@ use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    arch::lock::InterruptMutex,
-    memory::{allocator::alloc_frame, mmu},
-    paging::phys_to_direct,
-    storage::vfs::fd::FdTable,
-    task::identity::{self, ProcessId, ThreadId},
+    arch::lock::InterruptMutex, memory::{allocator::alloc_frame, mmu}, paging::phys_to_direct, storage::vfs::fd::FdTable, task::{identity::{self, ProcessId, ThreadId}, signal::SigAction},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +15,10 @@ pub(crate) enum ProcessStatus {
 pub(crate) struct Process {
     pub pid: ProcessId,
     pub ppid: Option<ProcessId>,
+    pub pgid: ProcessId,
+    pub pending_signals: u64,
+    pub blocked_signals: u64,
+    pub sigactions: [SigAction; 64],
     pub name: String,
     pub status: ProcessStatus,
     pub cwd: String,
@@ -39,6 +39,10 @@ impl Process {
         Process {
             pid: ProcessId::KERNEL,
             ppid: None,
+            pgid: ProcessId::KERNEL,
+            pending_signals: 0,
+            blocked_signals: 0,
+            sigactions: [SigAction::default(); 64],
             name: String::from("kernel"),
             status: ProcessStatus::Running,
             cwd: String::from("/"),
@@ -53,9 +57,14 @@ impl Process {
     }
 
     fn new(name: &str, ppid: Option<ProcessId>, cwd: &str) -> Self {
+        let pid = ProcessId::new();
         Process {
-            pid: ProcessId::new(),
+            pid,
             ppid,
+            pgid: ppid.unwrap_or(pid),
+            pending_signals: 0,
+            blocked_signals: 0,
+            sigactions: [SigAction::default(); 64],
             name: String::from(name),
             status: ProcessStatus::Running,
             cwd: String::from(cwd),
@@ -123,6 +132,9 @@ impl ProcessManager {
             parent_heap_start,
             parent_heap_break,
             parent_mmap_next,
+            parent_pgid,
+            parent_blocked_signals,
+            parent_sigactions,
         ) = {
             let p = parent.lock();
             (
@@ -132,6 +144,9 @@ impl ProcessManager {
                 p.heap_start,
                 p.heap_break,
                 p.mmap_next,
+                p.pgid,
+                p.blocked_signals,
+                p.sigactions,
             )
         };
 
@@ -144,6 +159,9 @@ impl ProcessManager {
         child.heap_start = parent_heap_start;
         child.heap_break = parent_heap_break;
         child.mmap_next = parent_mmap_next;
+        child.pgid = parent_pgid;
+        child.blocked_signals = parent_blocked_signals;
+        child.sigactions = parent_sigactions;
         let child_pid = child.pid;
         self.processes
             .insert(child_pid, Arc::new(InterruptMutex::new(child)));
@@ -381,4 +399,34 @@ pub(crate) fn with_current_fds<R>(f: impl FnOnce(&mut FdTable) -> R) -> Option<R
     let mut guard = process.lock();
 
     Some(f(&mut guard.fds))
+}
+
+pub(crate) fn send_signal(pid: ProcessId, sig: usize) {
+    if sig == 0 || sig > 64 {
+        return;
+    }
+    let manager = PROCESS_MANAGER.lock();
+    if let Some(proc) = manager.get(pid) {
+        let mut p = proc.lock();
+        p.pending_signals |= 1u64 << (sig - 1);
+        for &thread_id in &p.threads {
+            crate::task::scheduler::wake(thread_id);
+        }
+    }
+}
+
+pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) {
+    if sig == 0 || sig > 64 {
+        return;
+    }
+    let manager = PROCESS_MANAGER.lock();
+    for proc in manager.processes.values() {
+        let mut p = proc.lock();
+        if p.pgid == pgid  || p.pid == pgid {
+            p.pending_signals |= 1u64 << (sig - 1);
+            for &thread_id in &p.threads {
+                crate::task::scheduler::wake(thread_id);
+            }
+        }
+    }
 }
