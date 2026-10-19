@@ -21,7 +21,6 @@ static int fb_out_h = 0;
 static int fb_start_x = 0;
 static int fb_start_y = 0;
 static int kbd_fd = -1;
-static int mouse_fd = -1;
 
 static inline uint64_t rdtsc(void) {
   uint32_t lo, hi;
@@ -50,7 +49,6 @@ static void init_timer(void) {
 
 void DG_Init() {
   kbd_fd = open("/dev/kbd", O_RDONLY);
-  mouse_fd = open("/dev/mouse", O_RDONLY);
 
   int fd = open("/dev/fb0", O_RDWR);
   if (fd < 0) return;
@@ -258,6 +256,7 @@ int DG_GetKey(int *pressed, unsigned char *doomKey) {
       *doomKey = convert_char_to_doom(ev[1]);
       return 1;
     }
+    return 0;
   }
 
   poll_keys();
@@ -269,18 +268,6 @@ int DG_GetKey(int *pressed, unsigned char *doomKey) {
     return 1;
   }
 
-  return 0;
-}
-
-int DG_GetMouse(int *buttons, int *xrel, int *yrel) {
-  if (mouse_fd < 0) return 0;
-  signed char ev[4];
-  if (read(mouse_fd, ev, 4) == 4) {
-    *buttons = (unsigned char)ev[0];
-    *xrel = (int)ev[1];
-    *yrel = (int)ev[2];
-    return 1;
-  }
   return 0;
 }
 
