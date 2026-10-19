@@ -566,6 +566,11 @@ fn sys_poll(fds: u64, nfds: u64, _timeout: u64) -> SyscallResult {
                         if has_events && (events & 1 != 0) {
                             revents |= 1;
                         }
+                    } else if inode_id == 4 {
+                        let has_events = !crate::arch::mouse::MOUSE_QUEUE.lock().is_empty();
+                        if has_events && (events & 1 != 0) {
+                            revents |= 1;
+                        }
                     } else {
                         revents |= events & 5;
                     }

@@ -46,7 +46,7 @@ pub static DSP_FILE_OPS: DspFileOps = DspFileOps;
 
 pub fn create_dsp_file(flags: OpenFlags) -> File {
     let inode = Inode {
-        id: 3,
+        id: 5,
         file_type: FileType::Device,
         inode_ops: &DSP_INODE_OPS,
         file_ops: &DSP_FILE_OPS,

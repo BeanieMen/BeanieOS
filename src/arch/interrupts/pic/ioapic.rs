@@ -96,6 +96,11 @@ pub(super) unsafe fn init() {
     }
 
     route(parsed.keyboard_gsi, KEYBOARD_VECTOR);
+    route(parsed.mouse_gsi, crate::arch::interrupts::consts::MOUSE_VECTOR);
 
-    crate::kinfo!("ioapic: keyboard gsi {}", parsed.keyboard_gsi);
+    crate::kinfo!(
+        "ioapic: keyboard gsi {}, mouse gsi {}",
+        parsed.keyboard_gsi,
+        parsed.mouse_gsi
+    );
 }

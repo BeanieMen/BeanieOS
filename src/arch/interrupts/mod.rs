@@ -42,6 +42,7 @@ pub(crate) fn init_idt(boot_info: &BootInformation<'_>) {
     }
 
     crate::arch::keyboard::init();
+    crate::arch::mouse::init();
 }
 
 pub(crate) fn timer_ticks() -> u64 {

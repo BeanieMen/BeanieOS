@@ -323,15 +323,15 @@ void I_GetEvent(void)
     }
 
 
-                /*
-            case SDL_MOUSEMOTION:
-                event.type = ev_mouse;
-                event.data1 = mouse_button_state;
-                event.data2 = AccelerateMouse(sdlevent.motion.xrel);
-                event.data3 = -AccelerateMouse(sdlevent.motion.yrel);
-                D_PostEvent(&event);
-                break;
-                */
+    int mouse_btn = 0, mouse_x = 0, mouse_y = 0;
+    while (DG_GetMouse(&mouse_btn, &mouse_x, &mouse_y))
+    {
+        event.type = ev_mouse;
+        event.data1 = mouse_btn;
+        event.data2 = mouse_x;
+        event.data3 = mouse_y;
+        D_PostEvent(&event);
+    }
 }
 
 void I_InitInput(void)

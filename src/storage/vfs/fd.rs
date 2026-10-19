@@ -130,6 +130,10 @@ impl FdTable {
             let dsp_file = crate::audio::vfs::create_dsp_file(flags);
             return Ok(self.alloc(dsp_file));
         }
+        if path == b"/dev/mouse" || path == b"dev/mouse" || path == b"/dev/input/mice" || path == b"dev/input/mice" {
+            let mouse_file = crate::arch::mouse::create_mouse_file(flags);
+            return Ok(self.alloc(mouse_file));
+        }
 
         
         let resolved = self.mounts.resolve(path)?;

@@ -5,7 +5,8 @@ use x86_64::instructions::port::Port;
 use x86_64::structures::idt::InterruptDescriptorTable;
 
 use super::consts::{
-    AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, PS2_DATA_PORT, SPURIOUS_VECTOR,
+    AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, MOUSE_VECTOR, PS2_DATA_PORT, PS2_STATUS_PORT,
+    SPURIOUS_VECTOR,
 };
 use super::pic;
 
@@ -58,14 +59,37 @@ extern "x86-interrupt" fn spurious_interrupt_handler(
 ) {
 }
 
+fn dispatch_ps2_interrupt() {
+    let mut status_port = Port::<u8>::new(PS2_STATUS_PORT);
+    let mut data_port = Port::<u8>::new(PS2_DATA_PORT);
+
+    for _ in 0..64 {
+        let status = unsafe { status_port.read() };
+        if (status & 0x01) == 0 {
+            break;
+        }
+        let byte = unsafe { data_port.read() };
+        if (status & 0x20) != 0 {
+            crate::arch::mouse::handle_mouse_byte(byte);
+        } else {
+            handle_keyboard_scancode(byte);
+        }
+    }
+}
+
 extern "x86-interrupt" fn keyboard_interrupt_handler(
     _stack_frame: x86_64::structures::idt::InterruptStackFrame,
 ) {
-    let mut port = Port::<u8>::new(PS2_DATA_PORT);
-    let scancode: u8 = unsafe { port.read() };
+    dispatch_ps2_interrupt();
+    unsafe {
+        pic::eoi();
+    }
+}
 
-    handle_keyboard_scancode(scancode);
-
+extern "x86-interrupt" fn mouse_interrupt_handler(
+    _stack_frame: x86_64::structures::idt::InterruptStackFrame,
+) {
+    dispatch_ps2_interrupt();
     unsafe {
         pic::eoi();
     }
@@ -73,6 +97,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
 
 pub(crate) fn register_vectors(idt: &mut InterruptDescriptorTable) {
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_interrupt_handler);
+    idt[MOUSE_VECTOR].set_handler_fn(mouse_interrupt_handler);
     idt[SPURIOUS_VECTOR].set_handler_fn(spurious_interrupt_handler);
     idt[AHCI_VECTOR].set_handler_fn(crate::storage::ahci::on_interrupt);
 
