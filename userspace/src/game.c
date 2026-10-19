@@ -91,29 +91,40 @@ static void build_field(void)
 
 static void draw(void)
 {
-    int y;
+    static char frame_buf[4096];
+    int pos = 0;
 
-    print("\033[H");
+#define APPEND(str) do { \
+        const char *_s = (str); \
+        while (*_s && pos < (int)sizeof(frame_buf) - 1) frame_buf[pos++] = *_s++; \
+    } while (0)
 
-    print("============== BEANIEOS PONG ==============\r\n");
+#define APPEND_NUM(n) do { \
+        int _val = (n); \
+        if (_val < 0) { if (pos < (int)sizeof(frame_buf) - 1) frame_buf[pos++] = '-'; _val = -_val; } \
+        char _nbuf[16]; int _ni = 0; \
+        do { _nbuf[_ni++] = '0' + (_val % 10); _val /= 10; } while (_val > 0 && _ni < 15); \
+        while (_ni > 0 && pos < (int)sizeof(frame_buf) - 1) frame_buf[pos++] = _nbuf[--_ni]; \
+    } while (0)
 
-    print("You: ");
-    print_number(score_me);
+    APPEND("\033[H============== BEANIEOS PONG ==============\r\nYou: ");
+    APPEND_NUM(score_me);
+    APPEND("   AI: ");
+    APPEND_NUM(score_ai);
+    APPEND("\r\n+------------------------------------------------------------+\r\n");
 
-    print("   AI: ");
-    print_number(score_ai);
-
-    print("\r\n");
-    print("+------------------------------------------------------------+\r\n");
-
-    for (y = 0; y < H; y++) {
-        print("|");
-        print(field[y]);
-        print("|\r\n");
+    for (int y = 0; y < H; y++) {
+        APPEND("|");
+        APPEND(field[y]);
+        APPEND("|\r\n");
     }
 
-    print("+------------------------------------------------------------+\r\n");
-    print("W/S or arrows: move   Q or Ctrl+C: quit\r\n");
+    APPEND("+------------------------------------------------------------+\r\nW/S or arrows: move   Q or Ctrl+C: quit\r\n");
+
+    sys_write(1, frame_buf, pos);
+
+#undef APPEND
+#undef APPEND_NUM
 }
 
 
@@ -170,14 +181,10 @@ static void move_paddle(int key)
     }
 }
 
-/* Paddle collision */
-
 static int hits_paddle(int y, int paddle)
 {
     return y >= paddle && y < paddle + PADDLE_LEN;
 }
-
-/* Simple AI */
 
 static void move_ai(void)
 {
@@ -198,20 +205,16 @@ static void move_ai(void)
     }
 }
 
-/* Advance the game by one step */
-
 static void step(void)
 {
     int next_x = ball_x + dir_x;
     int next_y = ball_y + dir_y;
 
-    /* Top and bottom walls */
     if (next_y < 0 || next_y >= H) {
         dir_y = -dir_y;
         next_y = ball_y + dir_y;
     }
 
-    /* Player paddle on the left */
     if (dir_x < 0 && next_x <= 1) {
         if (hits_paddle(next_y, paddle_y)) {
             dir_x = 1;
@@ -229,7 +232,6 @@ static void step(void)
         }
     }
 
-    /* AI paddle on the right */
     if (dir_x > 0 && next_x >= W - 2) {
         if (hits_paddle(next_y, ai_y)) {
             dir_x = -1;
@@ -266,8 +268,6 @@ static void step(void)
         ball_y = H - 1;
     }
 }
-
-/* Main */
 
 int main(void)
 {

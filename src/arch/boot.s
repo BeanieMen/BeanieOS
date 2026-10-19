@@ -288,12 +288,12 @@ multiboot_header:
     .long 1
     .long 14
 
-    # Request a 1024x768 framebuffer with 32 bits per pixel.
+    # Request a 640x480 framebuffer with 32 bits per pixel.
     .short 5
     .short 0
     .long 20
-    .long 1024
-    .long 768
+    .long 640
+    .long 480
     .long 32
 
     # Pad the framebuffer tag to an 8-byte boundary.

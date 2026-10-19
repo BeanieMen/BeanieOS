@@ -32,8 +32,11 @@ pub const PTE_HUGE: u64 = 1 << 7;
 
 pub const PTE_LEAF_MASK: u64 = PTE_PRESENT | PTE_WRITABLE;
 pub const PTE_ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+pub const PTE_PWT: u64 = 1 << 3;
+pub const PTE_PCD: u64 = 1 << 4;
 pub const PTE_KERNEL_RW: u64 = PTE_PRESENT | PTE_WRITABLE;
 pub const PTE_USER_RW: u64 = PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+pub const PTE_USER_WC: u64 = PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_PWT;
 
 const _: () = assert!(IMAGE_P3_INDEX == 510);
 const _: () = assert!(KERNEL_P4_INDEX == 511);
@@ -60,7 +63,10 @@ pub const fn direct_to_phys(virt: u64) -> u64 {
 }
 
 pub const fn phys_to_direct(phys: u64) -> u64 {
-    assert!(phys < DIRECT_MAP_SIZE, "physical address outside the direct map");
+    assert!(
+        phys < DIRECT_MAP_SIZE,
+        "physical address outside the direct map"
+    );
     phys + DIRECT_MAP_BASE
 }
 pub const fn align_up(addr: u64) -> u64 {

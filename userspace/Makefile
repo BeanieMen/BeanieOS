@@ -10,13 +10,21 @@ BINS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(C_SRCS))
 
 ASM_SRC := src/crt0.s
 
-all: $(BINS)
+all: $(BINS) doom
+
+doom:
+	@if [ -d doom/doomgeneric ]; then \
+		$(MAKE) -C doom/doomgeneric; \
+	fi
 
 $(BUILD_DIR)/%: src/%.c $(ASM_SRC) linker.ld include/syscall.h
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(ASM_SRC) $< -o $@
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -f $(BINS) $(BUILD_DIR)/doom
+	@if [ -d doom/doomgeneric ]; then \
+		$(MAKE) -C doom/doomgeneric clean; \
+	fi
 
-.PHONY: all clean
+.PHONY: all clean doom

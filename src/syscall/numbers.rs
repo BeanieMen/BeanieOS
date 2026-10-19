@@ -20,7 +20,6 @@ macro_rules! syscalls {
 }
 
 syscalls! {
-    // Linux x86_64
     Read = 0,
     Write = 1,
     Open = 2,
@@ -31,6 +30,7 @@ syscalls! {
     Munmap = 11,
     Brk = 12,
     Ioctl = 16,
+    Readv = 19,
     Writev = 20,
     ArchPrctl = 158,
     SchedYield = 24,
@@ -45,11 +45,12 @@ syscalls! {
     RtSigprocmask = 14,
     RtSigreturn = 15,
     Kill = 62,
-    
+    ClockGettime = 228,
+
     Getdents64 = 217,
     SetTidAddress = 218,
     ExitGroup = 231,
-    
+
     Mkdir = 83,
     Rmdir = 84,
     Create = 85,

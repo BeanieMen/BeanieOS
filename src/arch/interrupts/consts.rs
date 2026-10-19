@@ -1,6 +1,7 @@
 pub(crate) const KEYBOARD_VECTOR: u8 = 33;
 pub(crate) const LAPIC_TIMER_VECTOR: u8 = 32;
 pub(crate) const AHCI_VECTOR: u8 = 34;
+pub(crate) const MOUSE_VECTOR: u8 = 35;
 
 pub(crate) const LAPIC_SVR_OFFSET: usize = 0xF0;
 pub(crate) const LAPIC_ID_OFFSET: usize = 0x20;
@@ -31,9 +32,14 @@ pub(crate) const LEGACY_PIC0_COMMAND: u16 = 0x20;
 const _: () = assert!(LAPIC_TIMER_VECTOR >= 32);
 const _: () = assert!(KEYBOARD_VECTOR >= 32);
 const _: () = assert!(AHCI_VECTOR >= 32);
+const _: () = assert!(MOUSE_VECTOR >= 32);
 const _: () = assert!(LAPIC_TIMER_VECTOR != KEYBOARD_VECTOR);
 const _: () = assert!(LAPIC_TIMER_VECTOR != AHCI_VECTOR);
+const _: () = assert!(LAPIC_TIMER_VECTOR != MOUSE_VECTOR);
 const _: () = assert!(KEYBOARD_VECTOR != AHCI_VECTOR);
+const _: () = assert!(KEYBOARD_VECTOR != MOUSE_VECTOR);
+const _: () = assert!(AHCI_VECTOR != MOUSE_VECTOR);
 const _: () = assert!(SPURIOUS_VECTOR != LAPIC_TIMER_VECTOR);
 const _: () = assert!(SPURIOUS_VECTOR != KEYBOARD_VECTOR);
 const _: () = assert!(SPURIOUS_VECTOR != AHCI_VECTOR);
+const _: () = assert!(SPURIOUS_VECTOR != MOUSE_VECTOR);

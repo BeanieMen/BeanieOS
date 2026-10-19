@@ -19,6 +19,19 @@ pub(crate) const KERNEL_RW: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_KERNEL_RW);
 pub(crate) const USER_RW: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_USER_RW);
+pub(crate) const USER_WC: PageTableFlags =
+    PageTableFlags::from_bits_truncate(crate::paging::PTE_USER_WC);
+
+pub(crate) fn init_pat() {
+    use x86_64::registers::model_specific::Msr;
+    // Program IA32_PAT MSR (0x277):
+    // PAT0 = WB (0x06), PAT1 = WC (0x01), PAT2 = UC- (0x07), PAT3 = UC (0x00),
+    // PAT4 = WB (0x06), PAT5 = WT (0x05), PAT6 = UC- (0x07), PAT7 = UC (0x00)
+    let mut pat = Msr::new(0x277);
+    unsafe {
+        pat.write(0x0007_0506_0007_0106);
+    }
+}
 
 const SHARED_P4_SLOTS: [u64; 2] = [KERNEL_P4_INDEX, DIRECT_MAP_P4_INDEX];
 
@@ -106,21 +119,16 @@ impl Mapper {
         let mut table = self.base();
 
         for level in 0..P1_LEVEL as usize {
-            let slot = table + index(virt, level) * ENTRY_SIZE;
-            let entry = unsafe { read_entry(table, index(virt, level)) };
+            let idx = index(virt, level);
+            let slot = table + idx * ENTRY_SIZE;
+            let entry = unsafe { read_entry(table, idx) };
 
             table = if entry & PTE_PRESENT == 0 {
                 let child = new_table()?;
 
                 let user = flags.bits() & PTE_USER;
 
-                unsafe {
-                    write_entry(
-                        table,
-                        index(virt, level),
-                        child | PTE_PRESENT | PTE_WRITABLE | user,
-                    )
-                };
+                unsafe { write_entry(table, idx, child | PTE_PRESENT | PTE_WRITABLE | user) };
 
                 child
             } else if entry & PTE_HUGE != 0 {
@@ -147,7 +155,10 @@ impl Mapper {
 
         unsafe { write_entry(table, leaf, frame.start_address().as_u64() | flags.bits()) };
 
-        x86_64::instructions::tlb::flush_all();
+        let (current_cr3, _) = Cr3::read();
+        if self.root == current_cr3 {
+            x86_64::instructions::tlb::flush(VirtAddr::new(virt));
+        }
 
         Ok(())
     }
@@ -287,21 +298,16 @@ impl AddressSpace {
 
         for level in 0..P1_LEVEL as usize {
             let table = phys_to_direct(frame);
-            let slot = table + index(virt, level) * ENTRY_SIZE;
-            let entry = unsafe { read_entry(table, index(virt, level)) };
+            let idx = index(virt, level);
+            let slot = table + idx * ENTRY_SIZE;
+            let entry = unsafe { read_entry(table, idx) };
 
             frame = if entry & PTE_PRESENT == 0 {
                 let child = new_table()?;
 
                 let user = flags.bits() & PTE_USER;
 
-                unsafe {
-                    write_entry(
-                        table,
-                        index(virt, level),
-                        child | PTE_PRESENT | PTE_WRITABLE | user,
-                    )
-                };
+                unsafe { write_entry(table, idx, child | PTE_PRESENT | PTE_WRITABLE | user) };
 
                 child
             } else if entry & PTE_HUGE != 0 {
@@ -415,7 +421,10 @@ impl AddressSpace {
 
         unsafe { write_entry(table, leaf, target.start_address().as_u64() | flags.bits()) };
 
-        x86_64::instructions::tlb::flush_all();
+        let (current_cr3, _) = Cr3::read();
+        if self.root == current_cr3 {
+            x86_64::instructions::tlb::flush(VirtAddr::new(virt));
+        }
 
         Ok(())
     }
@@ -500,17 +509,14 @@ pub(crate) fn set_heap_range(start: u64, end: u64) {
     MEMORY.lock().heap = Some((start, end));
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub(crate) struct MMU<'a> {
     mapper: Mapper,
     _marker: core::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> MMU<'a> {
-    pub(crate) unsafe fn boot(
-        memory_map: &'a MemoryMapTag,
-        mbi_start: u64,
-        mbi_end: u64,
-    ) -> Self {
+    pub(crate) unsafe fn boot(memory_map: &'a MemoryMapTag, mbi_start: u64, mbi_end: u64) -> Self {
         {
             let mut info = MEMORY.lock();
             info.kernel = kernel_phys_range();
@@ -535,8 +541,7 @@ impl<'a> MMU<'a> {
     pub(crate) fn init_heap(&mut self) -> Result<(), MemoryError> {
         let pages = (HEAP_SIZE as u64).div_ceil(PAGE_SIZE);
 
-        self.mapper
-            .map_fresh(HEAP_START as u64, pages, KERNEL_RW)?;
+        self.mapper.map_fresh(HEAP_START as u64, pages, KERNEL_RW)?;
 
         crate::memory::heap::init_allocator();
 

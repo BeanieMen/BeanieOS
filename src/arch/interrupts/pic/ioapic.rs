@@ -87,8 +87,11 @@ pub(super) unsafe fn init() {
             parsed.ioapic_gsi_base
         );
 
-        for entry in 0..=max_entry as u32 {
-            ioapic_write(IOAPIC_ENTRY_LOW + entry * IOAPIC_ENTRY_STRIDE, IOAPIC_ENTRY_MASKED);
+        for entry in 0..=max_entry {
+            ioapic_write(
+                IOAPIC_ENTRY_LOW + entry * IOAPIC_ENTRY_STRIDE,
+                IOAPIC_ENTRY_MASKED,
+            );
         }
     }
 

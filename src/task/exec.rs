@@ -28,11 +28,7 @@ const RANDOM_LEN: u64 = 16;
 const READ_CHUNK: usize = 64 * 1024;
 const MAX_IMAGE: usize = 32 * 1024 * 1024;
 
-pub(crate) fn execve(
-    path: &[u8],
-    argv: &[Vec<u8>],
-    envp: &[Vec<u8>],
-) -> Result<!, &'static str> {
+pub(crate) fn execve(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> Result<!, &'static str> {
     let Some(binary) = read_program(path) else {
         return Err("could not read program");
     };
@@ -152,11 +148,11 @@ fn build_stack(
 
     // ensure (argc+argv+envp) is 16-byte aligned
     let total_words = 1 + (argv.len() + 1) + (envp.len() + 1);
-    if total_words % 2 != 0 {
+    if !total_words.is_multiple_of(2) {
         at -= 8;
         write_user(space, at, &0u64.to_le_bytes())?;
     }
-    
+
     push_pointer_array(space, &mut at, envp)?;
     push_pointer_array(space, &mut at, argv)?;
 

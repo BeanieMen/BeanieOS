@@ -80,7 +80,7 @@ impl Tty {
             crate::console::write_user_bytes(b"^C\r\n");
             self.line_len = 0;
             self.queue.clear();
-            
+
             if let Some(pgid) = self.foreground_pgrp {
                 crate::task::process::send_signal_pgrp(pgid, crate::task::signal::SIGINT);
             }
@@ -88,14 +88,11 @@ impl Tty {
         }
 
         if !canon {
-            // Raw mode: immediately enqueue byte
             self.queue.push_back(byte);
             return;
         }
 
-        // Canonical mode line editing
         if byte == 0x08 || byte == 0x7f {
-            // Backspace
             if self.line_len > 0 {
                 self.line_len -= 1;
                 if echo {
@@ -118,7 +115,6 @@ impl Tty {
             }
 
             if byte == b'\n' || byte == b'\r' {
-                // Line complete: flush to queue
                 for i in 0..self.line_len {
                     let b = if self.line_buf[i] == b'\r' {
                         b'\n'

@@ -5,6 +5,7 @@ pub(crate) struct Madt {
     pub ioapic_address: usize,
     pub ioapic_gsi_base: u32,
     pub keyboard_gsi: u32,
+    pub mouse_gsi: u32,
 }
 
 static MADT: Once<Madt> = Once::new();
@@ -65,6 +66,7 @@ unsafe fn parse_madt(madt: usize) -> Madt {
     let mut ioapic_address = None;
     let mut ioapic_gsi_base = None;
     let mut keyboard_gsi = 1u32;
+    let mut mouse_gsi = 12u32;
 
     let mut offset = madt + 44;
     let end = madt + length;
@@ -94,6 +96,8 @@ unsafe fn parse_madt(madt: usize) -> Madt {
 
                 if bus == 0 && source == 1 {
                     keyboard_gsi = gsi;
+                } else if bus == 0 && source == 12 {
+                    mouse_gsi = gsi;
                 }
             }
 
@@ -108,5 +112,6 @@ unsafe fn parse_madt(madt: usize) -> Madt {
         ioapic_address: ioapic_address.expect("No I/O APIC"),
         ioapic_gsi_base: ioapic_gsi_base.expect("No I/O APIC GSI base"),
         keyboard_gsi,
+        mouse_gsi,
     }
 }

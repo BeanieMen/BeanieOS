@@ -23,18 +23,20 @@
 #define SYS_GETDENTS 217
 #define SYS_POLL 7
 #define POLLIN 1
+#define SYS_CLOCK_GETTIME 228
+
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
 
 #define SYS_MKDIR 83
 #define SYS_RMDIR 84
 #define SYS_CREATE 85
 #define SYS_UNLINK 87
 
-/* lseek whence */
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-/* open flags */
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR 2
@@ -88,6 +90,10 @@ static inline long syscall6(long num, long a1, long a2, long a3, long a4,
 static inline int sys_nanosleep(const struct timespec *req,
                                 struct timespec *rem) {
   return (int)syscall(SYS_NANOSLEEP, (long)req, (long)rem, 0);
+}
+
+static inline int sys_clock_gettime(int clock_id, struct timespec *tp) {
+    return (int)syscall(SYS_CLOCK_GETTIME, clock_id, (long)tp, 0);    
 }
 
 static inline void sys_sleep_ms(unsigned long ms) {

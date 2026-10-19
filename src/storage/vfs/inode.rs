@@ -1,4 +1,4 @@
-use alloc::sync::{Arc,Weak};
+use alloc::sync::{Arc, Weak};
 
 use spin::Mutex;
 

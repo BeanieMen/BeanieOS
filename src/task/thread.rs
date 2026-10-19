@@ -1,6 +1,6 @@
 use core::{arch::naked_asm, cell::UnsafeCell};
 
-use alloc::{boxed::Box, string::String, vec};
+use alloc::{boxed::Box, string::String};
 
 use crate::task::identity::{
     Priority, ProcessId, STACK_SIZE, TIMESLICE_TICKS, ThreadId, ThreadState,
@@ -56,8 +56,12 @@ impl Thread {
         }
     }
 
+    fn allocate_stack() -> Box<[u8]> {
+        alloc::vec![0u8; STACK_SIZE].into_boxed_slice()
+    }
+
     pub fn new(pid: ProcessId, name: &str, entry: extern "C" fn(), priority: Priority) -> Self {
-        let stack = vec![0u8; STACK_SIZE].into_boxed_slice();
+        let stack = Self::allocate_stack();
         let stack_top = (stack.as_ptr() as usize + STACK_SIZE) & !0xf;
         let sp = stack_top - FRAME_BYTES;
 
@@ -82,7 +86,7 @@ impl Thread {
         priority: Priority,
         parent_frame: &crate::syscall::entry::SyscallFrame,
     ) -> Self {
-        let stack = vec![0u8; STACK_SIZE].into_boxed_slice();
+        let stack = Self::allocate_stack();
         let stack_top = (stack.as_ptr() as usize + STACK_SIZE) & !0xf;
 
         let frame_size = core::mem::size_of::<crate::syscall::entry::SyscallFrame>();
@@ -107,7 +111,9 @@ impl Thread {
         unsafe {
             core::ptr::write_bytes(frame, 0, SWITCH_WORDS);
             frame.add(6).write(RFLAGS_IF);
-            frame.add(7).write(crate::syscall::entry::fork_return_trampoline as *const () as usize);
+            frame
+                .add(7)
+                .write(crate::syscall::entry::fork_return_trampoline as *const () as usize);
         }
 
         Thread {

@@ -31,7 +31,6 @@ pub(crate) fn current_thread_id() -> ThreadId {
     unsafe { (*thread).id }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ProcessId(pub u64);
 

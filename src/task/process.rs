@@ -202,7 +202,7 @@ impl ProcessManager {
             next
         };
 
-        let pages = (len + 4095) / 4096;
+        let pages = len.div_ceil(4096);
         for i in 0..pages {
             let virt = target + i * 4096;
             let frame = alloc_frame().ok_or(())?;
@@ -216,6 +216,34 @@ impl ProcessManager {
         Ok(target)
     }
 
+    pub(crate) fn mmap_phys(
+        &mut self,
+        pid: ProcessId,
+        phys_start: u64,
+        len: u64,
+    ) -> Result<u64, ()> {
+        if len == 0 {
+            return Err(());
+        }
+
+        let process = self.processes.get_mut(&pid).ok_or(())?;
+
+        let mut p = process.lock();
+        let root = p.space.ok_or(())?;
+        let mut space = mmu::AddressSpace::from_root(root);
+        let target = p.mmap_next;
+        p.mmap_next += (len + 4095) & !4095;
+
+        let pages = len.div_ceil(4096);
+        for i in 0..pages {
+            let virt = target + i * 4096;
+            let phys_addr = phys_start + i * 4096;
+            let frame = PhysFrame::containing_address(x86_64::PhysAddr::new(phys_addr));
+            space.map(virt, frame, mmu::USER_WC).map_err(|_| ())?;
+        }
+        core::mem::forget(space);
+        Ok(target)
+    }
     pub(crate) fn update_brk(&mut self, pid: ProcessId, new_brk: u64) -> Result<u64, ()> {
         let process = self.processes.get_mut(&pid).ok_or(())?;
         let mut p = process.lock();
@@ -334,10 +362,10 @@ pub(crate) fn wait4(target: i64) -> Option<(ProcessId, i32)> {
                 })
             };
 
-            if let Some(pid) = target_pid {
-                if let Some(code) = manager.reap(pid) {
-                    return Some((pid, code));
-                }
+            if let Some((pid, code)) =
+                target_pid.and_then(|pid| manager.reap(pid).map(|code| (pid, code)))
+            {
+                return Some((pid, code));
             }
 
             let has_children = manager
@@ -375,6 +403,9 @@ pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
 }
 pub(crate) fn mmap(pid: ProcessId, addr: u64, len: u64, prot: u64, flags: u64) -> Result<u64, ()> {
     PROCESS_MANAGER.lock().mmap(pid, addr, len, prot, flags)
+}
+pub(crate) fn mmap_phys(pid: ProcessId, phys_start: u64, len: u64) -> Result<u64, ()> {
+    PROCESS_MANAGER.lock().mmap_phys(pid, phys_start, len)
 }
 
 pub(crate) fn brk(pid: ProcessId, new_brk: u64) -> Result<u64, ()> {

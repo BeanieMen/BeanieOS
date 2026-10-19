@@ -217,7 +217,7 @@ impl FramePool {
     }
 
     pub fn free(&mut self, addr: u64) -> bool {
-        if addr % PAGE_SIZE != 0 {
+        if !addr.is_multiple_of(PAGE_SIZE) {
             return false;
         }
 
@@ -226,10 +226,6 @@ impl FramePool {
         }
 
         if self.blocked_page(addr) {
-            return false;
-        }
-
-        if self.free[..self.free_len].contains(&addr) {
             return false;
         }
 

@@ -128,7 +128,11 @@ fn map_range(
         let v = (virt + i * PAGE_SIZE) & !(PAGE_SIZE - 1);
         let p = (phys + i * PAGE_SIZE) & !(PAGE_SIZE - 1);
 
-        mapper.map(v, PhysFrame::containing_address(x86_64::PhysAddr::new(p)), flags)?;
+        mapper.map(
+            v,
+            PhysFrame::containing_address(x86_64::PhysAddr::new(p)),
+            flags,
+        )?;
     }
 
     Ok(())

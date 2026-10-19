@@ -38,23 +38,27 @@ __attribute__((unused)) static int strncmp(const char *a, const char *b,
 }
 
 static void print_num(long n) {
+  char buf[32];
+  int i = 0;
   if (n < 0) {
-    print_char('-');
+    buf[i++] = '-';
     n = -n;
   }
   if (n == 0) {
-    print_char('0');
+    buf[i++] = '0';
+    sys_write(1, buf, i);
     return;
   }
-  char buf[32];
-  int i = 0;
+  char digits[32];
+  int d = 0;
   while (n > 0) {
-    buf[i++] = '0' + (n % 10);
+    digits[d++] = '0' + (n % 10);
     n /= 10;
   }
-  for (int j = i - 1; j >= 0; j--) {
-    print_char(buf[j]);
+  while (d > 0) {
+    buf[i++] = digits[--d];
   }
+  sys_write(1, buf, i);
 }
 
 static char input[INPUT_MAX];
@@ -228,7 +232,7 @@ static int split_args(char *argv[]) {
     }
     i++;
   }
-  argv[argc] = 0; // null terminate
+  argv[argc] = 0;
   return argc;
 }
 
@@ -357,8 +361,10 @@ static void cmd_pid(void) {
 #define DT_DIR 4
 
 static void print_name(const char *name, int len) {
-  for (int i = 0; i < len && name[i]; i++) {
-    print_char(name[i]);
+  int actual_len = 0;
+  while (actual_len < len && name[actual_len]) actual_len++;
+  if (actual_len > 0) {
+    sys_write(1, name, actual_len);
   }
 }
 
@@ -515,9 +521,7 @@ static void cmd_run(int argc, char **argv) {
 }
 
 static void cmd_clear(void) {
-  for (int i = 0; i < 30; i++) {
-    print("\n");
-  }
+  print("\033[2J\033[H");
 }
 
 static void dispatch(char **argv, int argc) {
@@ -600,9 +604,8 @@ int main(void) {
   print("proper shell loaded as a init proc with multi threading and forking "
         "via execve\n");
   print("do run hi to test elf loading and execution\n");
-  print("will try and make games soon. tui games\n");
-  print("the game prints like 3 seconds per frame so lwk not playable right "
-        "now but it is what it is. will optimie soon\n");
+  print("You can play Doom with: run doom\n");
+  print("KEYBOARD controls only: WASD/Arrows to move, Ctrl/F to fire, Space to use, Esc for menu\n");
   print("Type 'help' for the command list.\n\n");
 
   char *argv[MAX_ARGS];

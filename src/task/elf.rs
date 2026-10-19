@@ -144,13 +144,15 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
         }
     }
 
-    const STACK_PAGES: u64 = 16; 
+    const STACK_PAGES: u64 = 16;
     let stack_bottom = USER_STACK_TOP - STACK_PAGES * 4096;
-    let stack_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE;
+    let stack_flags =
+        PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE;
 
     for i in 0..STACK_PAGES {
         let frame = alloc_frame().ok_or("out of frames for stack")?;
-        space.map(stack_bottom + i * 4096, frame, stack_flags)
+        space
+            .map(stack_bottom + i * 4096, frame, stack_flags)
             .map_err(|_| "failed to map stack page")?;
         let direct_ptr = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
         unsafe {

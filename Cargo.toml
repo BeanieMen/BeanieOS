@@ -8,7 +8,10 @@ edition = "2024"
 panic = "abort"
 
 [profile.release]
-panic = "abort" # disable stack unwinding on panic
+panic = "abort"
+lto = "fat"
+codegen-units = 1
+opt-level = 3
 
 [[bin]]
 name = "beanieos"

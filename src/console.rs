@@ -6,12 +6,17 @@ struct SerialPort;
 
 impl SerialPort {
     fn write_bytes(&mut self, bytes: &[u8]) {
-        use x86_64::instructions::port::Port;
-
-        let mut port = Port::new(0x3f8);
-
-        for &byte in bytes {
-            unsafe { port.write(byte) };
+        if bytes.is_empty() {
+            return;
+        }
+        unsafe {
+            core::arch::asm!(
+                "rep outsb",
+                inout("rsi") bytes.as_ptr() => _,
+                inout("rcx") bytes.len() => _,
+                in("dx") 0x3f8u16,
+                options(nostack, preserves_flags)
+            );
         }
     }
 }
@@ -27,14 +32,7 @@ pub fn write_user_bytes(bytes: &[u8]) {
 
 impl core::fmt::Write for SerialPort {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        use x86_64::instructions::port::Port;
-
-        let mut port = Port::new(0x3f8);
-
-        for byte in s.bytes() {
-            unsafe { port.write(byte) };
-        }
-
+        self.write_bytes(s.as_bytes());
         Ok(())
     }
 }

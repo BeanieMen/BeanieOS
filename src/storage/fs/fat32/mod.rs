@@ -6,12 +6,9 @@ use alloc::sync::Arc;
 use alloc::{boxed::Box, string::String};
 use spin::Mutex;
 
-use crate::{
-
-    storage::{
-        ahci::disk::block::BlockDevice,
-        vfs::{dentry::Dentry, inode::FileType},
-    },
+use crate::storage::{
+    ahci::disk::block::BlockDevice,
+    vfs::{dentry::Dentry, inode::FileType},
 };
 
 const MAX_SECTOR: usize = 4096;
@@ -60,6 +57,8 @@ pub(crate) struct Geometry {
     pub sectors_per_fat: u32,
 }
 
+static FAT_CACHE: Mutex<Option<(u64, [u8; 512])>> = Mutex::new(None);
+
 impl Geometry {
     fn first_data_sector(&self) -> u64 {
         self.reserved_sectors as u64 + self.fat_count as u64 * self.sectors_per_fat as u64
@@ -84,9 +83,21 @@ impl Geometry {
             return Err("invalid FAT entry");
         }
 
-        let mut sector = [0u8; MAX_SECTOR];
-
-        read_sector(device, fat_sector, self.bytes_per_sector, &mut sector)?;
+        let mut sector = [0u8; 512];
+        {
+            let mut cache = FAT_CACHE.lock();
+            if let Some((cached_sector, cached_data)) = *cache {
+                if cached_sector == fat_sector {
+                    sector.copy_from_slice(&cached_data);
+                } else {
+                    read_sector(device, fat_sector, self.bytes_per_sector, &mut sector)?;
+                    *cache = Some((fat_sector, sector));
+                }
+            } else {
+                read_sector(device, fat_sector, self.bytes_per_sector, &mut sector)?;
+                *cache = Some((fat_sector, sector));
+            }
+        }
 
         let value = u32::from_le_bytes([
             sector[entry_offset],
@@ -112,6 +123,9 @@ impl Geometry {
         cluster: u32,
         value: u32,
     ) -> Result<(), &'static str> {
+        *FAT_CACHE.lock() = None;
+        *CLUSTER_OFFSET_CACHE.lock() = None;
+
         let fat_offset = cluster as u64 * 4;
 
         let fat_sector = self.reserved_sectors as u64 + fat_offset / self.bytes_per_sector as u64;
@@ -142,7 +156,12 @@ impl Geometry {
         let mut sector = [0u8; MAX_SECTOR];
 
         for index in 0..self.sectors_per_fat as u64 {
-            read_sector(device, self.reserved_sectors as u64 + index, self.bytes_per_sector, &mut sector)?;
+            read_sector(
+                device,
+                self.reserved_sectors as u64 + index,
+                self.bytes_per_sector,
+                &mut sector,
+            )?;
 
             let len = self.bytes_per_sector as usize;
 
@@ -285,14 +304,14 @@ impl<D: BlockDevice> Fat32<D> {
         }));
 
         inode.lock().dentry = Some(Arc::downgrade(&root));
-         
+
         Ok(Arc::new(Self {
             device,
             geom,
             root_cluster,
             root,
             inode_ops,
-            file_ops
+            file_ops,
         }))
     }
 }
@@ -377,7 +396,6 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                     if Self::short_name_matches(&entry, name) {
                         return Ok(entry);
                     }
-
                 }
             }
 
@@ -493,7 +511,11 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         }
     }
 
-    fn directory_entry(name: &[u8], cluster: u32, file_type: FileType) -> Result<[u8; 32], &'static str> {
+    fn directory_entry(
+        name: &[u8],
+        cluster: u32,
+        file_type: FileType,
+    ) -> Result<[u8; 32], &'static str> {
         if name.is_empty() || name.len() > 12 {
             return Err("bad name for FAT32");
         }
@@ -512,7 +534,6 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         for (i, byte) in base.iter().enumerate() {
             entry[i] = byte.to_ascii_uppercase();
         }
-
 
         for (i, byte) in ext.iter().enumerate() {
             entry[8 + i] = byte.to_ascii_uppercase();
@@ -725,7 +746,12 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
 
             let (me, up) = Self::self_entries(parent_cluster, cluster, file_type)?;
 
-            write_sector(&self.device, first_sector, self.geom.bytes_per_sector, &sector[..len])?;
+            write_sector(
+                &self.device,
+                first_sector,
+                self.geom.bytes_per_sector,
+                &sector[..len],
+            )?;
 
             Fat32FileOps {
                 device: self.device.clone(),
@@ -816,20 +842,35 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
     }
 }
 
+static CLUSTER_OFFSET_CACHE: Mutex<Option<(u32, u64, u32)>> = Mutex::new(None);
+
 impl<D: BlockDevice> Fat32FileOps<D> {
     fn cluster_for_offset(&self, start_cluster: u32, offset: u64) -> Result<u32, &'static str> {
         let cluster_size = self.geom.bytes_per_sector as u64 * self.geom.sectors_per_cluster as u64;
 
+        let target_idx = offset / cluster_size;
+        let mut start_idx = 0;
         let mut cluster = start_cluster;
 
-        let count = offset / cluster_size;
+        {
+            let cache = CLUSTER_OFFSET_CACHE.lock();
+            if let Some((c_start, c_idx, c_cluster)) = *cache
+                && c_start == start_cluster
+                && c_idx <= target_idx
+            {
+                start_idx = c_idx;
+                cluster = c_cluster;
+            }
+        }
 
-        for _ in 0..count {
+        for _ in start_idx..target_idx {
             cluster = match self.geom.next_cluster(&self.device, cluster)? {
                 Some(next) => next,
                 None => return Err("offset past EOF"),
             };
         }
+
+        *CLUSTER_OFFSET_CACHE.lock() = Some((start_cluster, target_idx, cluster));
 
         Ok(cluster)
     }
@@ -892,13 +933,8 @@ impl<D: BlockDevice> Fat32FileOps<D> {
         )
     }
 
-    fn cluster_for_write(
-        &self,
-        inode: &Inode,
-        offset: u64,
-    ) -> Result<u32, &'static str> {
-        let cluster_size =
-            self.geom.bytes_per_sector as u64 * self.geom.sectors_per_cluster as u64;
+    fn cluster_for_write(&self, inode: &Inode, offset: u64) -> Result<u32, &'static str> {
+        let cluster_size = self.geom.bytes_per_sector as u64 * self.geom.sectors_per_cluster as u64;
 
         let wanted = offset / cluster_size;
 
@@ -918,8 +954,7 @@ impl<D: BlockDevice> Fat32FileOps<D> {
                 None => {
                     let fresh = self.geom.allocate_cluster(&self.device)?;
 
-                    self.geom
-                        .set_fat_entry(&self.device, cluster, fresh)?;
+                    self.geom.set_fat_entry(&self.device, cluster, fresh)?;
 
                     cluster = fresh;
                     index += 1;
@@ -971,9 +1006,21 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
 
             let mut done = 0usize;
 
+            // Fast path: if aligned to sector boundaries, read multiple contiguous sectors in one command
+            if sector_offset == 0 {
+                let whole_sectors = count / bytes_per_sector;
+                let whole_bytes = whole_sectors * bytes_per_sector;
+                if whole_bytes > 0 {
+                    self.device
+                        .lock()
+                        .read_block(first_sector, &mut buf[copied..copied + whole_bytes])?;
+                    done += whole_bytes;
+                }
+            }
+
             while done < count {
                 let amount = core::cmp::min(
-                    bytes_per_sector - sector_offset % bytes_per_sector,
+                    bytes_per_sector - (sector_offset + done) % bytes_per_sector,
                     count - done,
                 );
 
@@ -990,7 +1037,7 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
             copied += count;
             position += count;
 
-            if copied < requested && position % cluster_size == 0 {
+            if copied < requested && position.is_multiple_of(cluster_size) {
                 cluster = match self.geom.next_cluster(&self.device, cluster)? {
                     Some(next) => next,
                     None => return Err("unexpected end of FAT chain"),
@@ -1046,7 +1093,7 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
             written += count;
             position += count;
 
-            if written < buf.len() && position % cluster_size == 0 {
+            if written < buf.len() && position.is_multiple_of(cluster_size) {
                 cluster = match self.geom.next_cluster(&self.device, cluster)? {
                     Some(next) => next,
                     None => {
