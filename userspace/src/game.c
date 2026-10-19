@@ -181,14 +181,10 @@ static void move_paddle(int key)
     }
 }
 
-/* Paddle collision */
-
 static int hits_paddle(int y, int paddle)
 {
     return y >= paddle && y < paddle + PADDLE_LEN;
 }
-
-/* Simple AI */
 
 static void move_ai(void)
 {
@@ -209,20 +205,16 @@ static void move_ai(void)
     }
 }
 
-/* Advance the game by one step */
-
 static void step(void)
 {
     int next_x = ball_x + dir_x;
     int next_y = ball_y + dir_y;
 
-    /* Top and bottom walls */
     if (next_y < 0 || next_y >= H) {
         dir_y = -dir_y;
         next_y = ball_y + dir_y;
     }
 
-    /* Player paddle on the left */
     if (dir_x < 0 && next_x <= 1) {
         if (hits_paddle(next_y, paddle_y)) {
             dir_x = 1;
@@ -240,7 +232,6 @@ static void step(void)
         }
     }
 
-    /* AI paddle on the right */
     if (dir_x > 0 && next_x >= W - 2) {
         if (hits_paddle(next_y, ai_y)) {
             dir_x = -1;
@@ -277,8 +268,6 @@ static void step(void)
         ball_y = H - 1;
     }
 }
-
-/* Main */
 
 int main(void)
 {

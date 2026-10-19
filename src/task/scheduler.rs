@@ -266,7 +266,6 @@ impl Scheduler {
         self.requeue(previous_id);
         self.publish_current();
 
-        // Switch address space if switching to a different process
         if next_pid != prev_pid {
             crate::task::process::activate_space(next_pid);
         }

@@ -126,6 +126,12 @@ impl FdTable {
             let kbd_file = crate::arch::keyboard::create_kbd_file(flags);
             return Ok(self.alloc(kbd_file));
         }
+        if path == b"/dev/dsp" || path == b"dev/dsp" {
+            let dsp_file = crate::audio::vfs::create_dsp_file(flags);
+            return Ok(self.alloc(dsp_file));
+        }
+
+        
         let resolved = self.mounts.resolve(path)?;
 
         let inode = resolved.inode();

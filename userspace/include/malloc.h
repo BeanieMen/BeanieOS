@@ -23,14 +23,11 @@ static inline void *malloc(size_t size) {
         return NULL;
     }
 
-    // Align requested size up to a multiple of 16
     size = (size + 15) & ~15UL;
 
-    // 1. Search for a reusable free block
     struct block_header *curr = free_list_head;
     while (curr) {
         if (curr->is_free && curr->size >= size) {
-            // Split block if remaining space can hold another block
             if (curr->size >= size + BLOCK_HEADER_SIZE + 16) {
                 struct block_header *next_block = (struct block_header *)((char *)(curr + 1) + size);
                 next_block->size = curr->size - size - BLOCK_HEADER_SIZE;
@@ -47,12 +44,11 @@ static inline void *malloc(size_t size) {
         curr = curr->next;
     }
 
-    // 2. No suitable block found; expand heap via sys_brk
     size_t chunk_size = size + BLOCK_HEADER_SIZE;
     if (chunk_size < 65536) {
-        chunk_size = 65536; // Allocate at least 64 KiB at a time
+        chunk_size = 65536;
     }
-    chunk_size = (chunk_size + 4095) & ~4095UL; // Page align
+    chunk_size = (chunk_size + 4095) & ~4095UL;
 
     void *old_brk = sys_brk(0);
     if (!old_brk) {
@@ -82,7 +78,6 @@ static inline void *malloc(size_t size) {
         new_block->size = size;
     }
 
-    // Append to list
     if (!free_list_head) {
         free_list_head = new_block;
     } else {
@@ -134,7 +129,6 @@ static inline void *realloc(void *ptr, size_t new_size) {
         return NULL;
     }
 
-    // Copy old data
     size_t copy_len = block->size < new_size ? block->size : new_size;
     char *src = (char *)ptr;
     char *dst = (char *)new_ptr;

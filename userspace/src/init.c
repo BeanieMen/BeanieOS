@@ -232,7 +232,7 @@ static int split_args(char *argv[]) {
     }
     i++;
   }
-  argv[argc] = 0; // null terminate
+  argv[argc] = 0;
   return argc;
 }
 

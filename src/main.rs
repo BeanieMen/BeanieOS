@@ -10,6 +10,7 @@ use core::panic::PanicInfo;
 use multiboot2::BootInformation;
 
 mod arch;
+mod audio;
 mod console;
 mod graphics;
 mod hal;
@@ -66,14 +67,6 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         storage_task,
         task::identity::Priority::Normal,
     );
-
-    // goodbye my beloved rainbow square, you will be missed :(
-    // task::scheduler::spawn_in_process(
-    //     init,
-    //     "rgb_square",
-    //     userspace::rgb_square_task,
-    //     task::identity::Priority::Normal,
-    // );
 
     let user = task::process::create("user", "/");
 
@@ -358,7 +351,7 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
             }
         }
     }
-
+    audio::init();
     kinfo!(
         "heap initialized at {:#x}..{:#x}",
         mmu.heap_range().0,

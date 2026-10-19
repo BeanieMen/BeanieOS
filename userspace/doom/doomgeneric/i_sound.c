@@ -102,28 +102,15 @@ static boolean SndDeviceInList(snddevice_t device, snddevice_t *list,
 
 static void InitSfxModule(boolean use_sfx_prefix)
 {
-    int i;
+#ifdef FEATURE_SOUND
+    if (DG_sound_module.Init(use_sfx_prefix))
+    {
+        sound_module = &DG_sound_module;
+        return;
+    }
+#endif
 
     sound_module = NULL;
-
-    for (i=0; sound_modules[i] != NULL; ++i)
-    {
-        // Is the sfx device in the list of devices supported by
-        // this module?
-
-        if (SndDeviceInList(snd_sfxdevice, 
-                            sound_modules[i]->sound_devices,
-                            sound_modules[i]->num_sound_devices))
-        {
-            // Initialize the module
-
-            if (sound_modules[i]->Init(use_sfx_prefix))
-            {
-                sound_module = sound_modules[i];
-                return;
-            }
-        }
-    }
 }
 
 // Initialize music according to snd_musicdevice.

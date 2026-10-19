@@ -20,7 +20,6 @@ macro_rules! syscalls {
 }
 
 syscalls! {
-    // Linux x86_64
     Read = 0,
     Write = 1,
     Open = 2,

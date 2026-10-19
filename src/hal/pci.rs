@@ -78,6 +78,27 @@ impl Device {
         self.class == 0x01 && self.subclass == 0x06 && self.interface == 0x01
     }
 
+    pub(crate) fn is_audio(&self) -> bool {
+        self.class == 0x04 && (self.subclass == 0x01 || self.subclass == 0x03)
+    }
+
+    pub(crate) fn io_bar(&self, index: u8) -> Option<u16> {
+        match self.bar(index)? {
+            Bar::Io { port } => Some(port as u16),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn enable_io_bus_master(&self) {
+        let config = PciConfig;
+        let mut header = PciHeader::new(self.address);
+
+        header.update_command(&config, |mut command| {
+            command.insert(CommandRegister::IO_ENABLE | CommandRegister::BUS_MASTER_ENABLE);
+            command
+        });
+    }
+
     pub(crate) fn interrupt_pin(&self) -> Option<u8> {
         let config = PciConfig;
         let header = PciHeader::new(self.address);
@@ -252,6 +273,10 @@ impl Pci {
 
     pub(crate) fn find_ahci(&self) -> Vec<Device> {
         self.scan().into_iter().filter(Device::is_ahci).collect()
+    }
+
+    pub(crate) fn find_audio(&self) -> Vec<Device> {
+        self.scan().into_iter().filter(Device::is_audio).collect()
     }
 }
 
