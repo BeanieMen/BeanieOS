@@ -44,7 +44,6 @@ impl SigAction {
     }
 }
 
-
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy)]
 pub struct SignalUserContext {
@@ -53,6 +52,5 @@ pub struct SignalUserContext {
     pub rflags: u64,
     pub rsp: u64,
     pub mask: u64,
-    pub sig: u64
-    
+    pub sig: u64,
 }

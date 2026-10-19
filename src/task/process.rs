@@ -202,7 +202,7 @@ impl ProcessManager {
             next
         };
 
-        let pages = (len + 4095) / 4096;
+        let pages = len.div_ceil(4096);
         for i in 0..pages {
             let virt = target + i * 4096;
             let frame = alloc_frame().ok_or(())?;
@@ -234,12 +234,12 @@ impl ProcessManager {
         let target = p.mmap_next;
         p.mmap_next += (len + 4095) & !4095;
 
-        let pages = (len + 4095) / 4096;
+        let pages = len.div_ceil(4096);
         for i in 0..pages {
             let virt = target + i * 4096;
             let phys_addr = phys_start + i * 4096;
             let frame = PhysFrame::containing_address(x86_64::PhysAddr::new(phys_addr));
-            space.map(virt, frame, mmu::USER_RW).map_err(|_| ())?;
+            space.map(virt, frame, mmu::USER_WC).map_err(|_| ())?;
         }
         core::mem::forget(space);
         Ok(target)
@@ -362,10 +362,10 @@ pub(crate) fn wait4(target: i64) -> Option<(ProcessId, i32)> {
                 })
             };
 
-            if let Some(pid) = target_pid {
-                if let Some(code) = manager.reap(pid) {
-                    return Some((pid, code));
-                }
+            if let Some((pid, code)) =
+                target_pid.and_then(|pid| manager.reap(pid).map(|code| (pid, code)))
+            {
+                return Some((pid, code));
             }
 
             let has_children = manager

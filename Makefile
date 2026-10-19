@@ -77,10 +77,12 @@ $(OVMF_VARS): $(OVMF_VARS_TEMPLATE)
 	cp $(OVMF_VARS_TEMPLATE) $@
 
 QEMU_DISPLAY ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "sdl" || echo "none")
+QEMU_KVM ?= $(shell test -w /dev/kvm && echo "-enable-kvm -cpu host")
 
 run: $(DISK) $(OVMF_VARS)
 	qemu-system-x86_64 \
 		-machine q35 \
+		$(QEMU_KVM) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
 		-drive format=raw,file=$(DISK) \
@@ -93,4 +95,5 @@ symbols: kernel
 
 clean:
 	cargo clean
-	rm -rf $(OUT)
+	rm -rf $(OUT) target/boot.o target/timer.o
+	$(MAKE) -C userspace clean

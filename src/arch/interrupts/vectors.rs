@@ -4,7 +4,9 @@ use x86_64::VirtAddr;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::InterruptDescriptorTable;
 
-use super::consts::{AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, PS2_DATA_PORT, SPURIOUS_VECTOR};
+use super::consts::{
+    AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, PS2_DATA_PORT, SPURIOUS_VECTOR,
+};
 use super::pic;
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
@@ -27,19 +29,22 @@ pub(crate) fn keys() -> u64 {
 
 #[unsafe(no_mangle)]
 extern "C" fn timer_interrupt_rust() {
-    TICKS.fetch_add(1, Ordering::Relaxed);
-    unsafe {
-        let mut lsr = Port::<u8>::new(0x3fd);
-        while lsr.read() & 1 != 0 {
-            let mut data = Port::<u8>::new(0x3f8);
-            let byte = data.read();
-            let ch = match byte {
-                b'\r' => b'\n',
-                0x7f | 0x08 => 0x08,
-                b => b,
-            };
-            crate::tty::push_byte(ch);
-            KEYS.fetch_add(1, Ordering::Relaxed);
+    let tick = TICKS.fetch_add(1, Ordering::Relaxed);
+    // Poll serial input every 8 ticks (8ms) rather than every tick to eliminate 87.5% of port 0x3fd VM-exits
+    if tick.is_multiple_of(8) {
+        unsafe {
+            let mut lsr = Port::<u8>::new(0x3fd);
+            while lsr.read() & 1 != 0 {
+                let mut data = Port::<u8>::new(0x3f8);
+                let byte = data.read();
+                let ch = match byte {
+                    b'\r' => b'\n',
+                    0x7f | 0x08 => 0x08,
+                    b => b,
+                };
+                crate::tty::push_byte(ch);
+                KEYS.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
     crate::task::scheduler::account_tick();
@@ -210,8 +215,20 @@ fn handle_keyboard_scancode(scancode: u8) {
     let is_ext = EXT_PREFIX.swap(false, Ordering::Relaxed);
     let is_break = (scancode & 0x80) != 0;
     let code = (scancode & 0x7F) as usize;
+    let pressed = if is_break { 0u8 } else { 1u8 };
 
     if is_ext {
+        let doom_key = match code {
+            0x48 => Some(0xad), // KEY_UPARROW
+            0x50 => Some(0xaf), // KEY_DOWNARROW
+            0x4D => Some(0xae), // KEY_RIGHTARROW
+            0x4B => Some(0xac), // KEY_LEFTARROW
+            _ => None,
+        };
+        if let Some(k) = doom_key {
+            crate::arch::keyboard::push_event(pressed, k);
+        }
+
         if !is_break {
             match code {
                 0x48 => {
@@ -251,21 +268,34 @@ fn handle_keyboard_scancode(scancode: u8) {
     match scancode {
         0x2A | 0x36 => {
             SHIFT_ACTIVE.store(true, Ordering::Relaxed);
+            crate::arch::keyboard::push_event(1, 0xb6); // KEY_RSHIFT
             return;
         }
         0xAA | 0xB6 => {
             SHIFT_ACTIVE.store(false, Ordering::Relaxed);
+            crate::arch::keyboard::push_event(0, 0xb6);
             return;
         }
         0x1D => {
             CTRL_ACTIVE.store(true, Ordering::Relaxed);
+            crate::arch::keyboard::push_event(1, 0xa3); // KEY_FIRE
             return;
         }
         0x9D => {
             CTRL_ACTIVE.store(false, Ordering::Relaxed);
+            crate::arch::keyboard::push_event(0, 0xa3);
             return;
         }
         _ => {}
+    }
+
+    if code < 128 {
+        let base_char = SCANCODE_MAP[code];
+        if base_char != 0 {
+            crate::arch::keyboard::push_event(pressed, base_char);
+        } else if code == 0x01 {
+            crate::arch::keyboard::push_event(pressed, 27); // ESC
+        }
     }
 
     if is_break || code >= 128 {

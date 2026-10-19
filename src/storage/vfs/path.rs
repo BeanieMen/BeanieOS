@@ -1,8 +1,15 @@
-use alloc::{string::String, sync::Arc};
+use alloc::{string::String, sync::Arc, vec::Vec};
 
 use spin::Mutex;
 
 use super::{dentry::Dentry, inode::Inode};
+
+type CacheEntry = (Vec<u8>, Arc<Mutex<Dentry>>);
+static RESOLVE_CACHE: Mutex<Vec<CacheEntry>> = Mutex::new(Vec::new());
+
+pub(crate) fn invalidate_resolve_cache() {
+    RESOLVE_CACHE.lock().clear();
+}
 
 pub(crate) struct Path {
     pub dentry: Arc<Mutex<Dentry>>,
@@ -17,7 +24,6 @@ impl Path {
         self.dentry.lock().inode.clone()
     }
 
-
     pub(crate) fn resolve(root: Arc<Mutex<Dentry>>, path: &[u8]) -> Result<Self, &'static str> {
         if path.is_empty() {
             return Err("empty path");
@@ -25,6 +31,15 @@ impl Path {
 
         if path[0] != b'/' {
             return Err("relative path");
+        }
+
+        if let Some(dentry) = RESOLVE_CACHE
+            .lock()
+            .iter()
+            .find(|(p, _)| p.as_slice() == path)
+            .map(|(_, d)| d.clone())
+        {
+            return Ok(Self::new(dentry));
         }
 
         let mut current = root;
@@ -60,11 +75,23 @@ impl Path {
 
             let name = String::from_utf8_lossy(component).into_owned();
 
-            let dentry = Arc::new(Mutex::new(Dentry::new(name, child.clone(), Some(current.clone()))));
+            let dentry = Arc::new(Mutex::new(Dentry::new(
+                name,
+                child.clone(),
+                Some(current.clone()),
+            )));
 
             child.lock().dentry = Some(alloc::sync::Arc::downgrade(&dentry));
 
             current = dentry;
+        }
+
+        {
+            let mut cache = RESOLVE_CACHE.lock();
+            if cache.len() >= 32 {
+                cache.remove(0);
+            }
+            cache.push((path.to_vec(), current.clone()));
         }
 
         Ok(Self::new(current))

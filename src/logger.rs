@@ -45,7 +45,7 @@ impl Level {
 
 const MAX_LEVEL: Level = Level::Trace;
 
-static LEVEL_FILTER: AtomicU8 = AtomicU8::new(Level::Info as u8);
+pub static LEVEL_FILTER: AtomicU8 = AtomicU8::new(Level::Info as u8);
 
 fn set_level(level: Level) {
     LEVEL_FILTER.store(level as u8, Ordering::Relaxed);
@@ -77,6 +77,18 @@ macro_rules! kwarn  { ($($arg:tt)*) => { $crate::log!($crate::logger::Level::War
 #[macro_export]
 macro_rules! kinfo  { ($($arg:tt)*) => { $crate::log!($crate::logger::Level::Info,  $($arg)*) } }
 #[macro_export]
-macro_rules! kdebug { ($($arg:tt)*) => { $crate::log!($crate::logger::Level::Debug, $($arg)*) } }
+macro_rules! kdebug {
+    ($($arg:tt)*) => {
+        if $crate::logger::Level::Debug as u8 <= $crate::logger::LEVEL_FILTER.load(core::sync::atomic::Ordering::Relaxed) {
+            $crate::log!($crate::logger::Level::Debug, $($arg)*);
+        }
+    };
+}
 #[macro_export]
-macro_rules! ktrace { ($($arg:tt)*) => { $crate::log!($crate::logger::Level::Trace, $($arg)*) } }
+macro_rules! ktrace {
+    ($($arg:tt)*) => {
+        if $crate::logger::Level::Trace as u8 <= $crate::logger::LEVEL_FILTER.load(core::sync::atomic::Ordering::Relaxed) {
+            $crate::log!($crate::logger::Level::Trace, $($arg)*);
+        }
+    };
+}

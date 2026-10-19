@@ -1,5 +1,5 @@
+use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc, vec::Vec};
 use x86_64::VirtAddr;
-use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc};
 
 use crate::arch::gdt;
 use crate::arch::interrupts::vectors::ticks;
@@ -14,6 +14,7 @@ const NUM_PRIORITIES: usize = 4;
 struct Scheduler {
     threads: BTreeMap<ThreadId, Arc<InterruptMutex<Thread>>>,
     ready_queues: [VecDeque<ThreadId>; NUM_PRIORITIES],
+    sleeping: Vec<(u64, ThreadId)>,
     current: ThreadId,
     reschedule_requested: bool,
     charged_up_to: u64,
@@ -28,6 +29,7 @@ impl Scheduler {
         Scheduler {
             threads: BTreeMap::new(),
             ready_queues: [EMPTY; NUM_PRIORITIES],
+            sleeping: Vec::new(),
             current: ThreadId::MAIN,
             reschedule_requested: false,
             charged_up_to: 0,
@@ -117,6 +119,8 @@ impl Scheduler {
 
         if let Some(current) = self.threads.get(&self.current) {
             current.lock().state = ThreadState::Sleeping(deadline);
+            let idx = self.sleeping.partition_point(|&(d, _)| d <= deadline);
+            self.sleeping.insert(idx, (deadline, self.current));
         }
 
         let switch = self.switch_to_any();
@@ -124,6 +128,7 @@ impl Scheduler {
             if let Some(current) = self.threads.get(&self.current) {
                 current.lock().state = ThreadState::Running;
             }
+            self.sleeping.retain(|&(_, id)| id != self.current);
         }
         switch
     }
@@ -196,6 +201,8 @@ impl Scheduler {
             }
         }
 
+        self.sleeping.retain(|&(_, sid)| sid != id);
+
         self.switch_to_any()
     }
 
@@ -239,11 +246,8 @@ impl Scheduler {
     fn activate(&mut self, next_id: ThreadId, previous_id: ThreadId) -> Option<ContextSwitch> {
         let (previous_slot, prev_pid) = {
             let previous = self.threads.get(&previous_id)?;
-            let prev = previous.lock();
-            let prev_fs = x86_64::registers::model_specific::FsBase::read().as_u64();
-            drop(prev);
-            previous.lock().fs_base = prev_fs;
-            let prev = previous.lock();
+            let mut prev = previous.lock();
+            prev.fs_base = x86_64::registers::model_specific::FsBase::read().as_u64();
             (prev.rsp_slot(), prev.pid)
         };
 
@@ -275,15 +279,17 @@ impl Scheduler {
 
     fn wake_sleeping_threads(&mut self) {
         let now = self.ticks();
-
-        for thread in self.threads.values() {
-            let mut thread = thread.lock();
-
-            if let ThreadState::Sleeping(deadline) = thread.state
-                && now >= deadline
-            {
-                thread.state = ThreadState::Ready;
-                self.ready_queues[thread.priority.index()].push_back(thread.id);
+        while let Some(&(deadline, id)) = self.sleeping.first() {
+            if now < deadline {
+                break;
+            }
+            self.sleeping.remove(0);
+            if let Some(thread) = self.threads.get(&id) {
+                let mut thread = thread.lock();
+                if let ThreadState::Sleeping(_) = thread.state {
+                    thread.state = ThreadState::Ready;
+                    self.ready_queues[thread.priority.index()].push_back(id);
+                }
             }
         }
     }
@@ -302,11 +308,11 @@ impl Scheduler {
         }
 
         let switch = self.switch_to_any();
-        if switch.is_none() {
-            if let Some(current) = self.threads.get(&self.current) {
-                let mut thread = current.lock();
-                thread.state = ThreadState::Running;
-            }
+        if switch.is_none()
+            && let Some(current) = self.threads.get(&self.current)
+        {
+            let mut thread = current.lock();
+            thread.state = ThreadState::Running;
         }
         switch
     }

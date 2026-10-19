@@ -86,6 +86,7 @@ unsafe impl Send for Framebuffer {}
 
 pub(crate) struct Writer {
     pub framebuffer: Option<Framebuffer>,
+    backbuffer: Option<alloc::vec::Vec<u8>>,
     cursor_col: u32,
     cursor_row: u32,
     color_code: ColorCode,
@@ -100,6 +101,7 @@ impl Writer {
     pub(crate) const fn new() -> Self {
         Self {
             framebuffer: None,
+            backbuffer: None,
             cursor_col: 0,
             cursor_row: 0,
             color_code: ColorCode::new(Color::Yellow, Color::Black),
@@ -208,21 +210,34 @@ impl Writer {
             fb.addr
                 .add(y0 as usize * fb.pitch as usize + x0 as usize * bpp)
         };
+        let mut bb_base = self.backbuffer.as_mut().map(|bb| unsafe {
+            bb.as_mut_ptr()
+                .add(y0 as usize * fb.pitch as usize + x0 as usize * bpp)
+        });
 
         for &bits in glyph {
             let mut x = 0usize;
             while x < FONT_WIDTH as usize {
                 if bits & (0x80 >> x) != 0 {
                     unsafe { (base.add(x * bpp) as *mut u32).write(fg) };
+                    if let Some(bb) = bb_base {
+                        unsafe { (bb.add(x * bpp) as *mut u32).write(fg) };
+                    }
                     x += 1;
                 } else {
                     while x < FONT_WIDTH as usize && bits & (0x80 >> x) == 0 {
                         unsafe { (base.add(x * bpp) as *mut u32).write(bg) };
+                        if let Some(bb) = bb_base {
+                            unsafe { (bb.add(x * bpp) as *mut u32).write(bg) };
+                        }
                         x += 1;
                     }
                 }
             }
             base = unsafe { base.add(fb.pitch as usize) };
+            if let Some(ref mut bb) = bb_base {
+                *bb = unsafe { bb.add(fb.pitch as usize) };
+            }
         }
     }
 
@@ -245,7 +260,21 @@ impl Writer {
         }
     }
 
+    fn ensure_backbuffer(&mut self) {
+        if self.backbuffer.is_some() {
+            return;
+        }
+        let Some(ref fb) = self.framebuffer else {
+            return;
+        };
+        let size = (fb.height * fb.pitch) as usize;
+        let buf = alloc::vec![0u8; size];
+        self.backbuffer = Some(buf);
+    }
+
     fn scroll(&mut self) {
+        self.ensure_backbuffer();
+
         let Some(ref fb) = self.framebuffer else {
             return;
         };
@@ -260,9 +289,17 @@ impl Writer {
             return;
         }
 
-        unsafe {
-            core::ptr::copy(fb.addr.add(shift), fb.addr, text_bytes - shift);
-            core::ptr::write_bytes(fb.addr.add(text_bytes - shift), 0, shift);
+        if let Some(ref mut bb) = self.backbuffer {
+            unsafe {
+                core::ptr::copy(bb.as_ptr().add(shift), bb.as_mut_ptr(), text_bytes - shift);
+                core::ptr::write_bytes(bb.as_mut_ptr().add(text_bytes - shift), 0, shift);
+                core::ptr::copy_nonoverlapping(bb.as_ptr(), fb.addr, text_bytes);
+            }
+        } else {
+            unsafe {
+                core::ptr::copy(fb.addr.add(shift), fb.addr, text_bytes - shift);
+                core::ptr::write_bytes(fb.addr.add(text_bytes - shift), 0, shift);
+            }
         }
     }
 
@@ -272,6 +309,9 @@ impl Writer {
         };
 
         let bytes = fb.height as usize * fb.pitch as usize;
+        if let Some(ref mut bb) = self.backbuffer {
+            bb.fill(0);
+        }
         unsafe {
             core::ptr::write_bytes(fb.addr, 0, bytes);
         }

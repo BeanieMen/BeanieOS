@@ -4,13 +4,9 @@ use alloc::vec::Vec;
 use crate::{
     arch::interrupts::{consts::TICK_MS, vectors::ticks},
     kdebug, kerror,
-    memory::mmu::{USER_END, USER_START},
+    memory::mmu::USER_END,
     storage::vfs::file::OpenFlags,
-    task::{
-        identity::current_pid,
-        process::{self, current},
-        scheduler,
-    },
+    task::{identity::current_pid, process, scheduler},
 };
 use x86_64::VirtAddr;
 
@@ -40,6 +36,7 @@ pub(crate) fn dispatch(
         Syscall::Munmap => sys_mun_map(args[0], args[1]),
         Syscall::Brk => sys_brk(args[0]),
         Syscall::Nanosleep => sys_nanosleep(args[0], args[1]),
+        Syscall::Readv => sys_readv(args[0], args[1], args[2]),
         Syscall::Writev => sys_writev(args[0], args[1], args[2]),
         Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
         Syscall::Fork => sys_fork(frame),
@@ -76,12 +73,12 @@ fn sys_clock_gettime(_clock_id: u64, tp_ptr: u64) -> SyscallResult {
     let total_ms = ticks * TICK_MS;
     let sec = (total_ms / 1000) as i64;
     let nsec = ((total_ms) % 1000 * 1_000_000) as i64;
-    
+
     let timespec = Timespec {
         tv_sec: sec,
         tv_nsec: nsec,
     };
-    
+
     let bytes = unsafe {
         core::slice::from_raw_parts(
             &timespec as *const Timespec as *const u8,
@@ -107,13 +104,44 @@ fn sys_nanosleep(req_ptr: u64, _rem: u64) -> SyscallResult {
     }
     let ms = (req.tv_sec as u64) * 1000 + (req.tv_nsec as u64) / 1_000_000;
     let ticks = ms.div_ceil(crate::arch::interrupts::consts::TICK_MS);
-    for _ in 0..ticks {
+    if ticks > 0 {
         if process::has_pending_signals() {
             return Err(Errno::Intr);
         }
-        scheduler::sleep(1);
+        scheduler::sleep(ticks);
+        if process::has_pending_signals() {
+            return Err(Errno::Intr);
+        }
     }
     Ok(0)
+}
+
+fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
+    if iovcnt > 1024 {
+        return Err(Errno::Invalid);
+    }
+
+    let mut total_read = 0;
+
+    for i in 0..iovcnt {
+        let slot = iov_ptr.checked_add(i * 16).ok_or(Errno::Fault)?;
+        let mut iov_buf = [0u8; 16];
+        entry::copy_from_user(&mut iov_buf, slot).map_err(|_| Errno::Fault)?;
+
+        let base = u64::from_le_bytes(iov_buf[0..8].try_into().unwrap());
+        let len = u64::from_le_bytes(iov_buf[8..16].try_into().unwrap());
+        if len == 0 {
+            continue;
+        }
+
+        let n = sys_read(fd, base, len)?;
+
+        total_read += n;
+        if n < len {
+            break;
+        }
+    }
+    Ok(total_read)
 }
 
 fn sys_fstat(fd: u64, stat_buf: u64) -> SyscallResult {
@@ -134,7 +162,7 @@ fn sys_fstat(fd: u64, stat_buf: u64) -> SyscallResult {
         .ok_or(Errno::BadFd)?;
 
         let mode = if is_dir { 0o040755u32 } else { 0o100644u32 };
-        let blocks = (size + 511) / 512;
+        let blocks = size.div_ceil(512);
 
         stat[8..16].copy_from_slice(&ino.to_le_bytes());
         stat[16..24].copy_from_slice(&1u64.to_le_bytes());
@@ -153,7 +181,12 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
         return Err(Errno::Invalid);
     }
 
+    let mut file = process::with_current_fds(|fds| fds.get(fd).cloned())
+        .and_then(|r| r.ok())
+        .ok_or(Errno::BadFd)?;
+
     let mut total_written = 0;
+    let mut staging = [0u8; 4096];
 
     for i in 0..iovcnt {
         let slot = iov_ptr.checked_add(i * 16).ok_or(Errno::Fault)?;
@@ -166,19 +199,37 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
         if len == 0 {
             continue;
         }
-        total_written += sys_write(fd, base, len)?;
+
+        let target = len as usize;
+        let mut written_for_iov = 0;
+
+        while written_for_iov < target {
+            let chunk = core::cmp::min(target - written_for_iov, 4096);
+            let curr_buf = base + written_for_iov as u64;
+
+            entry::copy_from_user(&mut staging[..chunk], curr_buf).map_err(|_| Errno::Fault)?;
+
+            let n = file.write(&staging[..chunk]).map_err(|_| Errno::Invalid)?;
+            if n == 0 {
+                break;
+            }
+            written_for_iov += n;
+        }
+
+        total_written += written_for_iov as u64;
     }
     Ok(total_written)
 }
 
 fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -> SyscallResult {
     let pid = current_pid();
-    let is_fb = process::with_current_fds(|fds| {
-        let file = fds.get(fd).ok()?;
-        Some(file.inode.lock().id == 2)
-    })
-    .flatten()
-    .unwrap_or(false);
+    let is_fb = fd >= 3
+        && process::with_current_fds(|fds| {
+            let file = fds.get(fd).ok()?;
+            Some(file.inode.lock().id == 2)
+        })
+        .flatten()
+        .unwrap_or(false);
 
     if is_fb {
         let (start, end) =
@@ -204,18 +255,29 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             let Some(ref fb) = writer.framebuffer else {
                 return Err(Errno::Invalid);
             };
-            let mut var = crate::graphics::fbdev::FbVarScreeninfo::default();
-            var.xres = fb.width;
-            var.yres = fb.height;
-            var.xres_virtual = fb.width;
-            var.yres_virtual = fb.height;
-            var.bits_per_pixel = fb.bpp as u32;
-            var.red.offset = 16;
-            var.red.length = 8;
-            var.green.offset = 8;
-            var.green.length = 8;
-            var.blue.offset = 0;
-            var.blue.length = 8;
+            let var = crate::graphics::fbdev::FbVarScreeninfo {
+                xres: fb.width,
+                yres: fb.height,
+                xres_virtual: fb.width,
+                yres_virtual: fb.height,
+                bits_per_pixel: fb.bpp as u32,
+                red: crate::graphics::fbdev::FbBitfield {
+                    offset: 16,
+                    length: 8,
+                    msb_right: 0,
+                },
+                green: crate::graphics::fbdev::FbBitfield {
+                    offset: 8,
+                    length: 8,
+                    msb_right: 0,
+                },
+                blue: crate::graphics::fbdev::FbBitfield {
+                    offset: 0,
+                    length: 8,
+                    msb_right: 0,
+                },
+                ..Default::default()
+            };
             drop(writer);
 
             let bytes = unsafe {
@@ -234,10 +296,12 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             let Some(ref fb) = writer.framebuffer else {
                 return Err(Errno::Invalid);
             };
-            let mut fix = crate::graphics::fbdev::FbFixScreeninfo::default();
-            fix.smem_start = fb_start;
-            fix.smem_len = (fb_end - fb_start) as u32;
-            fix.line_length = fb.pitch;
+            let fix = crate::graphics::fbdev::FbFixScreeninfo {
+                smem_start: fb_start,
+                smem_len: (fb_end - fb_start) as u32,
+                line_length: fb.pitch,
+                ..Default::default()
+            };
             drop(writer);
 
             let bytes = unsafe {
@@ -369,7 +433,7 @@ fn sys_wait4(pid: i64, wstatus: u64, _options: u64, _rusage: u64) -> SyscallResu
     };
 
     if wstatus != 0 {
-        let status = ((code & 0xff) << 8) as i32;
+        let status = (code & 0xff) << 8;
         if entry::copy_to_user(wstatus, &status.to_le_bytes()).is_err() {
             return Err(Errno::Fault);
         }
@@ -465,22 +529,60 @@ pub(crate) fn wait_for_key() {
     crate::arch::input::remove_waiter(id);
 }
 
-fn sys_poll(fds: u64, nfds: u64, _events: u64) -> SyscallResult {
+fn sys_poll(fds: u64, nfds: u64, _timeout: u64) -> SyscallResult {
     if nfds == 0 {
+        return Ok(0);
+    }
+    if nfds > 1024 {
         return Err(Errno::Invalid);
     }
 
-    let mut revents = [0u8; 8];
+    let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
+    let mut ready = 0u64;
 
-    if crate::tty::GLOBAL_TTY.lock().queue.len() > 0 {
-        revents[0] = 1;
+    for i in 0..nfds {
+        let slot = fds.checked_add(i * 8).ok_or(Errno::Fault)?;
+        let mut pfd_buf = [0u8; 8];
+        entry::copy_from_user(&mut pfd_buf, slot).map_err(|_| Errno::Fault)?;
+
+        let fd = i32::from_le_bytes(pfd_buf[0..4].try_into().unwrap());
+        let events = i16::from_le_bytes(pfd_buf[4..6].try_into().unwrap());
+        let mut revents = 0i16;
+
+        if fd >= 0 {
+            if fd == 0 || fd == 1 || fd == 2 {
+                if tty_has_input && (events & 1 != 0) {
+                    revents |= 1; // POLLIN
+                }
+                if events & 4 != 0 {
+                    revents |= 4; // POLLOUT
+                }
+            } else {
+                let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
+                if let Some(Ok(file)) = file {
+                    let inode_id = file.inode.lock().id;
+                    if inode_id == 3 {
+                        let has_events = !crate::arch::keyboard::KBD_QUEUE.lock().is_empty();
+                        if has_events && (events & 1 != 0) {
+                            revents |= 1;
+                        }
+                    } else {
+                        revents |= events & 5;
+                    }
+                } else {
+                    revents |= 0x20;
+                }
+            }
+        }
+
+        if revents != 0 {
+            ready += 1;
+        }
+
+        entry::copy_to_user(slot + 6, &revents.to_le_bytes()).map_err(|_| Errno::Fault)?;
     }
 
-    if entry::copy_to_user(fds, &revents).is_err() {
-        return Err(Errno::Fault);
-    }
-
-    Ok(if revents[0] != 0 { 1 } else { 0 })
+    Ok(ready)
 }
 
 fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
@@ -488,49 +590,80 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
         return Ok(0);
     }
 
-    if len > 4096 {
-        return Err(Errno::Invalid);
-    }
-
     let file = process::with_current_fds(|fds| fds.get(fd).cloned());
     let Some(Ok(mut file)) = file else {
         return Err(Errno::BadFd);
     };
 
-    let mut staging = [0u8; 4096];
-    let to_read = (len as usize).min(staging.len());
-
     let is_dev = file.inode.lock().file_type == crate::storage::vfs::inode::FileType::Device;
-
-    let read = if is_dev {
-        match file.read(&mut staging[..to_read]) {
+    if is_dev {
+        let mut staging = [0u8; 4096];
+        let to_read = (len as usize).min(staging.len());
+        let read = match file.read(&mut staging[..to_read]) {
             Ok(read) => read,
             Err("interrupted") => return Err(Errno::Intr),
             Err(_) => return Err(Errno::Invalid),
+        };
+        if read > 0 && entry::copy_to_user(buf, &staging[..read]).is_err() {
+            return Err(Errno::Fault);
         }
-    } else {
-        let Some(result) = process::with_current_fds(|fds| fds.read(fd, &mut staging[..to_read]))
+        return Ok(read as u64);
+    }
+
+    let mut total_read = 0;
+    let target = len as usize;
+    let mut staging = [0u8; 4096];
+
+    while total_read < target {
+        let chunk = core::cmp::min(target - total_read, 4096);
+        let curr_buf = buf + total_read as u64;
+
+        let Some(result) = process::with_current_fds(|fds| fds.read(fd, &mut staging[..chunk]))
         else {
             return Err(Errno::BadFd);
         };
+
         match result {
-            Ok(read) => read,
+            Ok(0) => break,
+            Ok(n) => {
+                if entry::copy_to_user(curr_buf, &staging[..n]).is_err() {
+                    return Err(Errno::Fault);
+                }
+                total_read += n;
+                if n < chunk {
+                    break;
+                }
+            }
             Err("not a regular or device file") => return Err(Errno::IsDir),
             Err(_) => return Err(Errno::Invalid),
         }
-    };
-
-    if read > 0 && entry::copy_to_user(buf, &staging[..read]).is_err() {
-        return Err(Errno::Fault);
     }
 
-    Ok(read as u64)
+    Ok(total_read as u64)
+}
+fn resolve_relative_path(path: &[u8]) -> Vec<u8> {
+    if path.starts_with(b"/") {
+        return path.to_vec();
+    }
+    let cwd = process::current()
+        .map(|p| p.lock().cwd.clone())
+        .unwrap_or_else(|| String::from("/"));
+    let mut p = Vec::new();
+    if !cwd.ends_with('/') {
+        p.extend_from_slice(cwd.as_bytes());
+        p.push(b'/');
+    } else {
+        p.extend_from_slice(cwd.as_bytes());
+    }
+    p.extend_from_slice(path);
+    p
 }
 
 fn sys_open(path: u64, flags: u64) -> SyscallResult {
     let Ok(path) = entry::user_path(path) else {
         return Err(Errno::Fault);
     };
+    let path = resolve_relative_path(&path);
 
     const O_ACCMODE: u64 = 0x3;
     const O_WRONLY: u64 = 1;
@@ -606,7 +739,7 @@ fn sys_arch_prctl(code: u64, addr: u64) -> SyscallResult {
     if code != ARCH_SET_FS {
         return Err(Errno::Invalid);
     }
-    if addr < USER_START || addr >= USER_END {
+    if addr >= USER_END {
         return Err(Errno::Fault);
     }
     x86_64::registers::model_specific::FsBase::write(VirtAddr::new(addr));
@@ -618,6 +751,7 @@ fn sys_mkdir(path: u64) -> SyscallResult {
     let Ok(path) = entry::user_path(path) else {
         return Err(Errno::Fault);
     };
+    let path = resolve_relative_path(&path);
 
     let Some(result) = process::with_current_fds(|fds| fds.mkdir(&path)) else {
         return Err(Errno::BadFd);
@@ -672,6 +806,7 @@ fn sys_unlink(path: u64) -> SyscallResult {
     let Ok(path) = entry::user_path(path) else {
         return Err(Errno::Fault);
     };
+    let path = resolve_relative_path(&path);
 
     let Some(result) = process::with_current_fds(|fds| fds.unlink(&path)) else {
         return Err(Errno::BadFd);
@@ -687,6 +822,7 @@ fn sys_rmdir(path: u64) -> SyscallResult {
     let Ok(path) = entry::user_path(path) else {
         return Err(Errno::Fault);
     };
+    let path = resolve_relative_path(&path);
 
     let Some(result) = process::with_current_fds(|fds| fds.rmdir(&path)) else {
         return Err(Errno::BadFd);
@@ -702,6 +838,7 @@ fn sys_create(path: u64) -> SyscallResult {
     let Ok(path) = entry::user_path(path) else {
         return Err(Errno::Fault);
     };
+    let path = resolve_relative_path(&path);
 
     let Some(result) = process::with_current_fds(|fds| fds.touch(&path)) else {
         return Err(Errno::BadFd);

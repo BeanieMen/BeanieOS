@@ -116,7 +116,6 @@ unsafe impl FrameAllocator<Size4KiB> for FrameSource {
 
 pub(crate) static FRAMES: InterruptMutex<FrameSource> = InterruptMutex::new(FrameSource::new());
 
-
 fn is_reachable(end: u64) -> bool {
     end <= DIRECT_MAP_SIZE
 }

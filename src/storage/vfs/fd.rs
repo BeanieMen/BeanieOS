@@ -2,8 +2,6 @@ use alloc::{sync::Arc, vec::Vec};
 
 use spin::Mutex;
 
-use crate::graphics::vfs::create_fb_file;
-
 use super::file::{File, OpenFlags};
 use super::inode::{FileType, Inode};
 use super::mount::{FileSystem, MountTable};
@@ -16,10 +14,11 @@ pub(crate) struct FdTable {
 
 impl FdTable {
     pub(crate) fn new() -> Self {
-        let mut slots = Vec::new();
-        slots.push(Some(crate::tty::create_tty_file(OpenFlags::READ)));
-        slots.push(Some(crate::tty::create_tty_file(OpenFlags::WRITE)));
-        slots.push(Some(crate::tty::create_tty_file(OpenFlags::WRITE)));
+        let slots = alloc::vec![
+            Some(crate::tty::create_tty_file(OpenFlags::READ)),
+            Some(crate::tty::create_tty_file(OpenFlags::WRITE)),
+            Some(crate::tty::create_tty_file(OpenFlags::WRITE)),
+        ];
         FdTable {
             slots,
             mounts: MountTable::new(),
@@ -123,6 +122,10 @@ impl FdTable {
             let fb_file = crate::graphics::vfs::create_fb_file(flags);
             return Ok(self.alloc(fb_file));
         }
+        if path == b"/dev/kbd" || path == b"dev/kbd" {
+            let kbd_file = crate::arch::keyboard::create_kbd_file(flags);
+            return Ok(self.alloc(kbd_file));
+        }
         let resolved = self.mounts.resolve(path)?;
 
         let inode = resolved.inode();
@@ -156,6 +159,7 @@ impl FdTable {
         let mut parent_inode = parent.lock();
 
         parent_inode.inode_ops.mkdir(&mut parent_inode, &name)?;
+        crate::storage::vfs::path::invalidate_resolve_cache();
 
         Ok(())
     }
@@ -166,6 +170,7 @@ impl FdTable {
         let mut parent_inode = parent.lock();
 
         parent_inode.inode_ops.rmdir(&mut parent_inode, &name)?;
+        crate::storage::vfs::path::invalidate_resolve_cache();
 
         Ok(())
     }
@@ -176,6 +181,7 @@ impl FdTable {
         let mut parent_inode = parent.lock();
 
         parent_inode.inode_ops.unlink(&mut parent_inode, &name)?;
+        crate::storage::vfs::path::invalidate_resolve_cache();
 
         Ok(())
     }
@@ -192,6 +198,7 @@ impl FdTable {
         parent_inode
             .inode_ops
             .create(&mut parent_inode, &name, FileType::Regular)?;
+        crate::storage::vfs::path::invalidate_resolve_cache();
 
         Ok(())
     }

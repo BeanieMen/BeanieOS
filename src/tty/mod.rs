@@ -80,7 +80,7 @@ impl Tty {
             crate::console::write_user_bytes(b"^C\r\n");
             self.line_len = 0;
             self.queue.clear();
-            
+
             if let Some(pgid) = self.foreground_pgrp {
                 crate::task::process::send_signal_pgrp(pgid, crate::task::signal::SIGINT);
             }

@@ -64,6 +64,19 @@ pub(crate) fn wait(base: usize) -> Result<(), &'static str> {
         interrupts::enable();
     }
 
+    // Spin briefly first: in emulators (QEMU) and fast hardware, disk completions
+    // usually arrive in microseconds. Avoid halting the CPU core when done quickly.
+    for _ in 0..1000 {
+        if reg(base, PX_CI) & 1 == 0 || DONE.load(Ordering::Acquire) {
+            if !was_enabled {
+                interrupts::disable();
+            }
+            set_reg(base, PX_IE, 0);
+            return Ok(());
+        }
+        core::hint::spin_loop();
+    }
+
     loop {
         if reg(base, PX_CI) & 1 == 0 {
             break;

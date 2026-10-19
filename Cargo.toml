@@ -9,6 +9,9 @@ panic = "abort"
 
 [profile.release]
 panic = "abort" # disable stack unwinding on panic
+lto = "fat"
+codegen-units = 1
+opt-level = 3
 
 [[bin]]
 name = "beanieos"

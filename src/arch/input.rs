@@ -1,63 +1,13 @@
 use alloc::vec::Vec;
 
-use core::sync::atomic::{AtomicUsize, Ordering};
-
 use crate::arch::lock::InterruptMutex;
 use crate::task::identity::ThreadId;
-
-const CAPACITY: usize = 256;
-
-static DROPPED: AtomicUsize = AtomicUsize::new(0);
-
-struct Ring {
-    slots: [char; CAPACITY],
-    head: usize,
-    tail: usize,
-    count: usize,
-}
-
-impl Ring {
-    const fn new() -> Self {
-        Ring {
-            slots: ['\0'; CAPACITY],
-            head: 0,
-            tail: 0,
-            count: 0,
-        }
-    }
-
-    fn push(&mut self, key: char) -> bool {
-        if self.count == CAPACITY {
-            return false;
-        }
-
-        self.slots[self.head] = key;
-        self.head = (self.head + 1) % CAPACITY;
-        self.count += 1;
-        true
-    }
-
-    fn pop(&mut self) -> Option<char> {
-        if self.count == 0 {
-            return None;
-        }
-
-        let key = self.slots[self.tail];
-        self.slots[self.tail] = '\0';
-        self.tail = (self.tail + 1) % CAPACITY;
-        self.count -= 1;
-        Some(key)
-    }
-}
-
-static PENDING: InterruptMutex<Ring> = InterruptMutex::new(Ring::new());
 
 static WAITERS: InterruptMutex<Vec<ThreadId>> = InterruptMutex::new(Vec::new());
 
 pub(crate) fn push_key(_key: char) {
     wake_one();
 }
-
 
 pub(crate) fn add_waiter(id: ThreadId) {
     WAITERS.lock().push(id);
@@ -73,16 +23,4 @@ fn wake_one() {
     if let Some(id) = waiter {
         crate::task::scheduler::wake(id);
     }
-}
-
-pub(crate) fn pop_key() -> Option<char> {
-    PENDING.lock().pop()
-}
-
-pub(crate) fn pending() -> usize {
-    crate::tty::GLOBAL_TTY.lock().queue.len()
-}
-
-pub(crate) fn dropped_keys() -> usize {
-    DROPPED.load(Ordering::Relaxed)
 }

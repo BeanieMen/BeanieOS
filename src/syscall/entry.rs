@@ -4,7 +4,7 @@ use x86_64::registers::model_specific;
 
 use crate::arch::gdt::kernel_code_selector;
 use crate::arch::interrupts::idt_addr;
-use crate::memory::mmu::{USER_END, USER_START};
+use crate::memory::mmu::USER_END;
 use crate::syscall::dispatch::dispatch;
 
 pub(crate) const VECTOR: u8 = 0x80;
@@ -262,7 +262,7 @@ pub(crate) fn install() {
 pub(crate) fn copy_from_user(dest: &mut [u8], src: u64) -> Result<usize, ()> {
     let len = dest.len() as u64;
 
-    if src < USER_START || src + len > USER_END {
+    if src.checked_add(len).is_none_or(|end| end > USER_END) {
         return Err(());
     }
 
@@ -274,7 +274,7 @@ pub(crate) fn copy_from_user(dest: &mut [u8], src: u64) -> Result<usize, ()> {
 pub(crate) fn copy_to_user(dest: u64, src: &[u8]) -> Result<usize, ()> {
     let len = src.len() as u64;
 
-    if dest < USER_START || dest + len > USER_END {
+    if dest.checked_add(len).is_none_or(|end| end > USER_END) {
         return Err(());
     }
 
@@ -286,7 +286,7 @@ pub(crate) fn copy_to_user(dest: u64, src: &[u8]) -> Result<usize, ()> {
 const MAX_USER_PATH: usize = 4096;
 
 pub(crate) fn user_path(ptr: u64) -> Result<alloc::vec::Vec<u8>, ()> {
-    if ptr < USER_START {
+    if ptr >= USER_END {
         return Err(());
     }
 

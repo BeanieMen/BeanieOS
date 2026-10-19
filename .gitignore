@@ -12,3 +12,7 @@ scripts
 __pycache__/
 *.pyc
 .zed/
+
+# Object files and doom build
+*.o
+userspace/doom/doomgeneric/build/

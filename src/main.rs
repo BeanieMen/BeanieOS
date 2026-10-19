@@ -11,19 +11,17 @@ use multiboot2::BootInformation;
 
 mod arch;
 mod console;
-mod hal;
 mod graphics;
+mod hal;
 mod logger;
 mod memory;
 mod paging;
 mod storage;
 mod syscall;
 mod task;
-mod userspace;
 mod tty;
 
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
-
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_entry(magic: u32, mbi_addr: u32) -> ! {
@@ -33,12 +31,12 @@ pub extern "C" fn rust_entry(magic: u32, mbi_addr: u32) -> ! {
         }
     }
 
-
     let mbi_total_size = unsafe { (mbi_addr as *const u32).read() as usize };
 
     let boot_info = unsafe {
-        match multiboot2::BootInformation::load(mbi_addr as *const multiboot2::BootInformationHeader)
-        {
+        match multiboot2::BootInformation::load(
+            mbi_addr as *const multiboot2::BootInformationHeader,
+        ) {
             Ok(info) => info,
             Err(_) => loop {
                 x86_64::instructions::hlt();
@@ -121,9 +119,9 @@ fn mount_disk() {
 
     let (lba, sectors) = (partition.first_lba(), partition.sectors());
 
-    match storage::fs::fat32::Fat32::mount(
-        storage::ahci::disk::partition::Partition::new(*disk, lba, sectors),
-    ) {
+    match storage::fs::fat32::Fat32::mount(storage::ahci::disk::partition::Partition::new(
+        *disk, lba, sectors,
+    )) {
         Ok(fat32) => {
             kinfo!("FAT32 mounted at LBA {lba}");
 
@@ -201,7 +199,9 @@ extern "C" fn storage_task() {
         }
 
         if n >= 1200 {
-            let expected = (0..1200).map(|i| b'A' + (i % 26) as u8).collect::<alloc::vec::Vec<u8>>();
+            let expected = (0..1200)
+                .map(|i| b'A' + (i % 26) as u8)
+                .collect::<alloc::vec::Vec<u8>>();
 
             if buf[..1200] == expected[..] {
                 kinfo!("ring 3 wrote 1200 bytes across the FAT chain; all correct");
@@ -246,7 +246,8 @@ extern "C" fn user_task() {
         let n = fds.read(fd, &mut buf).ok()?;
         buf.truncate(n);
         Some(buf)
-    }).flatten();
+    })
+    .flatten();
 
     if let Some(binary) = elf_data {
         let mut space = memory::mmu::AddressSpace::new_with_kernel()
@@ -333,6 +334,7 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
     arch::gdt::init();
     arch::interrupts::init_idt(boot_info);
     syscall::entry::install();
+    memory::mmu::init_pat();
 
     demo_direct_map();
 
@@ -340,7 +342,7 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
         "Boot memory map found with {} regions",
         memory_map.memory_areas().len()
     );
-    
+
     kinfo!("framebuffer found at {:#x}", fb_tag.address());
 
     for route in hal::routes().iter() {
@@ -372,7 +374,11 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
         info.framebuffer.expect("set at boot").1
     );
     kinfo!("  kernel     {:#x}..{:#x}", info.kernel.0, info.kernel.1);
-    kinfo!("  boot info  {:#x}..{:#x}", info.boot_info.0, info.boot_info.1);
+    kinfo!(
+        "  boot info  {:#x}..{:#x}",
+        info.boot_info.0,
+        info.boot_info.1
+    );
     kinfo!(
         "  heap       {:#x}..{:#x}",
         info.heap.expect("set by init_heap").0,

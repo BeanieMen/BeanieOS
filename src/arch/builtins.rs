@@ -81,7 +81,7 @@ pub unsafe extern "C" fn memcpy(
     assert_writable(d);
     assert_readable(s);
 
-    if count != 0 && (d as usize) != (s as usize) {
+    if count != 0 && !core::ptr::eq(d, s) {
         unsafe { rep_movsb(&mut d, &mut s, count) };
     }
 
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn memmove(
     assert_writable(d);
     assert_readable(s);
 
-    if count == 0 || (d as usize) == (s as usize) {
+    if count == 0 || core::ptr::eq(d, s) {
         return dest;
     }
 

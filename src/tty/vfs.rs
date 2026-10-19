@@ -36,12 +36,7 @@ impl InodeOperations for TtyInodeOps {
 pub struct TtyFileOps;
 
 impl FileOperations for TtyFileOps {
-    fn read(
-        &self,
-        _inode: &Inode,
-        _offset: u64,
-        buf: &mut [u8],
-    ) -> Result<usize, &'static str> {
+    fn read(&self, _inode: &Inode, _offset: u64, buf: &mut [u8]) -> Result<usize, &'static str> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -59,12 +54,7 @@ impl FileOperations for TtyFileOps {
         Ok(count)
     }
 
-    fn write(
-        &self,
-        _inode: &mut Inode,
-        _offset: u64,
-        buf: &[u8],
-    ) -> Result<usize, &'static str> {
+    fn write(&self, _inode: &mut Inode, _offset: u64, buf: &[u8]) -> Result<usize, &'static str> {
         Ok(crate::tty::GLOBAL_TTY.lock().write(buf))
     }
 
