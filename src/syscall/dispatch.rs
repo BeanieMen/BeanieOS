@@ -90,6 +90,8 @@ pub(crate) fn dispatch(
         Syscall::Fcntl => sys_fcntl(args[0], args[1], args[2]),
         Syscall::Getuid | Syscall::Getgid | Syscall::Geteuid | Syscall::Getegid => Ok(0),
         Syscall::Chmod | Syscall::Fchmod | Syscall::Chown | Syscall::Fchown => Ok(0),
+        Syscall::Pipe => sys_pipe(args[0]),
+        Syscall::Pipe2 => sys_pipe2(args[0], args[1]),
     }
 }
 
@@ -100,18 +102,60 @@ struct Timespec {
     tv_nsec: i64,
 }
 
-fn sys_dup(oldfd: u64) -> SyscallResult {
-    let file = process::with_current_fds(|fds| fds.get(oldfd).cloned())
-            .ok_or(Errno::BadFd)?
-            .map_err(|_| Errno::BadFd)?;
-        let newfd = process::with_current_fds(|fds| fds.alloc(file))
-            .ok_or(Errno::BadFd)?;
-        Ok(newfd)
+fn sys_openat(dirfd: u64, path: u64, flags: u64) -> SyscallResult {
+    const AT_FDCWD: i64 = -100;
+    if dirfd as i64 != AT_FDCWD {
+        return Err(Errno::Invalid);
+    }
+    sys_open(path, flags)
 }
 
+fn sys_readlink(path: u64, buf: u64, bufsiz: u64) -> SyscallResult {
+    Err(Errno::Invalid)
+}
+
+fn sys_readlinkat(dirfd: u64, path: u64, buf: u64, bufsiz: u64) -> SyscallResult {
+    sys_readlink(path, buf, bufsiz)
+}
+
+fn sys_pipe(pipefd_ptr: u64) -> SyscallResult {
+    sys_pipe2(pipefd_ptr, 0)
+}
+
+fn sys_pipe2(pipefd_ptr: u64, flags: u64) -> SyscallResult {
+    const O_CLOEXEC: u64 = 0x80000;
+    const O_NONBLOCK: u64 = 0x800;
+    if flags & !(O_CLOEXEC | O_NONBLOCK) != 0 {
+        return Err(Errno::Invalid);
+    }
+
+    let (a, b) = create_connected_pair();
+    let f1 = create_socket_file(a);
+    let f2 = create_socket_file(b);
+    let (fd1, fd2) = with_current_fds(|fds| {
+        let fd1 = fds.alloc(f1);
+        let fd2 = fds.alloc(f2);
+        (fd1 as i32, fd2 as i32)
+    })
+    .ok_or(Errno::NoMem)?;
+
+    let mut out = [0u8; 8];
+    out[0..4].copy_from_slice(&fd1.to_le_bytes());
+    out[4..8].copy_from_slice(&fd2.to_le_bytes());
+    copy_to_user(pipefd_ptr, &out).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+
+fn sys_dup(oldfd: u64) -> SyscallResult {
+    let file = process::with_current_fds(|fds| fds.get(oldfd).cloned())
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::BadFd)?;
+    let newfd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::BadFd)?;
+    Ok(newfd)
+}
 
 fn sys_dup2(oldfd: u64, newfd: u64) -> SyscallResult {
-    let Some(result) = with_current_fds(|fds| fds.dup2(oldfd,newfd)) else {
+    let Some(result) = with_current_fds(|fds| fds.dup2(oldfd, newfd)) else {
         return Err(Errno::BadFd);
     };
 
@@ -130,13 +174,14 @@ fn sys_dup3(oldfd: u64, newfd: u64, flags: u64) -> SyscallResult {
 }
 
 fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> SyscallResult {
-    let f = with_current_fds(|fds| fds.get(fd).cloned().ok()).flatten().ok_or(Errno::BadFd)?;
+    let f = with_current_fds(|fds| fds.get(fd).cloned().ok())
+        .flatten()
+        .ok_or(Errno::BadFd)?;
     match cmd {
         0 => {
             // F_DUPFD
             let min_fd = arg as usize;
-            with_current_fds(|fds| fds.alloc_at_least(f.clone(), min_fd))
-                .ok_or(Errno::BadFd)
+            with_current_fds(|fds| fds.alloc_at_least(f.clone(), min_fd)).ok_or(Errno::BadFd)
         }
         1 => Ok(0), // F_GETFD
         2 => Ok(0), // F_SETFD
@@ -179,10 +224,10 @@ fn sys_uname(buf_ptr: u64) -> SyscallResult {
         slice[..len].copy_from_slice(&s[..len]);
     };
 
-    fill(&mut uts[0..65], b"BeanieOS"); // sysname
-    fill(&mut uts[65..130], b"BeanieOS"); // nodename
-    fill(&mut uts[130..195], b"1.0"); // release
-    fill(&mut uts[195..260], b"1.0"); // version
+    fill(&mut uts[0..65], b"Linux"); // sysname
+    fill(&mut uts[65..130], b"beanieos"); // nodename
+    fill(&mut uts[130..195], b"6.1.0-beanieos"); // release
+    fill(&mut uts[195..260], b"#1 SMP PREEMPT"); // version
     fill(&mut uts[260..325], b"x86_64"); // machine
     fill(&mut uts[325..390], b"local"); // domainname
 
@@ -291,7 +336,9 @@ fn sys_bind(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
 fn sys_accept(fd: u64, addr_ptr: u64, len_ptr: u64, flags: u64) -> SyscallResult {
     let sock = get_socket_by_fd(fd)?;
     let is_nonblock = {
-        let f = process::with_current_fds(|fds| fds.get(fd).map(|f| f.flags.nonblock).unwrap_or(false)).unwrap_or(false);
+        let f =
+            process::with_current_fds(|fds| fds.get(fd).map(|f| f.flags.nonblock).unwrap_or(false))
+                .unwrap_or(false);
         f || (flags & 0x800) != 0
     };
 
@@ -467,13 +514,13 @@ fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
             continue;
         }
 
-        let n =  match sys_read(fd, base, len) {
+        let n = match sys_read(fd, base, len) {
             Ok(n) => n,
             Err(e) => {
                 if total_read > 0 {
-                    return Ok(total_read)
+                    return Ok(total_read);
                 }
-                return Err(e)
+                return Err(e);
             }
         };
 
@@ -582,7 +629,10 @@ fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -
         && process::with_current_fds(|fds| {
             let file = fds.get(fd).ok()?;
             let inode = file.inode.lock();
-            Some(core::ptr::addr_eq(inode.file_ops, &crate::graphics::vfs::FB_FILE_OPS))
+            Some(core::ptr::addr_eq(
+                inode.file_ops,
+                &crate::graphics::vfs::FB_FILE_OPS,
+            ))
         })
         .flatten()
         .unwrap_or(false);
@@ -632,7 +682,8 @@ fn sys_mun_map(addr: u64, len: u64) -> SyscallResult {
 fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
     // Framebuffer ioctls (can be on any fd opened to /dev/fb0)
     match request {
-        crate::graphics::fbdev::FBIOGET_VSCREENINFO | crate::graphics::fbdev::FBIOPUT_VSCREENINFO => {
+        crate::graphics::fbdev::FBIOGET_VSCREENINFO
+        | crate::graphics::fbdev::FBIOPUT_VSCREENINFO => {
             let writer = crate::graphics::framebuffer::WRITER.lock();
             let Some(ref fb) = writer.framebuffer else {
                 return Err(Errno::Invalid);
@@ -704,31 +755,34 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
     }
 
     match request {
-        0x5600 => { // VT_OPENQRY
+        0x5600 => {
+            // VT_OPENQRY
             let vt = 2i32;
             entry::copy_to_user(arg, &vt.to_le_bytes()).map_err(|_| Errno::Fault)?;
             return Ok(0);
         }
-        0x5601 => { // VT_GETMODE
+        0x5601 => {
+            // VT_GETMODE
             let mode = [0u8; 8];
             entry::copy_to_user(arg, &mode).map_err(|_| Errno::Fault)?;
             return Ok(0);
         }
-        0x5602 => { // VT_SETMODE
+        0x5602 => {
+            // VT_SETMODE
             return Ok(0);
         }
-        0x5603 => { // VT_GETSTATE
+        0x5603 => {
+            // VT_GETSTATE
             let state = [1u16, 0u16, 3u16];
-            let bytes = unsafe {
-                core::slice::from_raw_parts(state.as_ptr() as *const u8, 6)
-            };
+            let bytes = unsafe { core::slice::from_raw_parts(state.as_ptr() as *const u8, 6) };
             entry::copy_to_user(arg, bytes).map_err(|_| Errno::Fault)?;
             return Ok(0);
         }
         0x5605 | 0x5606 | 0x5607 | 0x5608 => return Ok(0), // VT_RELDISP, VT_ACTIVATE, VT_WAITACTIVE, VT_DISALLOCATE
         0x4B3A | 0x4B3B | 0x4B44 | 0x4B45 | 0x4B32 | 0x4B30 => return Ok(0), // KDSETMODE, KDGETMODE, KDGKBMODE, KDSKBMODE, KDSETLED, KDMKTONE
-        0x4B46 => return Err(Errno::Invalid), // KDGKBENT
-        0x8912 => { // SIOCGIFCONF
+        0x4B46 => return Err(Errno::Invalid),                                // KDGKBENT
+        0x8912 => {
+            // SIOCGIFCONF
             let zero = 0i32;
             entry::copy_to_user(arg, &zero.to_le_bytes()).map_err(|_| Errno::Fault)?;
             return Ok(0);
@@ -741,7 +795,9 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
             let id = f.inode.lock().id;
             (id == 1 || id == 7, id == 7)
         })
-    }).flatten().unwrap_or((false, false));
+    })
+    .flatten()
+    .unwrap_or((false, false));
 
     match request {
         TCGETS => {
@@ -988,16 +1044,16 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
     };
     if nfds == 0 {
         if timeout_ms > 0 {
-           while ticks().saturating_sub(start_ticks) < timeout_ticks {
-               if has_pending_signals() {
-                   return Err(Errno::Intr)
-               }
-               sleep(1);
-           }
+            while ticks().saturating_sub(start_ticks) < timeout_ticks {
+                if has_pending_signals() {
+                    return Err(Errno::Intr);
+                }
+                sleep(1);
+            }
         } else if timeout_ms < 0 {
             loop {
                 if has_pending_signals() {
-                    return Err(Errno::Intr)
+                    return Err(Errno::Intr);
                 }
                 sleep(1);
             }
@@ -1035,27 +1091,31 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
                             let inode = file.inode.lock();
                             (inode.file_ops, inode.id)
                         };
-                        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 8 {
+                        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS)
+                            || inode_id == 8
+                        {
                             // /dev/input/event0
                             let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
                             if has_events && (events & 1 != 0) {
                                 revents |= 1;
                             }
-                        } else if core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8 {
+                        } else if core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS)
+                            || inode_id == 8
+                        {
                             let has_mouse = !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
                             if has_mouse && (events & 1 != 0) {
                                 revents |= 1;
                             }
-                        }
-
-                        else if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+                        } else if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
                             if let Some(sock) =
                                 crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
                             {
                                 // UNIX domain socket
                                 let s = sock.lock();
                                 match &s.state {
-                                    crate::net::unix::SocketState::Listening { incoming, .. } => {
+                                    crate::net::unix::SocketState::Listening {
+                                        incoming, ..
+                                    } => {
                                         if !incoming.is_empty() && (events & 1 != 0) {
                                             revents |= 1; // Incoming connection to accept
                                         }
@@ -1209,8 +1269,13 @@ fn sys_select(
             if sec < 0 || sub < 0 {
                 return Err(Errno::Invalid);
             }
-            let ms = (sec as u64).saturating_mul(1000)
-                .saturating_add(if sub > 1_000_000 { (sub as u64) / 1_000_000 } else { (sub as u64) / 1000 });
+            let ms = (sec as u64)
+                .saturating_mul(1000)
+                .saturating_add(if sub > 1_000_000 {
+                    (sub as u64) / 1_000_000
+                } else {
+                    (sub as u64) / 1000
+                });
             Some(crate::arch::interrupts::vectors::ticks().saturating_add(ms))
         } else {
             None
@@ -1478,18 +1543,21 @@ fn sys_close(fd: u64) -> SyscallResult {
             if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().remove(&id) {
                 let peer_opt = {
                     let mut s = sock.lock();
-                    let peer = if let crate::net::unix::SocketState::Connected { peer, .. } = &s.state {
-                        peer.upgrade()
-                    } else {
-                        None
-                    };
+                    let peer =
+                        if let crate::net::unix::SocketState::Connected { peer, .. } = &s.state {
+                            peer.upgrade()
+                        } else {
+                            None
+                        };
                     s.state = crate::net::unix::SocketState::Closed;
                     peer
                 };
                 if let Some(peer_arc) = peer_opt {
                     if !alloc::sync::Arc::ptr_eq(&sock, &peer_arc) {
                         let mut p = peer_arc.lock();
-                        if let crate::net::unix::SocketState::Connected { peer_closed, .. } = &mut p.state {
+                        if let crate::net::unix::SocketState::Connected { peer_closed, .. } =
+                            &mut p.state
+                        {
                             *peer_closed = true;
                         }
                     }
@@ -1677,7 +1745,8 @@ fn sys_kill(pid: i64, sig: u64) -> SyscallResult {
             return Err(Errno::Srch);
         }
     }
-    if crate::task::process::send_signal(crate::task::identity::ProcessId(pid as u64), sig as usize) {
+    if crate::task::process::send_signal(crate::task::identity::ProcessId(pid as u64), sig as usize)
+    {
         Ok(0)
     } else {
         Err(Errno::Srch)

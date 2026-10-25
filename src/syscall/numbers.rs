@@ -82,4 +82,9 @@ syscalls! {
      Dup = 32,
      Dup2 = 33,
      Dup3 = 292,
+     Pipe = 22,
+     Pipe2 = 293,
+     Openat = 257,
+     Readlink = 80,
+     Readlinkat = 267,
 }
