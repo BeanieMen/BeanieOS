@@ -1,6 +1,14 @@
-use alloc::string::String;
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use alloc::{string::String, sync::Arc};
+use spin::mutex::Mutex;
 
+use crate::net::unix::{SocketState, UnixSocket};
+use crate::net::vfs::{SOCKET_REGISTRY, create_connected_pair, create_socket_file};
+use crate::syscall::entry::{SyscallFrame, copy_from_user, copy_to_user};
+use crate::syscall::numbers::Syscall::Connect;
+use crate::task::process::with_current_fds;
+use crate::task::scheduler::yield_now;
 use crate::{
     arch::interrupts::{consts::TICK_MS, vectors::ticks},
     kdebug, kerror,
@@ -59,6 +67,12 @@ pub(crate) fn dispatch(
         Syscall::RtSigreturn => sys_rt_sigreturn(frame),
         Syscall::Kill => sys_kill(args[0] as i64, args[1]),
         Syscall::ClockGettime => sys_clock_gettime(args[0], args[1]),
+        Syscall::Socket => sys_socket(args[0], args[1], args[2]),
+        Syscall::Connect => sys_connect(args[0], args[1], args[2]),
+        Syscall::Accept => sys_accept(args[0], args[1], args[2]),
+        Syscall::Bind => sys_bind(args[0], args[1], args[2]),
+        Syscall::Listen => sys_listen(args[0], args[1]),
+        Syscall::Socketpair => sys_socketpair(args[0], args[1], args[2], args[3]),
     }
 }
 
@@ -68,6 +82,115 @@ struct Timespec {
     tv_sec: i64,
     tv_nsec: i64,
 }
+
+fn sys_socket(domain: u64, type_: u64, _proto: u64) -> SyscallResult {
+    if domain != 1 || (type_ & 0xF) != 1 {
+        return Err(Errno::Invalid);
+    }
+    let sock = Arc::new(Mutex::new(UnixSocket::new()));
+    let file = create_socket_file(sock);
+    let fd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
+    Ok(fd)
+}
+
+fn sys_bind(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
+    let mut raw_addr = [0u8; 110];
+    copy_from_user(&mut raw_addr, addr_ptr).map_err(|_| Errno::Fault)?;
+
+    let path = parse_sun_path(&raw_addr[2..]);
+    let sock = get_socket_by_fd(fd)?;
+    let mut reg = SOCKET_REGISTRY.lock();
+    if reg.contains_key(&path) {
+        return Err(Errno::Invalid);
+    }
+
+    sock.lock().bound_path = Some(path.clone());
+    reg.insert(path, sock);
+    Ok(0)
+}
+
+fn sys_accept(fd: u64, _addr: u64, _len: u64) -> SyscallResult {
+    let sock = get_socket_by_fd(fd)?;
+    loop {
+        let conn = {
+            let mut s = sock.lock();
+            if let crate::net::unix::SocketState::Listening { incoming, .. } = &mut s.state {
+                incoming.pop_front()
+            } else {
+                return Err(Errno::Invalid);
+            }
+        };
+
+        if let Some(conn_sock) = conn {
+            let file = create_socket_file(conn_sock);
+            let new_fd = with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
+            return Ok(new_fd);
+        }
+        yield_now();
+    }
+}
+
+fn sys_socketpair(_domain: u64, _type: u64, _proto: u64, sv_ptr: u64) -> SyscallResult {
+    let (a, b) = create_connected_pair();
+    let f1 = create_socket_file(a);
+    let f2 = create_socket_file(b);
+    let (fd1, fd2) = with_current_fds(|fds| {
+        let fd1 = fds.alloc(f1);
+        let fd2 = fds.alloc(f2);
+        (fd1 as i32, fd2 as i32)
+    })
+    .ok_or(Errno::NoMem)?;
+
+    let mut out = [0u8; 8];
+    out[0..4].copy_from_slice(&fd1.to_le_bytes());
+    out[4..8].copy_from_slice(&fd2.to_le_bytes());
+    copy_to_user(sv_ptr, &out).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+fn sys_listen(fd: u64, backlog: u64) -> SyscallResult {
+    let sock = get_socket_by_fd(fd)?;
+    let mut s = sock.lock();
+    s.state = crate::net::unix::SocketState::Listening {
+        backlog: backlog as usize,
+        incoming: VecDeque::new(),
+    };
+
+    Ok(0)
+}
+
+fn sys_connect(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
+    let mut raw_addr = [0u8; 110];
+    entry::copy_from_user(&mut raw_addr, addr_ptr).map_err(|_| Errno::Fault)?;
+    let path = parse_sun_path(&raw_addr[2..]);
+    let server_sock = {
+        let reg = SOCKET_REGISTRY.lock();
+        reg.get(&path).cloned().ok_or(Errno::NoEntry)?
+    };
+    let client_sock = get_socket_by_fd(fd)?;
+    let server_side = alloc::sync::Arc::new(spin::Mutex::new(crate::net::unix::UnixSocket::new()));
+    client_sock.lock().state = crate::net::unix::SocketState::Connected {
+        peer: alloc::sync::Arc::downgrade(&server_side),
+        rx_buffer: alloc::collections::VecDeque::new(),
+        peer_closed: false,
+    };
+    server_side.lock().state = crate::net::unix::SocketState::Connected {
+        peer: alloc::sync::Arc::downgrade(&client_sock),
+        rx_buffer: alloc::collections::VecDeque::new(),
+        peer_closed: false,
+    };
+    let mut s = server_sock.lock();
+    if let crate::net::unix::SocketState::Listening { incoming, backlog } = &mut s.state {
+        if incoming.len() < *backlog {
+            incoming.push_back(server_side);
+            Ok(0)
+        } else {
+            Err(Errno::Invalid)
+        }
+    } else {
+        Err(Errno::Invalid)
+    }
+}
+
 fn sys_clock_gettime(_clock_id: u64, tp_ptr: u64) -> SyscallResult {
     let ticks = ticks();
     let total_ms = ticks * TICK_MS;
@@ -561,13 +684,8 @@ fn sys_poll(fds: u64, nfds: u64, _timeout: u64) -> SyscallResult {
                 let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
                 if let Some(Ok(file)) = file {
                     let inode_id = file.inode.lock().id;
-                    if inode_id == 3 {
-                        let has_events = !crate::arch::keyboard::KBD_QUEUE.lock().is_empty();
-                        if has_events && (events & 1 != 0) {
-                            revents |= 1;
-                        }
-                    } else if inode_id == 4 {
-                        let has_events = !crate::arch::mouse::MOUSE_QUEUE.lock().is_empty();
+                    if inode_id == 6 {
+                        let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
                         if has_events && (events & 1 != 0) {
                             revents |= 1;
                         }
@@ -962,4 +1080,19 @@ fn sys_rt_sigreturn(frame: &mut entry::SyscallFrame) -> SyscallResult {
     }
 
     Ok(frame.regs.rax)
+}
+
+fn parse_sun_path(raw: &[u8]) -> alloc::vec::Vec<u8> {
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    raw[..end].to_vec()
+}
+
+fn get_socket_by_fd(
+    fd: u64,
+) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::unix::UnixSocket>>, Errno> {
+    let file = process::with_current_fds(|fds| fds.get(fd).cloned()).ok_or(Errno::BadFd)?;
+    let f = file.map_err(|_| Errno::BadFd)?;
+    let inode_id = f.inode.lock().id;
+    let map = crate::net::vfs::SOCKET_MAP.lock();
+    map.get(&inode_id).cloned().ok_or(Errno::BadFd)
 }

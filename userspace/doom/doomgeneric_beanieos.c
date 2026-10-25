@@ -1,6 +1,20 @@
 #include "doomgeneric.h"
 #include "doomkeys.h"
 #include "fb.h"
+#include "d_event.h"
+
+#define DOOM_KEY_ENTER      13
+#define DOOM_KEY_TAB        9
+#define DOOM_KEY_BACKSPACE  0x7f
+#define DOOM_KEY_MINUS      0x2d
+#define DOOM_KEY_EQUALS     0x3d
+
+#undef KEY_MINUS
+#undef KEY_BACKSPACE
+#undef KEY_TAB
+#undef KEY_ENTER
+
+#include "input.h"
 
 #include <stdint.h>
 #include <fcntl.h>
@@ -20,35 +34,10 @@ static int fb_out_w = 0;
 static int fb_out_h = 0;
 static int fb_start_x = 0;
 static int fb_start_y = 0;
-static int kbd_fd = -1;
-
-static inline uint64_t rdtsc(void) {
-  uint32_t lo, hi;
-  __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
-  return ((uint64_t)hi << 32) | lo;
-}
-
-static uint64_t tsc_freq = 0;
-static uint64_t tsc_base = 0;
-
-static void init_timer(void) {
-  struct timespec ts1, ts2;
-  clock_gettime(CLOCK_MONOTONIC, &ts1);
-  uint64_t start_tsc = rdtsc();
-  struct timespec sleep_ts = { 0, 10000000 }; // 10ms
-  nanosleep(&sleep_ts, NULL);
-  clock_gettime(CLOCK_MONOTONIC, &ts2);
-  uint64_t end_tsc = rdtsc();
-
-  int64_t elapsed_ns = (ts2.tv_sec - ts1.tv_sec) * 1000000000LL + (ts2.tv_nsec - ts1.tv_nsec);
-  if (elapsed_ns > 0 && end_tsc > start_tsc) {
-    tsc_freq = ((end_tsc - start_tsc) * 1000000000LL) / elapsed_ns;
-  }
-  tsc_base = rdtsc();
-}
+static int event_fd = -1;
 
 void DG_Init() {
-  kbd_fd = open("/dev/kbd", O_RDONLY);
+  event_fd = open("/dev/input/event0", O_RDONLY);
 
   int fd = open("/dev/fb0", O_RDWR);
   if (fd < 0) return;
@@ -75,8 +64,6 @@ void DG_Init() {
 
   fb_ptr = (uint32_t *)mmap(0, fix.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   close(fd);
-
-  init_timer();
 }
 
 void DG_DrawFrame() {
@@ -131,9 +118,6 @@ void DG_SleepMs(uint32_t ms) {
 }
 
 uint32_t DG_GetTicksMs() {
-  if (tsc_freq > 0) {
-    return (uint32_t)((rdtsc() - tsc_base) * 1000 / tsc_freq);
-  }
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
@@ -152,7 +136,7 @@ static int s_eq_tail = 0;
 static uint8_t s_key_down[256];
 static uint32_t s_key_press_time[256];
 
-#define KEY_RELEASE_TIMEOUT_MS 160
+#define KEY_RELEASE_TIMEOUT_MS 600
 
 static void queue_key_event(int pressed, unsigned char key) {
   int next = (s_eq_head + 1) % EVENT_QUEUE_SIZE;
@@ -171,11 +155,11 @@ static unsigned char convert_char_to_doom(unsigned char c) {
   if (c == 'q' || c == 'Q' || c == ',') return KEY_STRAFE_L;
   if (c == 'e' || c == 'E' || c == '.') return KEY_STRAFE_R;
   if (c == ' ') return KEY_USE;
-  if (c == '\n' || c == '\r') return KEY_ENTER;
+  if (c == '\n' || c == '\r') return DOOM_KEY_ENTER;
   if (c == 27) return KEY_ESCAPE;
   if (c == 'f' || c == 'F') return KEY_FIRE;
-  if (c == '\t') return KEY_TAB;
-  if (c == 0x08 || c == 0x7f) return KEY_BACKSPACE;
+  if (c == '\t') return DOOM_KEY_TAB;
+  if (c == 0x08 || c == 0x7f) return DOOM_KEY_BACKSPACE;
   if (c >= '1' && c <= '7') return c;
   return c;
 }
@@ -248,14 +232,89 @@ static void poll_keys() {
   }
 }
 
+static unsigned char convert_event_key_to_doom(unsigned short code) {
+  switch (code) {
+    case KEY_W: case KEY_UP:        return KEY_UPARROW;
+    case KEY_S: case KEY_DOWN:      return KEY_DOWNARROW;
+    case KEY_A: case KEY_LEFT:      return KEY_LEFTARROW;
+    case KEY_D: case KEY_RIGHT:     return KEY_RIGHTARROW;
+    case KEY_Q: case KEY_COMMA:     return KEY_STRAFE_L;
+    case KEY_E: case KEY_DOT:       return KEY_STRAFE_R;
+    case KEY_LEFTCTRL:
+    case KEY_F:                     return KEY_FIRE;
+    case KEY_SPACE:                 return KEY_USE;
+    case KEY_ENTER:
+    case KEY_KPENTER:               return DOOM_KEY_ENTER;
+    case KEY_ESC:                   return KEY_ESCAPE;
+    case KEY_TAB:                   return DOOM_KEY_TAB;
+    case KEY_BACKSPACE:             return DOOM_KEY_BACKSPACE;
+    case KEY_MINUS:                 return DOOM_KEY_MINUS;
+    case KEY_EQUAL:                 return DOOM_KEY_EQUALS;
+    case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT: return KEY_RSHIFT;
+    case KEY_1: return '1';
+    case KEY_2: return '2';
+    case KEY_3: return '3';
+    case KEY_4: return '4';
+    case KEY_5: return '5';
+    case KEY_6: return '6';
+    case KEY_7: return '7';
+    case KEY_Y: return 'y';
+    case KEY_N: return 'n';
+    default:    return 0;
+  }
+}
+
+static int mouse_dx = 0;
+static int mouse_dy = 0;
+static int mouse_buttons = 0;
+static int prev_mouse_buttons = 0;
+static int s_used_event_fd = 0;
+
 int DG_GetKey(int *pressed, unsigned char *doomKey) {
-  if (kbd_fd >= 0) {
-    unsigned char ev[2];
-    if (read(kbd_fd, ev, 2) == 2) {
-      *pressed = ev[0];
-      *doomKey = convert_char_to_doom(ev[1]);
-      return 1;
+  if (event_fd >= 0) {
+    struct input_event ev;
+    while (read(event_fd, &ev, sizeof(ev)) == (int)sizeof(ev)) {
+      s_used_event_fd = 1;
+      if (ev.type == EV_REL) {
+        if (ev.code == REL_X) {
+          mouse_dx += ev.value;
+        } else if (ev.code == REL_Y) {
+          mouse_dy += ev.value;
+        }
+      } else if (ev.type == EV_KEY) {
+        if (ev.code == BTN_LEFT) {
+          if (ev.value) mouse_buttons |= 1; else mouse_buttons &= ~1;
+        } else if (ev.code == BTN_RIGHT) {
+          if (ev.value) mouse_buttons |= 2; else mouse_buttons &= ~2;
+        } else if (ev.code == BTN_MIDDLE) {
+          if (ev.value) mouse_buttons |= 4; else mouse_buttons &= ~4;
+        } else {
+          unsigned char k = convert_event_key_to_doom(ev.code);
+          if (k) {
+            *pressed = (ev.value != 0);
+            *doomKey = k;
+            return 1;
+          }
+        }
+      } else if (ev.type == EV_SYN) {
+        if (mouse_dx != 0 || mouse_dy != 0 || mouse_buttons != prev_mouse_buttons) {
+          event_t mouse_ev;
+          mouse_ev.type = ev_mouse;
+          mouse_ev.data1 = mouse_buttons;
+          mouse_ev.data2 = mouse_dx;
+          mouse_ev.data3 = mouse_dy;
+          mouse_ev.data4 = 0;
+          D_PostEvent(&mouse_ev);
+
+          mouse_dx = 0;
+          mouse_dy = 0;
+          prev_mouse_buttons = mouse_buttons;
+        }
+      }
     }
+  }
+
+  if (s_used_event_fd) {
     return 0;
   }
 

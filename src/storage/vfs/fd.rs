@@ -122,17 +122,15 @@ impl FdTable {
             let fb_file = crate::graphics::vfs::create_fb_file(flags);
             return Ok(self.alloc(fb_file));
         }
-        if path == b"/dev/kbd" || path == b"dev/kbd" {
-            let kbd_file = crate::arch::keyboard::create_kbd_file(flags);
-            return Ok(self.alloc(kbd_file));
-        }
+
         if path == b"/dev/dsp" || path == b"dev/dsp" {
             let dsp_file = crate::audio::vfs::create_dsp_file(flags);
             return Ok(self.alloc(dsp_file));
         }
-        if path == b"/dev/mouse" || path == b"dev/mouse" || path == b"/dev/input/mice" || path == b"dev/input/mice" {
-            let mouse_file = crate::arch::mouse::create_mouse_file(flags);
-            return Ok(self.alloc(mouse_file));
+
+        if path == b"/dev/input/event0" || path == b"dev/input/event0" || path == b"/dev/event0" {
+            let event_file = crate::input::event::create_event_file(flags);
+            return Ok(self.alloc(event_file));
         }
 
         

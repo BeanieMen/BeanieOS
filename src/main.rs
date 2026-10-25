@@ -9,6 +9,7 @@ use core::panic::PanicInfo;
 
 use multiboot2::BootInformation;
 
+mod net;
 mod arch;
 mod audio;
 mod console;
@@ -21,6 +22,7 @@ mod storage;
 mod syscall;
 mod task;
 mod tty;
+mod input;
 
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 
