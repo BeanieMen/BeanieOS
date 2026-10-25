@@ -10,11 +10,18 @@ BINS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(C_SRCS))
 
 ASM_SRC := src/crt0.s
 
-all: $(BINS) doom
+all: $(BINS) doom xfbdev
 
 doom:
 	@if [ -d doom/doomgeneric ]; then \
 		$(MAKE) -C doom/doomgeneric; \
+	fi
+
+xfbdev:
+	@if [ -d tinyxserver ]; then \
+		$(MAKE) -C tinyxserver Xfbdev; \
+		mkdir -p $(BUILD_DIR); \
+		cp tinyxserver/Xfbdev $(BUILD_DIR)/Xfbdev; \
 	fi
 
 $(BUILD_DIR)/%: src/%.c $(ASM_SRC) linker.ld include/syscall.h
@@ -22,9 +29,12 @@ $(BUILD_DIR)/%: src/%.c $(ASM_SRC) linker.ld include/syscall.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(ASM_SRC) $< -o $@
 
 clean:
-	rm -f $(BINS) $(BUILD_DIR)/doom
+	rm -f $(BINS) $(BUILD_DIR)/doom $(BUILD_DIR)/Xfbdev
 	@if [ -d doom/doomgeneric ]; then \
 		$(MAKE) -C doom/doomgeneric clean; \
 	fi
+	@if [ -d tinyxserver ]; then \
+		$(MAKE) -C tinyxserver clean; \
+	fi
 
-.PHONY: all clean doom
+.PHONY: all clean doom xfbdev

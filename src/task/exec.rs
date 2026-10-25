@@ -113,6 +113,16 @@ fn build_stack(
 
     let execfn = push_string(space, &mut at, path)?;
 
+    let mut envp_ptrs = Vec::with_capacity(envp.len());
+    for env in envp {
+        envp_ptrs.push(push_string(space, &mut at, env)?);
+    }
+
+    let mut argv_ptrs = Vec::with_capacity(argv.len());
+    for arg in argv {
+        argv_ptrs.push(push_string(space, &mut at, arg)?);
+    }
+
     let auxv = [
         (AT_PHDR, loaded.phdr_vaddr),
         (AT_PHENT, loaded.phdr_entry_size),
@@ -132,58 +142,39 @@ fn build_stack(
         (AT_EXECFN, execfn),
     ];
 
-    at -= (auxv.len() as u64 + 1) * 16;
-
-    for (index, (key, value)) in auxv.iter().enumerate() {
-        let slot = at + index as u64 * 16;
-
-        write_user(space, slot, &key.to_le_bytes())?;
-        write_user(space, slot + 8, &value.to_le_bytes())?;
-    }
-
-    let terminator = at + auxv.len() as u64 * 16;
-
-    write_user(space, terminator, &AT_NULL.to_le_bytes())?;
-    write_user(space, terminator + 8, &0u64.to_le_bytes())?;
-
-    // ensure (argc+argv+envp) is 16-byte aligned
-    let total_words = 1 + (argv.len() + 1) + (envp.len() + 1);
+    let total_words = 1 + (argv_ptrs.len() + 1) + (envp_ptrs.len() + 1) + (auxv.len() + 1) * 2;
     if !total_words.is_multiple_of(2) {
         at -= 8;
         write_user(space, at, &0u64.to_le_bytes())?;
     }
 
-    push_pointer_array(space, &mut at, envp)?;
-    push_pointer_array(space, &mut at, argv)?;
+    at -= (auxv.len() as u64 + 1) * 16;
+    for (index, (key, value)) in auxv.iter().enumerate() {
+        let slot = at + index as u64 * 16;
+        write_user(space, slot, &key.to_le_bytes())?;
+        write_user(space, slot + 8, &value.to_le_bytes())?;
+    }
+
+    let terminator = at + auxv.len() as u64 * 16;
+    write_user(space, terminator, &AT_NULL.to_le_bytes())?;
+    write_user(space, terminator + 8, &0u64.to_le_bytes())?;
+
+    at -= (envp_ptrs.len() as u64 + 1) * 8;
+    for (index, ptr) in envp_ptrs.iter().enumerate() {
+        write_user(space, at + index as u64 * 8, &ptr.to_le_bytes())?;
+    }
+    write_user(space, at + envp_ptrs.len() as u64 * 8, &0u64.to_le_bytes())?;
+
+    at -= (argv_ptrs.len() as u64 + 1) * 8;
+    for (index, ptr) in argv_ptrs.iter().enumerate() {
+        write_user(space, at + index as u64 * 8, &ptr.to_le_bytes())?;
+    }
+    write_user(space, at + argv_ptrs.len() as u64 * 8, &0u64.to_le_bytes())?;
 
     at -= 8;
-    write_user(space, at, &(argv.len() as u64).to_le_bytes())?;
+    write_user(space, at, &(argv_ptrs.len() as u64).to_le_bytes())?;
 
     Ok(at)
-}
-
-fn push_pointer_array(
-    space: &mut AddressSpace,
-    at: &mut u64,
-    items: &[Vec<u8>],
-) -> Result<u64, &'static str> {
-    let mut addresses = Vec::with_capacity(items.len());
-
-    for item in items {
-        addresses.push(push_string(space, at, item)?);
-    }
-
-    let base = *at - (items.len() as u64 + 1) * 8;
-
-    for (index, address) in addresses.iter().enumerate() {
-        write_user(space, base + index as u64 * 8, &address.to_le_bytes())?;
-    }
-
-    write_user(space, base + items.len() as u64 * 8, &0u64.to_le_bytes())?;
-
-    *at = base;
-
-    Ok(base)
 }
 
 fn push_string(space: &mut AddressSpace, at: &mut u64, bytes: &[u8]) -> Result<u64, &'static str> {

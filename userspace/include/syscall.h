@@ -78,6 +78,25 @@ struct sockaddr_un {
 #define AF_UNIX 1
 #define SOCK_STREAM 1
 
+#define EV_SYN 0x00
+#define EV_KEY 0x01
+#define EV_REL 0x02
+#define REL_X 0x00
+#define REL_Y 0x01
+#define BTN_LEFT 0x110
+#define BTN_RIGHT 0x111
+#define BTN_MIDDLE 0x112
+
+struct input_event {
+  struct {
+      long tv_sec;
+      long tv_usec;
+  } time;
+  unsigned short type;
+  unsigned short code;
+  int value;
+};
+
 struct timespec {
   long tv_sec;
   long tv_nsec;

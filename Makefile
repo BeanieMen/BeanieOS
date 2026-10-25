@@ -22,12 +22,15 @@ USER_BIN_DIR := userspace/bin
 USER_HDRS := userspace/include/syscall.h userspace/linker.ld userspace/Makefile
 
 
-.PHONY: all setup check kernel disk run symbols clean userbins
+.PHONY: all setup check kernel disk run symbols clean userbins xfbdev tinyxserver
 
 all: $(DISK)
 
 userbins:
 	$(MAKE) -C userspace
+
+xfbdev tinyxserver:
+	$(MAKE) -C userspace xfbdev
 
 setup:
 	rustup toolchain install nightly
@@ -64,9 +67,18 @@ $(DISK): kernel userbins
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/limine.conf ::limine.conf
 	mmd -i $@@@$(KERNEL_OFFSET) ::boot
+	mmd -i $@@@$(KERNEL_OFFSET) ::tmp
 	mcopy -i $@@@$(KERNEL_OFFSET) $(KERNEL) ::boot/kernel
 	for bin in $(USER_BIN_DIR)/*; do \
 		mcopy -i $@@@$(KERNEL_OFFSET) "$$bin" ::`basename "$$bin"` || exit 1; \
+	done
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share/fonts
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share/fonts/X11
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share/fonts/X11/misc
+	for f in userspace/fonts/*; do \
+		mcopy -i $@@@$(KERNEL_OFFSET) "$$f" "::usr/share/fonts/X11/misc/`basename "$$f"`" || exit 1; \
 	done
 	
 

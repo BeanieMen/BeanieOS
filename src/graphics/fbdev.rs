@@ -1,5 +1,9 @@
 pub const FBIOGET_VSCREENINFO: u64 = 0x4600;
+pub const FBIOPUT_VSCREENINFO: u64 = 0x4601;
 pub const FBIOGET_FSCREENINFO: u64 = 0x4602;
+pub const FBIOGETCMAP: u64 = 0x4604;
+pub const FBIOPUTCMAP: u64 = 0x4605;
+pub const FBIOBLANK: u64 = 0x4611;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]

@@ -162,6 +162,10 @@ pub extern "C" fn syscall_c(frame: *mut SyscallFrame) {
     if number != crate::syscall::numbers::Syscall::RtSigreturn as u64 {
         handle_pending_signals(frame);
     }
+
+    if crate::task::scheduler::is_reschedule_requested() {
+        crate::task::scheduler::yield_now();
+    }
 }
 
 fn handle_pending_signals(frame: &mut SyscallFrame) {

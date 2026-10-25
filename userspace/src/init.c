@@ -477,6 +477,12 @@ static void cmd_run(int argc, char **argv) {
   char *child_argv[16];
   char *envp[1] = {0};
 
+  int background = 0;
+  if (argc > 2 && strcmp(argv[argc - 1], "&") == 0) {
+    background = 1;
+    argc--;
+  }
+
   resolve_path(argv[1], full);
 
   child_argv[0] = full;
@@ -497,14 +503,24 @@ static void cmd_run(int argc, char **argv) {
 #endif
 
   if (pid == 0) {
-    int child_pid = (int)sys_getpid();
-    sys_ioctl(0, TIOCSPGRP, &child_pid);
+    if (!background) {
+      int child_pid = (int)sys_getpid();
+      sys_ioctl(0, TIOCSPGRP, &child_pid);
+    }
     long ret = sys_execve(full, child_argv, envp);
     print("run: execve failed: ");
     print_num(ret);
     print("\n");
     sys_exit(1);
   }
+
+  if (background) {
+    print("[background pid ");
+    print_num(pid);
+    print("]\n");
+    return;
+  }
+
   int p = (int)pid;
   sys_ioctl(0, TIOCSPGRP, &p);
   int status = 0;
