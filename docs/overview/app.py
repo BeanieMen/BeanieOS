@@ -1,11 +1,40 @@
 import os, sqlite3, secrets
 from flask import Flask, render_template, request, redirect, session, g
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("COOKIE_SECURE")=="1"
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
+
+def get_db():
+    if "db" not in g:
+        g.db = sqlite3.connect(DB_PATH)
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+@app.teardown_appcontext
+def close_db(exception):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
+
+def init_db():
+    db = sqlite3.connect(DB_PATH)
+    db.execute("""CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_harsh TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
+    db.commit()
+    db.close()
+
+init_db()
 
 @app.route("/")
 def ahome():

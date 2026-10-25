@@ -20,3 +20,6 @@ userspace/doom/doomgeneric/build/
 userspace/tinyxserver/Xfbdev
 userspace/tinyxserver/**/*.a
 !userspace/tinyxserver/lib/*.a
+
+
+users.db*
