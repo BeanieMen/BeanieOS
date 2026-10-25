@@ -1,14 +1,16 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
+use pc_keyboard::KeyCode::E;
 use spin::mutex::Mutex;
 
+use crate::input::event::EVENT_FILE_OPS;
 use crate::net::unix::SocketState::Closed;
 use crate::net::unix::UnixSocket;
 use crate::net::vfs::{SOCKET_REGISTRY, create_connected_pair, create_socket_file};
 use crate::syscall::entry::{copy_from_user, copy_to_user};
-use crate::task::process::with_current_fds;
-use crate::task::scheduler::yield_now;
+use crate::task::process::{has_pending_signals, with_current_fds};
+use crate::task::scheduler::{sleep, yield_now};
 use crate::{
     arch::interrupts::{consts::TICK_MS, vectors::ticks},
     kdebug, kerror,
@@ -71,6 +73,9 @@ pub(crate) fn dispatch(
         Syscall::Connect => sys_connect(args[0], args[1], args[2]),
         Syscall::Accept => sys_accept(args[0], args[1], args[2], 0),
         Syscall::Accept4 => sys_accept(args[0], args[1], args[2], args[3]),
+        Syscall::Dup => sys_dup(args[0]),
+        Syscall::Dup2 => sys_dup2(args[0], args[1]),
+        Syscall::Dup3 => sys_dup3(args[0], args[1], args[2]),
         Syscall::Bind => sys_bind(args[0], args[1], args[2]),
         Syscall::Listen => sys_listen(args[0], args[1]),
         Syscall::Socketpair => sys_socketpair(args[0], args[1], args[2], args[3]),
@@ -93,6 +98,35 @@ pub(crate) fn dispatch(
 struct Timespec {
     tv_sec: i64,
     tv_nsec: i64,
+}
+
+fn sys_dup(oldfd: u64) -> SyscallResult {
+    let file = process::with_current_fds(|fds| fds.get(oldfd).cloned())
+            .ok_or(Errno::BadFd)?
+            .map_err(|_| Errno::BadFd)?;
+        let newfd = process::with_current_fds(|fds| fds.alloc(file))
+            .ok_or(Errno::BadFd)?;
+        Ok(newfd)
+}
+
+
+fn sys_dup2(oldfd: u64, newfd: u64) -> SyscallResult {
+    let Some(result) = with_current_fds(|fds| fds.dup2(oldfd,newfd)) else {
+        return Err(Errno::BadFd);
+    };
+
+    result.map_err(|_| Errno::BadFd)
+}
+
+fn sys_dup3(oldfd: u64, newfd: u64, flags: u64) -> SyscallResult {
+    if oldfd == newfd {
+        return Err(Errno::Invalid);
+    }
+    const O_CLOEXEC: u64 = 0x80000;
+    if flags & !O_CLOEXEC != 0 {
+        return Err(Errno::Invalid);
+    }
+    sys_dup2(oldfd, newfd)
 }
 
 fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> SyscallResult {
@@ -433,7 +467,15 @@ fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
             continue;
         }
 
-        let n = sys_read(fd, base, len)?;
+        let n =  match sys_read(fd, base, len) {
+            Ok(n) => n,
+            Err(e) => {
+                if total_read > 0 {
+                    return Ok(total_read)
+                }
+                return Err(e)
+            }
+        };
 
         total_read += n;
         if n < len {
@@ -830,14 +872,18 @@ fn sys_wait4(pid: i64, wstatus: u64, options: u64, _rusage: u64) -> SyscallResul
     match child {
         Some((child_pid, code)) => {
             if wstatus != 0 {
-                let status = (code & 0xff) << 8;
+                let status = if code >= 128 && code < 256 {
+                    (code - 128) & 0x7f
+                } else {
+                    (code & 0xff) << 8
+                };
                 if entry::copy_to_user(wstatus, &status.to_le_bytes()).is_err() {
                     return Err(Errno::Fault);
                 }
             }
             Ok(child_pid.as_u64())
         }
-        None => Ok(0), // WNOHANG: child still running
+        None => Ok(0),
     }
 }
 const MAX_ARGS: usize = 64;
@@ -933,21 +979,34 @@ pub(crate) fn wait_for_key() {
 }
 
 fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
-    if nfds == 0 {
-        return Ok(0);
-    }
-    if nfds > 1024 {
-        return Err(Errno::Invalid);
-    }
-
     let timeout_ms = timeout as i32;
     let start_ticks = crate::arch::interrupts::vectors::ticks();
     let timeout_ticks = if timeout_ms < 0 {
         u64::MAX
     } else {
-        (timeout_ms as u64).div_ceil(10)
+        timeout_ms as u64
     };
-
+    if nfds == 0 {
+        if timeout_ms > 0 {
+           while ticks().saturating_sub(start_ticks) < timeout_ticks {
+               if has_pending_signals() {
+                   return Err(Errno::Intr)
+               }
+               sleep(1);
+           }
+        } else if timeout_ms < 0 {
+            loop {
+                if has_pending_signals() {
+                    return Err(Errno::Intr)
+                }
+                sleep(1);
+            }
+        }
+        return Ok(0);
+    }
+    if nfds > 1024 {
+        return Err(Errno::Invalid);
+    }
     loop {
         let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
         let mut ready = 0u64;
@@ -976,13 +1035,20 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
                             let inode = file.inode.lock();
                             (inode.file_ops, inode.id)
                         };
-                        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 6 {
+                        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 8 {
                             // /dev/input/event0
                             let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
                             if has_events && (events & 1 != 0) {
                                 revents |= 1;
                             }
-                        } else if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+                        } else if core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8 {
+                            let has_mouse = !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
+                            if has_mouse && (events & 1 != 0) {
+                                revents |= 1;
+                            }
+                        }
+
+                        else if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
                             if let Some(sock) =
                                 crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
                             {
@@ -1066,7 +1132,7 @@ fn check_fd_ready(fd: u64, for_write: bool) -> bool {
             }
             return !crate::tty::VT2_TTY.lock().queue.is_empty();
         }
-        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 6 {
+        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 8 {
             // /dev/input/event0
             return !for_write && !crate::input::event::EVENT_QUEUE.lock().is_empty();
         }
@@ -1365,7 +1431,7 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
     let truncate = (flags & O_TRUNC) != 0;
     let append = (flags & O_APPEND) != 0;
     let directory = (flags & O_DIRECTORY) != 0;
-    let nonblock = (flags & 0x800) != 0 || (flags & 0x4) != 0;
+    let nonblock = (flags & 0x800) != 0;
     let exclusive = (flags & 0x80) != 0;
 
     let open_flags = OpenFlags {
@@ -1385,7 +1451,7 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
 
     match result {
         Ok(fd) => Ok(fd),
-        Err("file already exists") => Err(Errno::Invalid),
+        Err("file already exists") => Err(Errno::Exist),
         Err("not a directory") => Err(Errno::NotDir),
         Err("is a directory") => Err(Errno::IsDir),
         Err(_) => Err(Errno::NoEntry),
@@ -1485,6 +1551,8 @@ fn sys_mkdir(path: u64) -> SyscallResult {
 
     match result {
         Ok(()) => Ok(0),
+        Err("file already exists") => Err(Errno::Exist),
+        Err("not a directory") => Err(Errno::NotDir),
         Err(_) => Err(Errno::NoEntry),
     }
 }
@@ -1566,6 +1634,8 @@ fn sys_rmdir(path: u64) -> SyscallResult {
 
     match result {
         Ok(()) => Ok(0),
+        Err("directory not empty") => Err(Errno::NotEmpty),
+        Err("not a directory") => Err(Errno::NotDir),
         Err(_) => Err(Errno::NoEntry),
     }
 }

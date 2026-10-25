@@ -783,6 +783,10 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
             return Err("not a directory");
         }
 
+        if self.find_entry(inode.cluster, name).is_ok() {
+            return Err("file already exists");
+        }
+
         let parent_cluster = inode.cluster;
 
         let cluster = self.geom.allocate_cluster(&self.device)?;

@@ -150,16 +150,27 @@ impl FdTable {
             return Ok(self.alloc(event_file));
         }
 
-        if path == b"/dev/mouse" || path == b"dev/mouse"
-            || path == b"/dev/psaux" || path == b"dev/psaux"
-            || path == b"/dev/input/mice" || path == b"dev/input/mice"
-            || path == b"/dev/input/mouse0" || path == b"dev/input/mouse0"
+        if path == b"/dev/mouse"
+            || path == b"dev/mouse"
+            || path == b"/dev/psaux"
+            || path == b"dev/psaux"
+            || path == b"/dev/input/mice"
+            || path == b"dev/input/mice"
+            || path == b"/dev/input/mouse0"
+            || path == b"dev/input/mouse0"
         {
             let mouse_file = crate::input::mouse::create_mouse_file(flags);
             return Ok(self.alloc(mouse_file));
         }
 
-        if path == b"/dev/tty1" || path == b"dev/tty1" || path == b"/dev/tty0" || path == b"dev/tty0" || path == b"/dev/tty" || path == b"dev/tty" || path == b"/dev/console" {
+        if path == b"/dev/tty1"
+            || path == b"dev/tty1"
+            || path == b"/dev/tty0"
+            || path == b"dev/tty0"
+            || path == b"/dev/tty"
+            || path == b"dev/tty"
+            || path == b"/dev/console"
+        {
             let tty_file = crate::tty::vfs::create_tty_file(flags);
             return Ok(self.alloc(tty_file));
         }
@@ -169,7 +180,6 @@ impl FdTable {
             return Ok(self.alloc(vt2_file));
         }
 
-        
         let resolved = match self.mounts.resolve(path) {
             Ok(dentry) => {
                 if flags.create && flags.exclusive {
@@ -178,7 +188,7 @@ impl FdTable {
                 dentry
             }
             Err(_) if flags.create => {
-                self.touch(path)?;
+                let _ = self.touch(path)?;
                 self.mounts.resolve(path)?
             }
             Err(e) => return Err(e),
@@ -203,6 +213,7 @@ impl FdTable {
 
             if flags.truncate && inode_guard.file_type == FileType::Regular {
                 inode_guard.size = 0;
+                let _ = inode_guard.file_ops.write(&mut inode_guard, 0, &[]);
             }
         }
 

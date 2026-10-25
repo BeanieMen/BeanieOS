@@ -7,10 +7,17 @@ macro_rules! fault_handler {
         extern "x86-interrupt" fn $name(stack_frame: x86_64::structures::idt::InterruptStackFrame) {
             crate::kerror!(concat!("EXCEPTION: ", $label, "\n{:#?}"), stack_frame);
             if stack_frame.code_segment.0 & 3 == 3 {
-                crate::task::process::exit(crate::task::identity::current_pid(), 128 + $sig);
-                crate::task::scheduler::exit();
+                let handled =
+                    crate::task::process::send_signal(crate::task::identity::current_pid(), $sig);
+                if !handled {
+                    crate::task::process::exit(crate::task::identity::current_pid(), 128 + $sig);
+                    crate::task::scheduler::exit();
+                }
             }
-            panic!(concat!("KERNEL FAULT: ", $label, " in ring 0: {:#?}"), stack_frame);
+            panic!(
+                concat!("KERNEL FAULT: ", $label, " in ring 0: {:#?}"),
+                stack_frame
+            );
         }
     };
 }
@@ -27,13 +34,21 @@ macro_rules! fault_handler_with_err {
                 stack_frame
             );
             if stack_frame.code_segment.0 & 3 == 3 {
-                crate::task::process::exit(crate::task::identity::current_pid(), 128 + $sig);
-                crate::task::scheduler::exit();
+                let handled =
+                    crate::task::process::send_signal(crate::task::identity::current_pid(), $sig);
+
+                if !handled {
+                    crate::task::process::exit(crate::task::identity::current_pid(), 128 + $sig);
+                    crate::task::scheduler::exit();
+                }
             }
             panic!(
-                concat!("KERNEL FAULT: ", $label, " in ring 0 (error code {:#x}): {:#?}"),
-                error_code,
-                stack_frame
+                concat!(
+                    "KERNEL FAULT: ",
+                    $label,
+                    " in ring 0 (error code {:#x}): {:#?}"
+                ),
+                error_code, stack_frame
             );
         }
     };

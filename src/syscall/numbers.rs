@@ -79,4 +79,7 @@ syscalls! {
      Chown = 92,
      Fchown = 93,
      Accept4 = 288,
+     Dup = 32,
+     Dup2 = 33,
+     Dup3 = 292,
 }

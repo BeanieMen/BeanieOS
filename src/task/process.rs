@@ -3,11 +3,7 @@ use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    arch::lock::InterruptMutex,
-    memory::{allocator::alloc_frame, mmu},
-    paging::phys_to_direct,
-    storage::vfs::fd::FdTable,
-    task::{
+    arch::lock::InterruptMutex, memory::{allocator::alloc_frame, mmu::{self, free_user_tables}}, paging::phys_to_direct, storage::vfs::fd::FdTable, task::{
         identity::{self, ProcessId, ThreadId},
         signal::SigAction,
     },
@@ -362,7 +358,7 @@ impl ProcessManager {
     }
 
     pub(crate) fn reap(&mut self, pid: ProcessId) -> Option<i32> {
-        let process = self.processes.get(&pid)?;
+        let process = self.processes.get(&pid).cloned()?;
 
         let code = match process.lock().status {
             ProcessStatus::Zombie(code) => code,
@@ -370,7 +366,9 @@ impl ProcessManager {
         };
 
         self.processes.remove(&pid);
-
+        if let Some(space_frame) = process.lock().space {
+                    unsafe { free_user_tables(space_frame) };
+            }
         Some(code)
     }
 }

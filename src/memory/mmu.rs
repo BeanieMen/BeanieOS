@@ -4,14 +4,15 @@ use multiboot2::MemoryMapTag;
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 use x86_64::registers::control::{Cr3, Cr3Flags};
+use x86_64::structures::paging::PageTable;
 use x86_64::structures::paging::{PageTableFlags, PhysFrame};
 
 use crate::arch::lock::InterruptMutex;
 use crate::memory::allocator::{alloc_frame, free_frame, init_frames, kernel_phys_range};
 use crate::memory::heap::{HEAP_SIZE, HEAP_START};
 use crate::paging::{
-    DIRECT_MAP_P4_INDEX, ENTRIES_PER_TABLE, ENTRY_SIZE, HUGE_PAGE_SIZE, KERNEL_P4_INDEX, PAGE_SIZE, PTE_ADDR_MASK,
-    PTE_HUGE, PTE_PRESENT, PTE_USER, PTE_WRITABLE, phys_to_direct,
+    DIRECT_MAP_P4_INDEX, ENTRIES_PER_TABLE, ENTRY_SIZE, HUGE_PAGE_SIZE, KERNEL_P4_INDEX, PAGE_SIZE,
+    PTE_ADDR_MASK, PTE_HUGE, PTE_PRESENT, PTE_USER, PTE_WRITABLE, phys_to_direct,
 };
 
 pub(crate) const KERNEL_RW: PageTableFlags =
@@ -104,7 +105,32 @@ fn split_huge_at(slot: u64, virt: u64) -> Result<u64, MemoryError> {
 
     Ok(base)
 }
+pub(crate) unsafe fn free_user_tables(p4_frame: PhysFrame) {
+    let p4 = unsafe { &mut *(phys_to_direct(p4_frame.start_address().as_u64()) as *mut PageTable) };
 
+    for i in 0..256 {
+        if p4[i].flags().contains(PageTableFlags::PRESENT) {
+            let p3_frame = p4[i].frame().unwrap();
+            let p3 = unsafe {
+                &mut *(phys_to_direct(p3_frame.start_address().as_u64()) as *mut PageTable)
+            };
+
+            for j in 0..512 {
+                if p3[j].flags().contains(PageTableFlags::PRESENT)
+                    && !p3[j].flags().contains(PageTableFlags::HUGE_PAGE)
+                {
+                    let p2_frame = p3[j].frame().unwrap();
+                    {
+                        crate::memory::allocator::free_frame(p2_frame.start_address().as_u64())
+                    };
+                }
+            }
+
+             { crate::memory::allocator::free_frame(p3_frame.start_address().as_u64()) };
+        }
+    }
+    { crate::memory::allocator::free_frame(p4_frame.start_address().as_u64()) };
+}
 pub(crate) struct Mapper {
     root: PhysFrame,
 }
@@ -255,7 +281,9 @@ pub(crate) fn try_translate_in(root: u64, virt: u64, require_write: bool) -> Res
         return Err(());
     }
 
-    Ok(PhysFrame::containing_address(PhysAddr::new(leaf & PTE_ADDR_MASK)))
+    Ok(PhysFrame::containing_address(PhysAddr::new(
+        leaf & PTE_ADDR_MASK,
+    )))
 }
 
 pub(crate) fn check_user_range(start: u64, len: u64, require_write: bool) -> Result<(), ()> {
@@ -434,7 +462,6 @@ pub(crate) fn unmap_boot_identity() {
 }
 
 impl AddressSpace {
-
     pub(crate) fn clone_from_root(root: PhysFrame) -> Result<Self, MemoryError> {
         let new_space = Self::new_with_kernel()?;
         Self::clone_level(root.start_address().as_u64(), new_space.root_addr(), 0)?;
