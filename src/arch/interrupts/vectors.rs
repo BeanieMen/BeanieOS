@@ -44,6 +44,7 @@ extern "C" fn timer_interrupt_rust(cs: u64) {
             }
         }
     }
+    crate::net::stack::poll();
     crate::task::scheduler::account_tick();
     unsafe {
         pic::eoi();
