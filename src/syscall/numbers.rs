@@ -51,6 +51,8 @@ syscalls! {
     Socket = 41,
     Connect = 42,
     Accept = 43,
+    Sendto = 44,
+    Recvfrom = 45,
     Shutdown = 48,
     Bind = 49,
     Listen = 50,

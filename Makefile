@@ -67,10 +67,31 @@ $(DISK): kernel userbins
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/limine.conf ::limine.conf
 	mmd -i $@@@$(KERNEL_OFFSET) ::boot
+	mmd -i $@@@$(KERNEL_OFFSET) ::bin
+	mmd -i $@@@$(KERNEL_OFFSET) ::sbin
+	mmd -i $@@@$(KERNEL_OFFSET) ::etc
+	mmd -i $@@@$(KERNEL_OFFSET) ::etc/apk
+	mmd -i $@@@$(KERNEL_OFFSET) ::lib
+	mmd -i $@@@$(KERNEL_OFFSET) ::lib/apk
+	mmd -i $@@@$(KERNEL_OFFSET) ::lib/apk/db
+	mmd -i $@@@$(KERNEL_OFFSET) ::var
+	mmd -i $@@@$(KERNEL_OFFSET) ::var/cache
+	mmd -i $@@@$(KERNEL_OFFSET) ::var/cache/apk
+	mmd -i $@@@$(KERNEL_OFFSET) ::dev
+	mmd -i $@@@$(KERNEL_OFFSET) ::proc
+	mmd -i $@@@$(KERNEL_OFFSET) ::sys
+	mmd -i $@@@$(KERNEL_OFFSET) ::root
+	mmd -i $@@@$(KERNEL_OFFSET) ::home
 	mmd -i $@@@$(KERNEL_OFFSET) ::tmp
+	
+	echo "nameserver 10.0.2.3" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/resolv.conf
+	printf "http://dl-cdn.alpinelinux.org/alpine/v3.20/main\nhttp://dl-cdn.alpinelinux.org/alpine/v3.20/community\n" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/apk/repositories
+	echo "root:x:0:0:root:/root:/bin/sh" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/passwd
+	echo "127.0.0.1 localhost" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/hosts
+
 	mcopy -i $@@@$(KERNEL_OFFSET) $(KERNEL) ::boot/kernel
 	for bin in $(USER_BIN_DIR)/*; do \
-		mcopy -i $@@@$(KERNEL_OFFSET) "$$bin" ::`basename "$$bin"` || exit 1; \
+		mcopy -i $@@@$(KERNEL_OFFSET) "$$bin" "::bin/`basename "$$bin"`" || exit 1; \
 	done
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share
@@ -84,7 +105,7 @@ $(DISK): kernel userbins
 	for pkg in userspace/packages/*; do \
 		[ -f "$$pkg" ] && mcopy -i $@@@$(KERNEL_OFFSET) "$$pkg" "::packages/`basename "$$pkg"`" || true; \
 	done
-	
+
 
 disk: $(DISK)
 

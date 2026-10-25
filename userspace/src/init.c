@@ -366,7 +366,8 @@ static void cmd_pid(void) {
 
 static void print_name(const char *name, int len) {
   int actual_len = 0;
-  while (actual_len < len && name[actual_len]) actual_len++;
+  while (actual_len < len && name[actual_len])
+    actual_len++;
   if (actual_len > 0) {
     sys_write(1, name, actual_len);
   }
@@ -488,7 +489,22 @@ static void cmd_run(int argc, char **argv) {
   }
 
   resolve_path(argv[1], full);
-
+  long test_fd = sys_open(full, 0);
+  if (test_fd < 0 && argv[1][0] != '/' && argv[1][0] != '.') {
+    char path[PATH_MAX];
+    resolve_path("/bin", path);
+    int len = (int)strlen(path);
+    if (len < PATH_MAX - 1) {
+      path[len++] = '/';
+      int i = 0;
+      while (argv[1][i] && len < PATH_MAX - 1) {
+        path[len++] = argv[1][i++];
+      }
+      path[len] = '\0';
+      resolve_path(path, full);
+      test_fd = sys_open(full, 0);
+    }
+  }
   child_argv[0] = full;
 
   int i = 2;
@@ -542,9 +558,7 @@ static void cmd_run(int argc, char **argv) {
   }
 }
 
-static void cmd_clear(void) {
-  print("\033[2J\033[H");
-}
+static void cmd_clear(void) { print("\033[2J\033[H"); }
 
 static void dispatch(char **argv, int argc) {
   const char *cmd = argv[0];
@@ -627,7 +641,8 @@ int main(void) {
         "via execve\n");
   print("do run hi to test elf loading and execution\n");
   print("You can play Doom with: run doom\n");
-  print("KEYBOARD controls only: WASD/Arrows to move, Ctrl/F to fire, Space to use, Esc for menu\n");
+  print("KEYBOARD controls only: WASD/Arrows to move, Ctrl/F to fire, Space to "
+        "use, Esc for menu\n");
   print("Type 'help' for the command list.\n\n");
 
   char *argv[MAX_ARGS];

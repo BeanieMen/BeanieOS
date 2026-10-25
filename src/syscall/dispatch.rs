@@ -3,6 +3,8 @@ use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
 use spin::mutex::Mutex;
 
+use crate::net::inet::InetType::{Tcp, Udp};
+use crate::net::inet::{InetSocket, create_inet_socket_file};
 use crate::net::unix::SocketState::Closed;
 use crate::net::unix::UnixSocket;
 use crate::net::vfs::{SOCKET_REGISTRY, create_connected_pair, create_socket_file};
@@ -52,7 +54,9 @@ pub(crate) fn dispatch(
         Syscall::Writev => sys_writev(args[0], args[1], args[2]),
         Syscall::Access => sys_access(args[0], args[1]),
         Syscall::Pipe => sys_pipe(args[0]),
-        Syscall::Select | Syscall::Pselect6 => sys_select(args[0], args[1], args[2], args[3], args[4]),
+        Syscall::Select | Syscall::Pselect6 => {
+            sys_select(args[0], args[1], args[2], args[3], args[4])
+        }
         Syscall::SchedYield => sys_yield(),
         Syscall::Madvise => Ok(0),
         Syscall::Dup => sys_dup(args[0]),
@@ -63,6 +67,8 @@ pub(crate) fn dispatch(
         Syscall::Socket => sys_socket(args[0], args[1], args[2]),
         Syscall::Connect => sys_connect(args[0], args[1], args[2]),
         Syscall::Accept | Syscall::Accept4 => sys_accept(args[0], args[1], args[2], args[3]),
+        Syscall::Sendto => sys_write(args[0], args[1], args[2]),
+        Syscall::Recvfrom => sys_read(args[0], args[1], args[2]),
         Syscall::Shutdown => sys_shutdown(args[0], args[1]),
         Syscall::Bind => sys_bind(args[0], args[1], args[2]),
         Syscall::Listen => sys_listen(args[0], args[1]),
@@ -183,7 +189,8 @@ fn sys_ftruncate(fd: u64, length: u64) -> SyscallResult {
         inode.size = length;
         let _ = inode.file_ops.write(&mut inode, length, &[]);
         Ok(0)
-    }).ok_or(Errno::BadFd)?
+    })
+    .ok_or(Errno::BadFd)?
 }
 
 fn sys_rename(old_ptr: u64, new_ptr: u64) -> SyscallResult {
@@ -201,7 +208,8 @@ fn sys_rename(old_ptr: u64, new_ptr: u64) -> SyscallResult {
     with_current_fds(|fds| {
         let _ = fds.unlink(&new_res);
         Ok(0)
-    }).ok_or(Errno::BadFd)?
+    })
+    .ok_or(Errno::BadFd)?
 }
 
 fn sys_symlink(target: u64, linkpath: u64) -> SyscallResult {
@@ -213,20 +221,26 @@ fn sys_symlink(target: u64, linkpath: u64) -> SyscallResult {
     };
     let link_res = resolve_relative_path(&link);
     with_current_fds(|fds| {
-        let fd = fds.open(&link_res, OpenFlags {
-            read: false,
-            write: true,
-            create: true,
-            truncate: true,
-            append: false,
-            directory: false,
-            nonblock: false,
-            exclusive: true,
-        }).map_err(|_| Errno::Exist)?;
+        let fd = fds
+            .open(
+                &link_res,
+                OpenFlags {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                    append: false,
+                    directory: false,
+                    nonblock: false,
+                    exclusive: true,
+                },
+            )
+            .map_err(|_| Errno::Exist)?;
         let _ = fds.write(fd, &tgt);
         let _ = fds.close(fd);
         Ok(0)
-    }).ok_or(Errno::BadFd)?
+    })
+    .ok_or(Errno::BadFd)?
 }
 
 fn sys_sysinfo(info_ptr: u64) -> SyscallResult {
@@ -343,19 +357,21 @@ fn sys_newfstatat(dirfd: u64, path_ptr: u64, stat_buf: u64, _flags: u64) -> Sysc
 
     let resolved_path = resolve_relative_path(&path);
     let open_flags = OpenFlags::READ;
-    let fd = with_current_fds(|fds| fds.open(&resolved_path, open_flags)).ok_or(Errno::BadFd)?.map_err(|_| Errno::NoEntry)?;
+    let fd = with_current_fds(|fds| fds.open(&resolved_path, open_flags))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
     let res = sys_fstat(fd, stat_buf);
     let _ = with_current_fds(|fds| fds.close(fd));
     res
 }
 
-fn sys_getcwd(buf_ptr: u64, size: u64) -> SyscallResult { 
+fn sys_getcwd(buf_ptr: u64, size: u64) -> SyscallResult {
     let cwd = b"/\0";
     if size < cwd.len() as u64 {
         return Err(Errno::Range);
     }
 
-    copy_to_user(buf_ptr,cwd).map_err(|_| Errno::Fault)?;
+    copy_to_user(buf_ptr, cwd).map_err(|_| Errno::Fault)?;
     Ok(buf_ptr)
 }
 
@@ -555,16 +571,36 @@ fn sys_shutdown(fd: u64, _how: u64) -> SyscallResult {
     Ok(0)
 }
 fn sys_socket(domain: u64, type_: u64, _proto: u64) -> SyscallResult {
-    if (domain != 1 && domain != 2) || (type_ & 0xF) != 1 {
-        return Err(Errno::Invalid);
+    let base_type = type_ & 0xF;
+    if domain == 1 {
+        if base_type != 1 && base_type != 2 {
+            return Err(Errno::Invalid);
+        }
+        let sock = Arc::new(Mutex::new(UnixSocket::new()));
+        let mut file = create_socket_file(sock);
+        if (type_ & 0x800) != 0 {
+            file.flags.nonblock = true;
+        }
+        let fd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
+        return Ok(fd);
     }
-    let sock = Arc::new(Mutex::new(UnixSocket::new()));
-    let mut file = create_socket_file(sock);
-    if (type_ & 0x800) != 0 {
-        file.flags.nonblock = true;
+    if domain == 2 {
+        let sock_type = match base_type {
+            1 => Tcp,
+            2 => Udp,
+            _ => return Err(Errno::Invalid),
+        };
+        let sock = Arc::new(Mutex::<InetSocket>::new(crate::net::inet::InetSocket::new(
+            sock_type,
+        )));
+        let mut file = create_inet_socket_file(sock);
+        if (type_ & 0x800) != 0 {
+            file.flags.nonblock = true;
+        }
+        let fd = with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
+        return Ok(fd);
     }
-    let fd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
-    Ok(fd)
+    Err(Errno::Invalid)
 }
 
 fn sys_bind(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
@@ -573,8 +609,9 @@ fn sys_bind(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
 
     let family = u16::from_le_bytes([raw_addr[0], raw_addr[1]]);
     if family == 2 {
-        let sock = get_socket_by_fd(fd)?;
-        sock.lock().bound_path = Some(alloc::vec![2]);
+        let inet_sock = get_inet_socket_by_fd(fd)?;
+        let port = u16::from_be_bytes([raw_addr[2], raw_addr[3]]);
+        inet_sock.lock().bound_port = port;
         return Ok(0);
     }
 
@@ -675,6 +712,55 @@ fn sys_listen(fd: u64, backlog: u64) -> SyscallResult {
 fn sys_connect(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
     let mut raw_addr = [0u8; 110];
     entry::copy_from_user(&mut raw_addr, addr_ptr).map_err(|_| Errno::Fault)?;
+    let family = u16::from_le_bytes([raw_addr[0], raw_addr[1]]);
+    if family == 2 {
+        let inet_sock = get_inet_socket_by_fd(fd)?;
+        let port = u16::from_be_bytes([raw_addr[2], raw_addr[3]]);
+        let ip = [raw_addr[4], raw_addr[5], raw_addr[6], raw_addr[7]];
+        let endpoint = smoltcp::wire::IpEndpoint::new(
+            smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::new(ip[0], ip[1], ip[2], ip[3])),
+            port,
+        );
+
+        let rx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0u8; 16384]);
+        let tx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0u8; 16384]);
+        let tcp_socket = smoltcp::socket::tcp::Socket::new(rx_buffer, tx_buffer);
+
+        let local_port = 49152 + (crate::arch::interrupts::vectors::ticks() % 16384) as u16;
+        let handle = {
+            let mut guard = crate::net::stack::NET_STATE.lock();
+            let state = guard.as_mut().ok_or(Errno::ConnRefused)?;
+            let h = state.sockets.add(tcp_socket);
+            let s = state.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h);
+            s.connect(state.iface.context(), endpoint, local_port)
+                .map_err(|_| Errno::ConnRefused)?;
+            h
+        };
+        inet_sock.lock().handle = Some(handle);
+        inet_sock.lock().remote_endpoint = Some(endpoint);
+
+        loop {
+            crate::net::stack::poll();
+            {
+                let mut guard = crate::net::stack::NET_STATE.lock();
+                if let Some(state) = guard.as_mut() {
+                    let s = state
+                        .sockets
+                        .get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                    match s.state() {
+                        smoltcp::socket::tcp::State::Established => return Ok(0),
+                        smoltcp::socket::tcp::State::Closed => return Err(Errno::ConnRefused),
+                        _ => {}
+                    }
+                }
+            }
+            if crate::task::process::has_pending_signals() {
+                return Err(Errno::Intr);
+            }
+            yield_now();
+        }
+    }
+
     let path = parse_sun_path(&raw_addr[2..]);
     let server_sock = {
         let reg = SOCKET_REGISTRY.lock();
@@ -2132,5 +2218,17 @@ fn get_socket_by_fd(
     }
     let inode_id = inode.id;
     let map = crate::net::vfs::SOCKET_MAP.lock();
+    map.get(&inode_id).cloned().ok_or(Errno::BadFd)
+}
+
+fn get_inet_socket_by_fd(fd: u64) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::inet::InetSocket>>, Errno> {
+    let file = with_current_fds(|fds| fds.get(fd).cloned()).ok_or(Errno::BadFd)?;
+    let f = file.map_err(|_| Errno::BadFd)?;
+    let inode = f.inode.lock();
+    if !core::ptr::addr_eq(inode.file_ops, &crate::net::inet::INET_FILE_OPS) {
+        return Err(Errno::BadFd);
+    }
+    let inode_id = inode.id;
+    let map = crate::net::inet::INET_SOCKET_MAP.lock();
     map.get(&inode_id).cloned().ok_or(Errno::BadFd)
 }

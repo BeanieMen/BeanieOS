@@ -248,7 +248,11 @@ extern "C" fn user_task() {
     }
 
     let elf_data = task::process::with_current_fds(|fds| {
-        let fd = fds.open_read(b"/INIT").ok()?;
+        let fd = fds
+            .open_read(b"/bin/init")
+            .or_else(|_| fds.open_read(b"/INIT"))
+            .or_else(|_| fds.open_read(b"/BIN/INIT"))
+            .ok()?;
         let mut buf = alloc::vec![0u8; 65536];
         let n = fds.read(fd, &mut buf).ok()?;
         buf.truncate(n);

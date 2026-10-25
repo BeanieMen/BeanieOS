@@ -2,8 +2,7 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::tcp::{Socket as TcpSocket, State as TcpState};
-use smoltcp::socket::udp::{PacketBuffer, Socket as UdpSocket};
-use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
+use smoltcp::wire::IpEndpoint;
 use spin::Mutex;
 
 use crate::storage::vfs::{
@@ -138,22 +137,14 @@ pub fn create_inet_socket_file(sock: Arc<Mutex<InetSocket>>) -> File {
     INET_SOCKET_MAP.lock().insert(id, sock);
     let inode = Inode {
         id,
-        size: 0,
         file_type: FileType::Device,
-        ops: &INET_INODE_OPS,
+        size: 0,
+        cluster: 0,
+        inode_ops: &INET_INODE_OPS,
         file_ops: &INET_FILE_OPS,
+        dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
-    File::new(
-        inode,
-        OpenFlags {
-            read: true,
-            write: true,
-            create: false,
-            truncate: false,
-            append: false,
-            directory: false,
-            nonblock: false,
-            exclusive: false,
-        },
-    )
+    File::new(Arc::new(Mutex::new(inode)), OpenFlags::RDWR)
 }
