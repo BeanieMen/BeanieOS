@@ -78,3 +78,34 @@ pub fn create_tty_file(flags: OpenFlags) -> File {
     };
     File::new(Arc::new(Mutex::new(inode)), flags)
 }
+
+pub struct Vt2FileOps;
+
+impl FileOperations for Vt2FileOps {
+    fn read(&self, _inode: &Inode, _offset: u64, buf: &mut [u8]) -> Result<usize, &'static str> {
+        Ok(crate::tty::VT2_TTY.lock().read(buf))
+    }
+
+    fn write(&self, _inode: &mut Inode, _offset: u64, buf: &[u8]) -> Result<usize, &'static str> {
+        Ok(crate::tty::VT2_TTY.lock().write(buf))
+    }
+
+    fn readdir(&self, _inode: &Inode, _offset: u64) -> Result<Option<RawEntry>, &'static str> {
+        Err("not a directory")
+    }
+}
+
+pub static VT2_FILE_OPS: Vt2FileOps = Vt2FileOps;
+
+pub fn create_vt2_file(flags: OpenFlags) -> File {
+    let inode = Inode {
+        id: 7,
+        file_type: FileType::Device,
+        size: 0,
+        cluster: 0,
+        inode_ops: &TTY_INODE_OPS,
+        file_ops: &VT2_FILE_OPS,
+        dentry: None,
+    };
+    File::new(Arc::new(Mutex::new(inode)), flags)
+}

@@ -6,7 +6,6 @@
 blog/
 
 .opencode
-scripts
 .vscode 
 
 __pycache__/
@@ -16,5 +15,11 @@ __pycache__/
 # Object files and doom build
 *.o
 userspace/doom/doomgeneric/build/
+
+# TinyX build artifacts
+userspace/tinyxserver/Xfbdev
+userspace/tinyxserver/**/*.a
+!userspace/tinyxserver/lib/*.a
+
 
 users.db*

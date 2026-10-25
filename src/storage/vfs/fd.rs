@@ -133,6 +133,16 @@ impl FdTable {
             return Ok(self.alloc(event_file));
         }
 
+        if path == b"/dev/tty1" || path == b"dev/tty1" || path == b"/dev/tty0" || path == b"dev/tty0" || path == b"/dev/tty" || path == b"dev/tty" || path == b"/dev/console" {
+            let tty_file = crate::tty::vfs::create_tty_file(flags);
+            return Ok(self.alloc(tty_file));
+        }
+
+        if path.starts_with(b"/dev/tty") || path.starts_with(b"dev/tty") {
+            let vt2_file = crate::tty::vfs::create_vt2_file(flags);
+            return Ok(self.alloc(vt2_file));
+        }
+
         
         let resolved = self.mounts.resolve(path)?;
 

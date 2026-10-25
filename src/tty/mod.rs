@@ -148,6 +148,7 @@ impl Tty {
 }
 
 pub static GLOBAL_TTY: InterruptMutex<Tty> = InterruptMutex::new(Tty::new());
+pub static VT2_TTY: InterruptMutex<Tty> = InterruptMutex::new(Tty::new());
 
 pub use vfs::create_tty_file;
 

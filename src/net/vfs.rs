@@ -100,6 +100,9 @@ impl FileOperations for SocketFileOps {
                 _ => return Err("socket not connected"),
             }
             drop(s);
+            if crate::task::process::has_pending_signals() {
+                return Err("interrupted");
+            }
             yield_now();
         }
     }

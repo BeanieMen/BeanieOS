@@ -12,6 +12,7 @@ pub(crate) enum FileType {
     Device,
 }
 
+#[derive(Clone)]
 pub(crate) struct Inode {
     pub id: u64,
     pub file_type: FileType,

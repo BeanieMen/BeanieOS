@@ -391,10 +391,24 @@ pub(crate) fn add_forked_thread(thread: Thread) -> ThreadId {
     SCHEDULER.lock().spawn_thread(thread)
 }
 
+pub(crate) fn is_reschedule_requested() -> bool {
+    SCHEDULER.lock().reschedule_requested
+}
+
 pub(crate) fn yield_now() {
     let switch = SCHEDULER.lock().yield_to();
 
     apply(switch);
+}
+
+pub(crate) fn yield_or_wait() {
+    let switch = SCHEDULER.lock().yield_to();
+    if let Some(s) = switch {
+        apply(Some(s));
+    } else {
+        x86_64::instructions::interrupts::enable_and_hlt();
+        x86_64::instructions::interrupts::disable();
+    }
 }
 
 pub(crate) fn block_current() -> bool {

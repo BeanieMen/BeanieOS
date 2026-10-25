@@ -18,6 +18,7 @@ pub(crate) struct OpenFlags {
     pub truncate: bool,
     pub append: bool,
     pub directory: bool,
+    pub nonblock: bool,
 }
 
 impl OpenFlags {
@@ -28,6 +29,7 @@ impl OpenFlags {
         truncate: false,
         append: false,
         directory: true,
+        nonblock: false,
     };
 
     pub(crate) const READ: Self = Self {
@@ -37,6 +39,7 @@ impl OpenFlags {
         truncate: false,
         append: false,
         directory: false,
+        nonblock: false,
     };
 
     pub(crate) const WRITE: Self = Self {
@@ -46,6 +49,7 @@ impl OpenFlags {
         truncate: false,
         append: false,
         directory: false,
+        nonblock: false,
     };
 
     pub(crate) const RDWR: Self = Self {
@@ -55,6 +59,7 @@ impl OpenFlags {
         truncate: false,
         append: false,
         directory: false,
+        nonblock: false,
     };
 }
 
@@ -158,16 +163,16 @@ impl File {
             return Err("file is not open for reading");
         }
 
-        let inode = self.inode.lock();
+        let (inode, is_dev) = {
+            let inode = self.inode.lock();
+            if inode.file_type != FileType::Regular && inode.file_type != FileType::Device {
+                return Err("not a regular or device file");
+            }
+            let is_dev = inode.file_type == FileType::Device;
+            (inode.clone(), is_dev)
+        };
 
-        if inode.file_type != FileType::Regular && inode.file_type != FileType::Device {
-            return Err("not a regular or device file");
-        }
-
-        let is_dev = inode.file_type == FileType::Device;
         let read = inode.file_ops.read(&inode, self.offset, buf)?;
-
-        drop(inode);
 
         if !is_dev {
             self.offset += read as u64;
@@ -187,14 +192,21 @@ impl File {
             self.offset
         };
 
-        let mut inode = self.inode.lock();
+        let (inode, is_dev) = {
+            let inode = self.inode.lock();
+            let is_dev = inode.file_type == FileType::Device;
+            (inode.clone(), is_dev)
+        };
 
-        let ops = inode.file_ops;
-        let is_dev = inode.file_type == FileType::Device;
-
-        let written = ops.write(&mut inode, offset, buf)?;
-
-        drop(inode);
+        let written = if is_dev {
+            let mut inode_copy = inode;
+            inode_copy.file_ops.write(&mut inode_copy, offset, buf)?
+        } else {
+            let mut inode = self.inode.lock();
+            let w = inode.file_ops.write(&mut inode, offset, buf)?;
+            drop(inode);
+            w
+        };
 
         if !is_dev {
             self.offset = offset + written as u64;
