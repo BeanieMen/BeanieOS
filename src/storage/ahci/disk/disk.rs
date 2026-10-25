@@ -136,7 +136,7 @@ impl Disk {
             return Err("device does not report LBA support");
         }
 
-        if word(83) & 0xc000 != 0x4000 {
+        if word(83) & 0xc000 != 0x4000 && word(83) & 0xc000 != 0xc000 {
             return Err("device does not report a valid command set");
         }
 
@@ -211,6 +211,9 @@ impl Disk {
             let at = offset as usize + done;
             let (sector, start) = self.locate(at)?;
             let count = self.batch(start, buffer.len() - done)?;
+            if sector + count as u64 > self.sectors {
+                return Err("read past end of disk");
+            }
             self.read_run(sector, count)?;
 
             let fresh = unsafe { &*(self.transfer_buffer() as *const [u8; BUF_SIZE]) };
@@ -229,6 +232,9 @@ impl Disk {
             let at = offset as usize + done;
             let (sector, start) = self.locate(at)?;
             let count = self.batch(start, buffer.len() - done)?;
+            if sector + count as u64 > self.sectors {
+                return Err("write past end of disk");
+            }
             let span = self.block_size * count as usize;
 
             if start != 0 || buffer.len() - done < span {

@@ -98,7 +98,12 @@ struct Timespec {
 fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> SyscallResult {
     let f = with_current_fds(|fds| fds.get(fd).cloned().ok()).flatten().ok_or(Errno::BadFd)?;
     match cmd {
-        0 => Ok(0), // F_DUPFD
+        0 => {
+            // F_DUPFD
+            let min_fd = arg as usize;
+            with_current_fds(|fds| fds.alloc_at_least(f.clone(), min_fd))
+                .ok_or(Errno::BadFd)
+        }
         1 => Ok(0), // F_GETFD
         2 => Ok(0), // F_SETFD
         3 => {
@@ -519,6 +524,9 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
                 break;
             }
             written_for_iov += n;
+            if scheduler::is_reschedule_requested() {
+                scheduler::yield_now();
+            }
         }
 
         total_written += written_for_iov as u64;
@@ -531,7 +539,8 @@ fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -
     let is_fb = fd >= 3
         && process::with_current_fds(|fds| {
             let file = fds.get(fd).ok()?;
-            Some(file.inode.lock().id == 2)
+            let inode = file.inode.lock();
+            Some(core::ptr::addr_eq(inode.file_ops, &crate::graphics::vfs::FB_FILE_OPS))
         })
         .flatten()
         .unwrap_or(false);
@@ -548,7 +557,33 @@ fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -
     }
 }
 
-fn sys_mun_map(_addr: u64, _len: u64) -> SyscallResult {
+fn sys_mun_map(addr: u64, len: u64) -> SyscallResult {
+    if len == 0 {
+        return Ok(0);
+    }
+    if addr % 4096 != 0 {
+        return Err(Errno::Invalid);
+    }
+    let end = match addr.checked_add(len) {
+        Some(v) => v,
+        None => return Err(Errno::Invalid),
+    };
+    if end > crate::memory::mmu::USER_END {
+        return Err(Errno::Invalid);
+    }
+
+    let pid = crate::task::identity::current_pid();
+    let root = match crate::task::process::space_root_of(pid) {
+        Some(r) => r,
+        None => return Ok(0),
+    };
+    let mut space = crate::memory::mmu::AddressSpace::from_root(root);
+    let mut curr = addr;
+    while curr < end {
+        let _ = space.unmap(curr);
+        curr += 4096;
+    }
+    core::mem::forget(space);
     Ok(0)
 }
 
@@ -789,19 +824,21 @@ fn sys_fork(frame: &entry::SyscallFrame) -> SyscallResult {
     Ok(child_pid.as_u64())
 }
 
-fn sys_wait4(pid: i64, wstatus: u64, _options: u64, _rusage: u64) -> SyscallResult {
-    let Some((child_pid, code)) = process::wait4(pid) else {
-        return Err(Errno::Child);
-    };
+fn sys_wait4(pid: i64, wstatus: u64, options: u64, _rusage: u64) -> SyscallResult {
+    let child = process::wait4(pid, options).map_err(|_| Errno::Child)?;
 
-    if wstatus != 0 {
-        let status = (code & 0xff) << 8;
-        if entry::copy_to_user(wstatus, &status.to_le_bytes()).is_err() {
-            return Err(Errno::Fault);
+    match child {
+        Some((child_pid, code)) => {
+            if wstatus != 0 {
+                let status = (code & 0xff) << 8;
+                if entry::copy_to_user(wstatus, &status.to_le_bytes()).is_err() {
+                    return Err(Errno::Fault);
+                }
+            }
+            Ok(child_pid.as_u64())
         }
+        None => Ok(0), // WNOHANG: child still running
     }
-
-    Ok(child_pid.as_u64())
 }
 const MAX_ARGS: usize = 64;
 
@@ -873,6 +910,9 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
             Err("broken pipe") => return Err(Errno::Pipe),
             Err(_) => return Err(Errno::Invalid),
         }
+        if scheduler::is_reschedule_requested() {
+            scheduler::yield_now();
+        }
     }
 
     Ok(total_written as u64)
@@ -892,7 +932,7 @@ pub(crate) fn wait_for_key() {
     crate::arch::input::remove_waiter(id);
 }
 
-fn sys_poll(fds: u64, nfds: u64, _timeout: u64) -> SyscallResult {
+fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
     if nfds == 0 {
         return Ok(0);
     }
@@ -900,135 +940,165 @@ fn sys_poll(fds: u64, nfds: u64, _timeout: u64) -> SyscallResult {
         return Err(Errno::Invalid);
     }
 
-    let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
-    let mut ready = 0u64;
+    let timeout_ms = timeout as i32;
+    let start_ticks = crate::arch::interrupts::vectors::ticks();
+    let timeout_ticks = if timeout_ms < 0 {
+        u64::MAX
+    } else {
+        (timeout_ms as u64).div_ceil(10)
+    };
 
-    for i in 0..nfds {
-        let slot = fds.checked_add(i * 8).ok_or(Errno::Fault)?;
-        let mut pfd_buf = [0u8; 8];
-        entry::copy_from_user(&mut pfd_buf, slot).map_err(|_| Errno::Fault)?;
+    loop {
+        let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
+        let mut ready = 0u64;
 
-        let fd = i32::from_le_bytes(pfd_buf[0..4].try_into().unwrap());
-        let events = i16::from_le_bytes(pfd_buf[4..6].try_into().unwrap());
-        let mut revents = 0i16;
+        for i in 0..nfds {
+            let slot = fds.checked_add(i * 8).ok_or(Errno::Fault)?;
+            let mut pfd_buf = [0u8; 8];
+            entry::copy_from_user(&mut pfd_buf, slot).map_err(|_| Errno::Fault)?;
 
-        if fd >= 0 {
-            if fd == 0 || fd == 1 || fd == 2 {
-                if tty_has_input && (events & 1 != 0) {
-                    revents |= 1; // POLLIN
-                }
-                if events & 4 != 0 {
-                    revents |= 4; // POLLOUT
-                }
-            } else {
-                let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
-                if let Some(Ok(file)) = file {
-                    let inode_id = file.inode.lock().id;
-                    if inode_id == 6 {
-                        // /dev/input/event0
-                        let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
-                        if has_events && (events & 1 != 0) {
-                            revents |= 1;
-                        }
-                    } else if let Some(sock) =
-                        crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
-                    {
-                        // UNIX domain socket
-                        let s = sock.lock();
-                        match &s.state {
-                            crate::net::unix::SocketState::Listening { incoming, .. } => {
-                                if !incoming.is_empty() && (events & 1 != 0) {
-                                    revents |= 1; // Incoming connection to accept
-                                }
-                            }
-                            crate::net::unix::SocketState::Connected {
-                                rx_buffer,
-                                peer_closed,
-                                ..
-                            } => {
-                                if !rx_buffer.is_empty() && (events & 1 != 0) {
-                                    revents |= 1; // Data ready to read
-                                }
-                                if *peer_closed {
-                                    revents |= 1 | 0x10; // EOF / POLLHUP
-                                }
-                                if !*peer_closed && (events & 4 != 0) {
-                                    revents |= 4; // Socket is writable
-                                }
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        revents |= events & 5;
+            let fd = i32::from_le_bytes(pfd_buf[0..4].try_into().unwrap());
+            let events = i16::from_le_bytes(pfd_buf[4..6].try_into().unwrap());
+            let mut revents = 0i16;
+
+            if fd >= 0 {
+                if fd == 0 || fd == 1 || fd == 2 {
+                    if tty_has_input && (events & 1 != 0) {
+                        revents |= 1; // POLLIN
+                    }
+                    if events & 4 != 0 {
+                        revents |= 4; // POLLOUT
                     }
                 } else {
-                    revents |= 0x20;
+                    let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
+                    if let Some(Ok(file)) = file {
+                        let (file_ops, inode_id) = {
+                            let inode = file.inode.lock();
+                            (inode.file_ops, inode.id)
+                        };
+                        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 6 {
+                            // /dev/input/event0
+                            let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
+                            if has_events && (events & 1 != 0) {
+                                revents |= 1;
+                            }
+                        } else if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+                            if let Some(sock) =
+                                crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
+                            {
+                                // UNIX domain socket
+                                let s = sock.lock();
+                                match &s.state {
+                                    crate::net::unix::SocketState::Listening { incoming, .. } => {
+                                        if !incoming.is_empty() && (events & 1 != 0) {
+                                            revents |= 1; // Incoming connection to accept
+                                        }
+                                    }
+                                    crate::net::unix::SocketState::Connected {
+                                        rx_buffer,
+                                        peer_closed,
+                                        ..
+                                    } => {
+                                        if !rx_buffer.is_empty() && (events & 1 != 0) {
+                                            revents |= 1; // Data ready to read
+                                        }
+                                        if *peer_closed {
+                                            revents |= 1 | 0x10; // EOF / POLLHUP
+                                        }
+                                        if !*peer_closed && (events & 4 != 0) {
+                                            revents |= 4; // Socket is writable
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        } else {
+                            revents |= events & 5;
+                        }
+                    } else {
+                        revents |= 0x20;
+                    }
                 }
             }
+
+            if revents != 0 {
+                ready += 1;
+            }
+
+            entry::copy_to_user(slot + 6, &revents.to_le_bytes()).map_err(|_| Errno::Fault)?;
         }
 
-        if revents != 0 {
-            ready += 1;
+        if ready > 0 || timeout_ms == 0 {
+            return Ok(ready);
         }
 
-        entry::copy_to_user(slot + 6, &revents.to_le_bytes()).map_err(|_| Errno::Fault)?;
+        if crate::task::process::has_pending_signals() {
+            return Err(Errno::Intr);
+        }
+
+        let elapsed = crate::arch::interrupts::vectors::ticks().saturating_sub(start_ticks);
+        if elapsed >= timeout_ticks {
+            return Ok(0);
+        }
+
+        scheduler::sleep(1);
     }
-
-    Ok(ready)
 }
 
 fn check_fd_ready(fd: u64, for_write: bool) -> bool {
     let file = process::with_current_fds(|fds| fds.get(fd).cloned());
     if let Some(Ok(file)) = file {
-        let (inode_id, file_type) = {
+        let (file_ops, inode_id, file_type) = {
             let inode = file.inode.lock();
-            (inode.id, inode.file_type)
+            (inode.file_ops, inode.id, inode.file_type)
         };
-        if inode_id == 1 {
+        if core::ptr::addr_eq(file_ops, &crate::tty::vfs::TTY_FILE_OPS) || inode_id == 1 {
             // TTY (Console / Shell)
             if for_write {
                 return true;
             }
             return !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
         }
-        if inode_id == 7 {
+        if core::ptr::addr_eq(file_ops, &crate::tty::vfs::VT2_FILE_OPS) || inode_id == 7 {
             // VT2 (X11 Virtual Console)
             if for_write {
                 return true;
             }
             return !crate::tty::VT2_TTY.lock().queue.is_empty();
         }
-        if inode_id == 6 {
+        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 6 {
             // /dev/input/event0
             return !for_write && !crate::input::event::EVENT_QUEUE.lock().is_empty();
         }
-        if inode_id == 8 {
+        if core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8 {
             // /dev/mouse, /dev/input/mice, /dev/psaux
             if for_write {
                 return true;
             }
             return !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
         }
-        if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
-            let s = sock.lock();
-            match &s.state {
-                crate::net::unix::SocketState::Listening { incoming, .. } => {
-                    return !for_write && !incoming.is_empty();
-                }
-                crate::net::unix::SocketState::Connected {
-                    rx_buffer,
-                    peer_closed,
-                    ..
-                } => {
-                    if for_write {
-                        return !*peer_closed;
-                    } else {
-                        return !rx_buffer.is_empty() || *peer_closed;
+        if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+            if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
+                let s = sock.lock();
+                match &s.state {
+                    crate::net::unix::SocketState::Listening { incoming, .. } => {
+                        return !for_write && !incoming.is_empty();
                     }
+                    crate::net::unix::SocketState::Connected {
+                        rx_buffer,
+                        peer_closed,
+                        ..
+                    } => {
+                        if for_write {
+                            return !*peer_closed;
+                        } else {
+                            return !rx_buffer.is_empty() || *peer_closed;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+                return false;
             }
-            return false;
         }
         if file_type == crate::storage::vfs::inode::FileType::Device {
             return for_write;
@@ -1161,36 +1231,49 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
 
     let is_dev = file.inode.lock().file_type == crate::storage::vfs::inode::FileType::Device;
     if is_dev {
-        let inode_id = file.inode.lock().id;
+        let (file_ops, inode_id) = {
+            let inode = file.inode.lock();
+            (inode.file_ops, inode.id)
+        };
         if file.flags.nonblock {
-            if inode_id == 1 && crate::tty::GLOBAL_TTY.lock().queue.is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::tty::vfs::TTY_FILE_OPS) || inode_id == 1)
+                && crate::tty::GLOBAL_TTY.lock().queue.is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if inode_id == 7 && crate::tty::VT2_TTY.lock().queue.is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::tty::vfs::VT2_FILE_OPS) || inode_id == 7)
+                && crate::tty::VT2_TTY.lock().queue.is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if inode_id == 6 && crate::input::event::EVENT_QUEUE.lock().is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 6)
+                && crate::input::event::EVENT_QUEUE.lock().is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if inode_id == 8 && crate::input::mouse::MOUSE_QUEUE.lock().is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8)
+                && crate::input::mouse::MOUSE_QUEUE.lock().is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
-                let s = sock.lock();
-                match &s.state {
-                    crate::net::unix::SocketState::Connected {
-                        rx_buffer,
-                        peer_closed,
-                        ..
-                    } => {
-                        if rx_buffer.is_empty() && !*peer_closed {
-                            return Err(Errno::Again);
+            if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+                if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
+                    let s = sock.lock();
+                    match &s.state {
+                        crate::net::unix::SocketState::Connected {
+                            rx_buffer,
+                            peer_closed,
+                            ..
+                        } => {
+                            if rx_buffer.is_empty() && !*peer_closed {
+                                return Err(Errno::Again);
+                            }
                         }
+                        crate::net::unix::SocketState::Listening { .. } => {
+                            return Err(Errno::Invalid);
+                        }
+                        _ => {}
                     }
-                    crate::net::unix::SocketState::Listening { .. } => {
-                        return Err(Errno::Invalid);
-                    }
-                    _ => {}
                 }
             }
         }
@@ -1236,6 +1319,9 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
             Err("not a regular or device file") => return Err(Errno::IsDir),
             Err(_) => return Err(Errno::Invalid),
         }
+        if scheduler::is_reschedule_requested() {
+            scheduler::yield_now();
+        }
     }
 
     Ok(total_read as u64)
@@ -1279,8 +1365,8 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
     let truncate = (flags & O_TRUNC) != 0;
     let append = (flags & O_APPEND) != 0;
     let directory = (flags & O_DIRECTORY) != 0;
-
     let nonblock = (flags & 0x800) != 0 || (flags & 0x4) != 0;
+    let exclusive = (flags & 0x80) != 0;
 
     let open_flags = OpenFlags {
         read,
@@ -1290,6 +1376,7 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
         append,
         directory,
         nonblock,
+        exclusive,
     };
 
     let Some(result) = process::with_current_fds(|fds| fds.open(&path, open_flags)) else {
@@ -1298,6 +1385,7 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
 
     match result {
         Ok(fd) => Ok(fd),
+        Err("file already exists") => Err(Errno::Invalid),
         Err("not a directory") => Err(Errno::NotDir),
         Err("is a directory") => Err(Errno::IsDir),
         Err(_) => Err(Errno::NoEntry),
@@ -1305,41 +1393,46 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
 }
 
 fn sys_close(fd: u64) -> SyscallResult {
-    let inode_id = process::with_current_fds(|fds| {
-        fds.get(fd).ok().map(|f| f.inode.lock().id)
-    }).flatten();
+    let file = process::with_current_fds(|fds| fds.get(fd).cloned().ok()).flatten();
 
-    if let Some(id) = inode_id {
-        if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().remove(&id) {
-            let peer_opt = {
-                let mut s = sock.lock();
-                let peer = if let crate::net::unix::SocketState::Connected { peer, .. } = &s.state {
-                    peer.upgrade()
-                } else {
-                    None
+    let Some(result) = process::with_current_fds(|fds| fds.close(fd)) else {
+        return Err(Errno::BadFd);
+    };
+
+    result.map_err(|_| Errno::BadFd)?;
+
+    if let Some(f) = file {
+        let is_socket = {
+            let inode = f.inode.lock();
+            core::ptr::addr_eq(inode.file_ops, &crate::net::vfs::SOCKET_FILE_OPS)
+        };
+
+        if is_socket && alloc::sync::Arc::strong_count(&f.inode) <= 1 {
+            let id = f.inode.lock().id;
+            if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().remove(&id) {
+                let peer_opt = {
+                    let mut s = sock.lock();
+                    let peer = if let crate::net::unix::SocketState::Connected { peer, .. } = &s.state {
+                        peer.upgrade()
+                    } else {
+                        None
+                    };
+                    s.state = crate::net::unix::SocketState::Closed;
+                    peer
                 };
-                s.state = crate::net::unix::SocketState::Closed;
-                peer
-            };
-            if let Some(peer_arc) = peer_opt {
-                if !alloc::sync::Arc::ptr_eq(&sock, &peer_arc) {
-                    let mut p = peer_arc.lock();
-                    if let crate::net::unix::SocketState::Connected { peer_closed, .. } = &mut p.state {
-                        *peer_closed = true;
+                if let Some(peer_arc) = peer_opt {
+                    if !alloc::sync::Arc::ptr_eq(&sock, &peer_arc) {
+                        let mut p = peer_arc.lock();
+                        if let crate::net::unix::SocketState::Connected { peer_closed, .. } = &mut p.state {
+                            *peer_closed = true;
+                        }
                     }
                 }
             }
         }
     }
 
-    let Some(result) = process::with_current_fds(|fds| fds.close(fd)) else {
-        return Err(Errno::BadFd);
-    };
-
-    match result {
-        Ok(()) => Ok(0),
-        Err(_) => Err(Errno::BadFd),
-    }
+    Ok(0)
 }
 
 fn sys_lseek(fd: u64, offset: i64, whence: u32) -> SyscallResult {
@@ -1497,11 +1590,28 @@ fn sys_kill(pid: i64, sig: u64) -> SyscallResult {
     if sig > 64 {
         return Err(Errno::Invalid);
     }
-    if pid <= 0 {
-        return Err(Errno::Invalid);
+    if pid == 0 {
+        if crate::task::process::send_signal(crate::task::identity::current_pid(), sig as usize) {
+            return Ok(0);
+        } else {
+            return Err(Errno::Srch);
+        }
     }
-    crate::task::process::send_signal(crate::task::identity::ProcessId(pid as u64), sig as usize);
-    Ok(0)
+    if pid < 0 {
+        if crate::task::process::send_signal_pgrp(
+            crate::task::identity::ProcessId((-pid) as u64),
+            sig as usize,
+        ) {
+            return Ok(0);
+        } else {
+            return Err(Errno::Srch);
+        }
+    }
+    if crate::task::process::send_signal(crate::task::identity::ProcessId(pid as u64), sig as usize) {
+        Ok(0)
+    } else {
+        Err(Errno::Srch)
+    }
 }
 
 fn sys_rt_sigaction(sig: u64, act_ptr: u64, oldact_ptr: u64, sigsetsize: u64) -> SyscallResult {
@@ -1590,13 +1700,21 @@ fn sys_rt_sigreturn(frame: &mut entry::SyscallFrame) -> SyscallResult {
     entry::copy_from_user(bytes, frame.rsp).map_err(|_| Errno::Fault)?;
     let ctx = unsafe { ctx.assume_init() };
 
+    if ctx.rip >= crate::memory::mmu::USER_END || ctx.rsp >= crate::memory::mmu::USER_END {
+        return Err(Errno::Fault);
+    }
+
     frame.regs = ctx.regs;
     frame.rip = ctx.rip;
     frame.rsp = ctx.rsp;
-    frame.rflags = ctx.rflags;
+    const SAFE_RFLAGS_MASK: u64 = 0x00244dd5;
+    frame.rflags = (ctx.rflags & SAFE_RFLAGS_MASK) | 0x202;
+    frame.cs = u64::from(crate::arch::gdt::user_code_selector().0) | 0x3;
+    frame.ss = u64::from(crate::arch::gdt::user_data_selector().0) | 0x3;
 
     if let Some(proc) = process::current() {
-        proc.lock().blocked_signals = ctx.mask;
+        const UNBLOCKABLE: u64 = (1u64 << (9 - 1)) | (1u64 << (19 - 1));
+        proc.lock().blocked_signals = ctx.mask & !UNBLOCKABLE;
     }
 
     Ok(frame.regs.rax)
@@ -1612,7 +1730,11 @@ fn get_socket_by_fd(
 ) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::unix::UnixSocket>>, Errno> {
     let file = process::with_current_fds(|fds| fds.get(fd).cloned()).ok_or(Errno::BadFd)?;
     let f = file.map_err(|_| Errno::BadFd)?;
-    let inode_id = f.inode.lock().id;
+    let inode = f.inode.lock();
+    if !core::ptr::addr_eq(inode.file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+        return Err(Errno::BadFd);
+    }
+    let inode_id = inode.id;
     let map = crate::net::vfs::SOCKET_MAP.lock();
     map.get(&inode_id).cloned().ok_or(Errno::BadFd)
 }

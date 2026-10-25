@@ -54,6 +54,8 @@ pub fn push_event(type_: u16, code: u16, value: i32) {
     if q.len() < 512 {
         q.push_back(ev);
     }
+    drop(q);
+    crate::arch::input::wake_waiters();
 }
 
 pub fn push_key(code: u16, value: i32) {
@@ -103,20 +105,31 @@ impl FileOperations for EventFileOps {
     fn read(&self, _inode: &Inode, _offset: u64, buf: &mut [u8]) -> Result<usize, &'static str> {
         let event_size = core::mem::size_of::<InputEvent>();
         if buf.len() < event_size {
-            return Ok(0);
+            return Err("buffer too small");
         }
-        let mut q = EVENT_QUEUE.lock();
         let mut bytes_written = 0;
-        while bytes_written + event_size <= buf.len() {
-            if let Some(ev) = q.pop_front() {
-                let ev_bytes: &[u8] = unsafe {
-                    core::slice::from_raw_parts(&ev as *const _ as *const u8, event_size)
-                };
-                buf[bytes_written..bytes_written + event_size].copy_from_slice(ev_bytes);
-                bytes_written += event_size;
-            } else {
-                break;
+        while bytes_written == 0 {
+            {
+                let mut q = EVENT_QUEUE.lock();
+                while bytes_written + event_size <= buf.len() {
+                    if let Some(ev) = q.pop_front() {
+                        let ev_bytes: &[u8] = unsafe {
+                            core::slice::from_raw_parts(&ev as *const _ as *const u8, event_size)
+                        };
+                        buf[bytes_written..bytes_written + event_size].copy_from_slice(ev_bytes);
+                        bytes_written += event_size;
+                    } else {
+                        break;
+                    }
+                }
             }
+            if bytes_written > 0 {
+                return Ok(bytes_written);
+            }
+            if crate::task::process::has_pending_signals() {
+                return Err("interrupted");
+            }
+            crate::syscall::dispatch::wait_for_key();
         }
         Ok(bytes_written)
     }
@@ -139,6 +152,8 @@ pub fn create_event_file(flags: OpenFlags) -> File {
         inode_ops: &EVENT_INODE_OPS,
         file_ops: &EVENT_FILE_OPS,
         dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
     File::new(Arc::new(Mutex::new(inode)), flags)
 }

@@ -56,13 +56,15 @@ fn gdt() -> &'static (GlobalDescriptorTable, Selectors) {
     GDT.call_once(|| {
         let mut gdt = GlobalDescriptorTable::new();
         let code_selector = gdt.append(Descriptor::kernel_code_segment());
+        let kernel_data_selector = gdt.append(Descriptor::kernel_data_segment());
         let tss_selector = gdt.append(Descriptor::tss_segment(tss()));
-        let user_code_selector = gdt.append(Descriptor::user_code_segment());
         let user_data_selector = gdt.append(Descriptor::user_data_segment());
+        let user_code_selector = gdt.append(Descriptor::user_code_segment());
         (
             gdt,
             Selectors {
                 code_selector,
+                kernel_data_selector,
                 tss_selector,
                 user_code_selector,
                 user_data_selector,
@@ -73,6 +75,7 @@ fn gdt() -> &'static (GlobalDescriptorTable, Selectors) {
 
 struct Selectors {
     code_selector: SegmentSelector,
+    kernel_data_selector: SegmentSelector,
     tss_selector: SegmentSelector,
     user_code_selector: SegmentSelector,
     user_data_selector: SegmentSelector,
@@ -88,6 +91,10 @@ pub(crate) fn user_data_selector() -> SegmentSelector {
 
 pub(crate) fn kernel_code_selector() -> SegmentSelector {
     gdt().1.code_selector
+}
+
+pub(crate) fn kernel_data_selector() -> SegmentSelector {
+    gdt().1.kernel_data_selector
 }
 
 pub(crate) fn tss_addr() -> u64 {

@@ -30,26 +30,30 @@ pub(crate) fn get() -> &'static Madt {
 }
 
 unsafe fn find_madt(root: usize) -> usize {
-    let signature = unsafe { core::slice::from_raw_parts(root as *const u8, 4) };
+    let root_va = crate::paging::phys_to_direct(root as u64) as usize;
+
+    let signature = unsafe { core::slice::from_raw_parts(root_va as *const u8, 4) };
 
     let entry_size = if signature == b"XSDT" { 8 } else { 4 };
 
-    let length = unsafe { read_u32(root + 4) } as usize;
+    let length = unsafe { read_u32(root_va + 4) } as usize;
 
-    let mut offset = root + 36;
-    let end = root + length;
+    let mut offset = root_va + 36;
+    let end = root_va + length;
 
     while offset < end {
-        let table = if entry_size == 8 {
+        let table_phys = if entry_size == 8 {
             unsafe { core::ptr::read_unaligned(offset as *const u64) as usize }
         } else {
             unsafe { read_u32(offset) as usize }
         };
 
-        let signature = unsafe { core::slice::from_raw_parts(table as *const u8, 4) };
+        let table_va = crate::paging::phys_to_direct(table_phys as u64) as usize;
+
+        let signature = unsafe { core::slice::from_raw_parts(table_va as *const u8, 4) };
 
         if signature == b"APIC" {
-            return table;
+            return table_phys;
         }
 
         offset += entry_size;
@@ -59,17 +63,19 @@ unsafe fn find_madt(root: usize) -> usize {
 }
 
 unsafe fn parse_madt(madt: usize) -> Madt {
-    let length = unsafe { read_u32(madt + 4) } as usize;
+    let base = crate::paging::phys_to_direct(madt as u64) as usize;
 
-    let lapic_address = unsafe { read_u32(madt + 36) } as usize;
+    let length = unsafe { read_u32(base + 4) } as usize;
+
+    let lapic_address = unsafe { read_u32(base + 36) } as usize;
 
     let mut ioapic_address = None;
     let mut ioapic_gsi_base = None;
     let mut keyboard_gsi = 1u32;
     let mut mouse_gsi = 12u32;
 
-    let mut offset = madt + 44;
-    let end = madt + length;
+    let mut offset = base + 44;
+    let end = base + length;
 
     while offset < end {
         let typ = unsafe { read_u8(offset) };

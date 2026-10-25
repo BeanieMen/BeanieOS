@@ -189,9 +189,8 @@ static inline void *sys_brk(void *addr) {
   return (void *)syscall(SYS_BRK, (long)addr, 0, 0);
 }
 
-static inline long sys_poll(void *fds, unsigned long nfds,
-                            unsigned short events) {
-  return syscall(SYS_POLL, (long)fds, nfds, events);
+static inline long sys_poll(void *fds, unsigned long nfds, int timeout_ms) {
+  return syscall(SYS_POLL, (long)fds, nfds, (long)timeout_ms);
 }
 
 static inline long sys_fork(void) { return syscall(SYS_FORK, 0, 0, 0); }

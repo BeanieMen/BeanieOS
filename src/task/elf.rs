@@ -69,6 +69,9 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
     if header.machine != EM_X86_64 {
         return Err("unsupported machine type");
     }
+    if header.elf_type != 2 {
+        return Err("only statically linked ET_EXEC binaries supported");
+    }
 
     let ph_size = header.phentsize as usize;
     let ph_count = header.phnum as usize;
@@ -81,11 +84,23 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
             return Err("program header out of bounds");
         }
         let ph = unsafe { &*(binary.as_ptr().add(ph_offset) as *const Elf64ProgramHeader) };
+        if ph.p_type == 3 {
+            return Err("dynamic ELF interpreters (PT_INTERP) not supported");
+        }
+        if ph.p_type == 6 {
+            phdr_vaddr = ph.p_vaddr;
+        }
         if ph.p_type != PT_LOAD {
             continue;
         }
         if phdr_vaddr == 0 {
-            phdr_vaddr = ph.p_vaddr - ph.p_offset + ph_table_offset as u64;
+            let ph_end = ph_table_offset as u64 + (ph_count * ph_size) as u64;
+            if ph_end <= ph.p_offset + ph.p_filesz {
+                phdr_vaddr = ph.p_vaddr - ph.p_offset + ph_table_offset as u64;
+            }
+        }
+        if ph.p_memsz == 0 {
+            continue;
         }
 
         let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;

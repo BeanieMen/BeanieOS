@@ -19,6 +19,7 @@ pub(crate) struct OpenFlags {
     pub append: bool,
     pub directory: bool,
     pub nonblock: bool,
+    pub exclusive: bool,
 }
 
 impl OpenFlags {
@@ -30,6 +31,7 @@ impl OpenFlags {
         append: false,
         directory: true,
         nonblock: false,
+        exclusive: false,
     };
 
     pub(crate) const READ: Self = Self {
@@ -40,6 +42,7 @@ impl OpenFlags {
         append: false,
         directory: false,
         nonblock: false,
+        exclusive: false,
     };
 
     pub(crate) const WRITE: Self = Self {
@@ -50,6 +53,7 @@ impl OpenFlags {
         append: false,
         directory: false,
         nonblock: false,
+        exclusive: false,
     };
 
     pub(crate) const RDWR: Self = Self {
@@ -60,6 +64,7 @@ impl OpenFlags {
         append: false,
         directory: false,
         nonblock: false,
+        exclusive: false,
     };
 }
 

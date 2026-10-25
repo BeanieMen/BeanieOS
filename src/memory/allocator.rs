@@ -143,6 +143,14 @@ pub(crate) fn init_frames(memory_map: &MemoryMapTag, mbi_start: u64, mbi_end: u6
     pool.avoid(Area::new(0, LOW_1MIB));
     pool.avoid(Area::new(kstart, kend));
     pool.avoid(Area::new(mbi_start, mbi_end));
+    pool.avoid(Area::new(
+        crate::paging::HEAP_OFFSET,
+        crate::paging::HEAP_OFFSET + crate::memory::heap::HEAP_SIZE as u64,
+    ));
+
+    if let Some((start, end)) = RESERVED.take_framebuffer() {
+        pool.avoid(Area::new(start, end));
+    }
 
     let dropped = RESERVED.avoid_all(pool);
 
@@ -150,10 +158,6 @@ pub(crate) fn init_frames(memory_map: &MemoryMapTag, mbi_start: u64, mbi_end: u6
         dropped, 0,
         "{dropped} device range(s) could not be reserved; their frames would become allocatable RAM"
     );
-
-    if let Some((start, end)) = RESERVED.take_framebuffer() {
-        pool.avoid(Area::new(start, end));
-    }
 }
 
 pub(crate) fn alloc_frame() -> Option<PhysFrame> {

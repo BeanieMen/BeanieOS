@@ -60,6 +60,7 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     task::scheduler::init();
 
     mount_disk();
+    memory::mmu::unmap_boot_identity();
 
     let init = task::process::create("init", "/");
 
@@ -363,11 +364,9 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
     kinfo!("kernel initialized");
 
     let info = memory::mmu::memory_info();
-    kinfo!(
-        "  framebuffer {:#x}..{:#x}",
-        info.framebuffer.expect("set at boot").0,
-        info.framebuffer.expect("set at boot").1
-    );
+    if let Some((start, end)) = info.framebuffer {
+        kinfo!("  framebuffer {:#x}..{:#x}", start, end);
+    }
     kinfo!("  kernel     {:#x}..{:#x}", info.kernel.0, info.kernel.1);
     kinfo!(
         "  boot info  {:#x}..{:#x}",

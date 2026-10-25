@@ -52,7 +52,13 @@ pub(crate) fn execve(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> Result<
     // still walking. The scheduler has to reclaim it once this thread is gone.
     core::mem::forget(previous);
 
+    let default_fpu = crate::task::thread::FxsaveArea::default_state();
     unsafe {
+        core::arch::asm!(
+            "fxrstor64 [{0}]",
+            in(reg) default_fpu.data.as_ptr(),
+            options(nostack, preserves_flags)
+        );
         crate::task::userland::enter_userland(
             loaded.entry_point,
             stack,
@@ -78,11 +84,14 @@ fn read_program(path: &[u8]) -> Option<Vec<u8>> {
             }
 
             if image.len() + n > MAX_IMAGE {
+                let _ = fds.close(fd);
                 return None;
             }
 
             image.extend_from_slice(&chunk[..n]);
         }
+
+        let _ = fds.close(fd);
 
         if image.is_empty() {
             return None;
@@ -104,6 +113,14 @@ fn build_stack(
     argv: &[Vec<u8>],
     envp: &[Vec<u8>],
 ) -> Result<u64, &'static str> {
+    let total_payload: usize = argv.iter().map(|a| a.len() + 1).sum::<usize>()
+        + envp.iter().map(|e| e.len() + 1).sum::<usize>()
+        + path.len()
+        + 1;
+    if total_payload > 32 * 1024 {
+        return Err("argument list too long");
+    }
+
     let mut at = align_down(loaded.user_stack_top);
 
     at -= RANDOM_LEN;

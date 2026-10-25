@@ -55,11 +55,11 @@ pub unsafe extern "C" fn syscall_entry() -> ! {
         "mov gs:[8], rsp", // Save user rsp to CPU_SCRATCH.user_rsp
         "mov rsp, gs:[0]", // Load kernel_stack_top into rsp
         // 2. Build the standard iretq frame
-        "push 0x2b",   // User SS (selector 5 | 3)
+        "push 0x23",   // User SS (selector 4 | 3)
         "push gs:[8]", // User RSP
         "swapgs",      // Restore user GS
         "push r11",    // User RFLAGS (saved by CPU in r11)
-        "push 0x23",   // User CS (selector 4 | 3)
+        "push 0x2b",   // User CS (selector 5 | 3)
         "push rcx",    // User RIP (saved by CPU in rcx)
         // 3. Save GPRs to match SyscallFrame
         "push rax",
@@ -189,7 +189,7 @@ fn handle_pending_signals(frame: &mut SyscallFrame) {
         crate::task::signal::SIG_IGN => {}
         crate::task::signal::SIG_DFL => {
             match sig {
-                17 /* SIGCHLD */ | 23 /* SIGURG */ => {}
+                17 /* SIGCHLD */ | 18 /* SIGCONT */ | 23 /* SIGURG */ | 28 /* SIGWINCH */ => {}
                 _ => {
                     let pid = p.pid;
                     drop(p);
@@ -200,7 +200,8 @@ fn handle_pending_signals(frame: &mut SyscallFrame) {
         }
         handler_addr => {
             let saved_mask = p.blocked_signals;
-            p.blocked_signals |= action.sa_mask | sig_mask_bit;
+            const UNBLOCKABLE: u64 = (1u64 << (9 - 1)) | (1u64 << (19 - 1));
+            p.blocked_signals |= (action.sa_mask & !UNBLOCKABLE) | sig_mask_bit;
 
             let ctx = crate::task::signal::SignalUserContext {
                 regs: frame.regs,
@@ -214,7 +215,7 @@ fn handle_pending_signals(frame: &mut SyscallFrame) {
             drop(p);
 
             let ctx_size = core::mem::size_of::<crate::task::signal::SignalUserContext>() as u64;
-            let mut new_rsp = (frame.rsp - ctx_size) & !0xF;
+            let mut new_rsp = (frame.rsp.saturating_sub(128 + ctx_size)) & !0xF;
 
             let ctx_bytes = unsafe {
                 core::slice::from_raw_parts(&ctx as *const _ as *const u8, ctx_size as usize)
@@ -245,7 +246,7 @@ pub(crate) fn install() {
     unsafe {
         Efer::update(|efer| *efer |= EferFlags::SYSTEM_CALL_EXTENSIONS);
         LStar::write(VirtAddr::new(syscall_entry as *const () as usize as u64));
-        let star_val = (0x08u64 << 32) | (0x10u64 << 48);
+        let star_val = (0x08u64 << 32) | (0x18u64 << 48);
         model_specific::Msr::new(0xc0000081).write(star_val);
         SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::DIRECTION_FLAG);
         KernelGsBase::write(VirtAddr::from_ptr(&raw const crate::arch::gdt::CPU_SCRATCH));
@@ -266,9 +267,7 @@ pub(crate) fn install() {
 pub(crate) fn copy_from_user(dest: &mut [u8], src: u64) -> Result<usize, ()> {
     let len = dest.len() as u64;
 
-    if src.checked_add(len).is_none_or(|end| end > USER_END) {
-        return Err(());
-    }
+    crate::memory::mmu::check_user_range(src, len, false)?;
 
     unsafe { core::ptr::copy_nonoverlapping(src as *const u8, dest.as_mut_ptr(), len as usize) };
 
@@ -278,9 +277,7 @@ pub(crate) fn copy_from_user(dest: &mut [u8], src: u64) -> Result<usize, ()> {
 pub(crate) fn copy_to_user(dest: u64, src: &[u8]) -> Result<usize, ()> {
     let len = src.len() as u64;
 
-    if dest.checked_add(len).is_none_or(|end| end > USER_END) {
-        return Err(());
-    }
+    crate::memory::mmu::check_user_range(dest, len, true)?;
 
     unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dest as *mut u8, len as usize) };
 
@@ -295,6 +292,9 @@ pub(crate) fn user_path(ptr: u64) -> Result<alloc::vec::Vec<u8>, ()> {
     }
 
     let mut path = alloc::vec::Vec::with_capacity(64);
+    let mut current_page = ptr & !(crate::paging::PAGE_SIZE - 1);
+    let root = crate::memory::mmu::current_cr3().start_address().as_u64();
+    crate::memory::mmu::try_translate_in(root, current_page, false)?;
 
     for offset in 0..MAX_USER_PATH as u64 {
         let addr = ptr + offset;
@@ -303,8 +303,12 @@ pub(crate) fn user_path(ptr: u64) -> Result<alloc::vec::Vec<u8>, ()> {
             return Err(());
         }
 
-        // SAFETY: `addr` is in the user range and reads the byte the pointer names.
-        // One byte at a time, so nothing reads past the terminator.
+        let page = addr & !(crate::paging::PAGE_SIZE - 1);
+        if page != current_page {
+            crate::memory::mmu::try_translate_in(root, page, false)?;
+            current_page = page;
+        }
+
         let byte = unsafe { (addr as *const u8).read() };
 
         if byte == 0 {

@@ -4,9 +4,11 @@ pub(crate) type SyscallResult = Result<u64, Errno>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Errno {
     NoSys = 38,
-    BadFd = 9,
-    Intr = 4,
     NoEntry = 2,
+    Srch = 3,
+    Intr = 4,
+    TwoBig = 7,
+    BadFd = 9,
     Child = 10,
     Again = 11,
     Invalid = 22,

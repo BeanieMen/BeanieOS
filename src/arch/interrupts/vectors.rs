@@ -25,7 +25,7 @@ pub(crate) fn keys() -> u64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn timer_interrupt_rust() {
+extern "C" fn timer_interrupt_rust(cs: u64) {
     let tick = TICKS.fetch_add(1, Ordering::Relaxed);
     if tick.is_multiple_of(8) {
         unsafe {
@@ -47,6 +47,10 @@ extern "C" fn timer_interrupt_rust() {
     unsafe {
         pic::eoi();
     }
+
+    if (cs & 3) == 3 && crate::task::scheduler::is_reschedule_requested() {
+        crate::task::scheduler::yield_now();
+    }
 }
 
 extern "x86-interrupt" fn spurious_interrupt_handler(
@@ -59,8 +63,6 @@ extern "x86-interrupt" fn ps2_interrupt_handler(
 ) {
     crate::arch::ps2::on_interrupt();
     unsafe {
-        Port::<u8>::new(0xA0).write(0x20);
-        Port::<u8>::new(0x20).write(0x20);
         pic::eoi();
     }
 }

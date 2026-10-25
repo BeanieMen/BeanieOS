@@ -103,8 +103,8 @@ static void path_join(const char *arg, char *out) {
 }
 
 static void path_normalise(char *path) {
-  char parts[16][32];
-  int lengths[16];
+  char parts[32][64];
+  int lengths[32];
   int count = 0;
 
   int i = 0;
@@ -123,8 +123,12 @@ static void path_normalise(char *path) {
 
     int size = i - start;
 
-    if (size == 0 || size >= 32) {
+    if (size == 0) {
       continue;
+    }
+
+    if (size >= 64) {
+      size = 63;
     }
 
     if (size == 1 && path[start] == '.') {
@@ -145,7 +149,7 @@ static void path_normalise(char *path) {
     lengths[count] = size;
     count++;
 
-    if (count == 16) {
+    if (count == 32) {
       break;
     }
   }
@@ -506,6 +510,8 @@ static void cmd_run(int argc, char **argv) {
     if (!background) {
       int child_pid = (int)sys_getpid();
       sys_ioctl(0, TIOCSPGRP, &child_pid);
+    } else {
+      sys_close(0);
     }
     long ret = sys_execve(full, child_argv, envp);
     print("run: execve failed: ");

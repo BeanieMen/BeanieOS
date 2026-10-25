@@ -18,7 +18,7 @@ unsafe fn rep_movsb(dest: &mut *mut u8, src: &mut *const u8, count: usize) {
             "rep movsb",
             inout("rdi") *dest,
             inout("rsi") *src,
-            in("rcx") count,
+            inout("rcx") count => _,
             options(nostack),
         );
     }
@@ -26,8 +26,8 @@ unsafe fn rep_movsb(dest: &mut *mut u8, src: &mut *const u8, count: usize) {
 
 #[inline(always)]
 unsafe fn rep_movsb_backwards(dest: &mut *mut u8, src: &mut *const u8, count: usize) {
-    *dest = dest.wrapping_add(count);
-    *src = src.wrapping_add(count);
+    *dest = dest.wrapping_add(count - 1);
+    *src = src.wrapping_add(count - 1);
 
     unsafe {
         core::arch::asm!(
@@ -36,7 +36,7 @@ unsafe fn rep_movsb_backwards(dest: &mut *mut u8, src: &mut *const u8, count: us
             "cld",
             inout("rdi") *dest,
             inout("rsi") *src,
-            in("rcx") count,
+            inout("rcx") count => _,
             options(nostack),
         );
     }
@@ -50,7 +50,7 @@ unsafe fn rep_stosb(dest: &mut *mut u8, value: u8, count: usize) {
             "rep stosb",
             inout("rdi") *dest,
             in("rax") value as u64 as u32,
-            in("rcx") count,
+            inout("rcx") count => _,
             options(nostack),
         );
     }

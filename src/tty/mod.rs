@@ -24,7 +24,6 @@ pub struct Termios {
     pub c_oflag: u32,
     pub c_cflag: u32,
     pub c_lflag: u32,
-    pub c_line: u8,
     pub c_cc: [u8; 32],
 }
 
@@ -37,7 +36,6 @@ impl Termios {
             c_oflag: 0,
             c_cflag: 0,
             c_lflag: ISIG,
-            c_line: 0,
             c_cc: cc,
         }
     }
