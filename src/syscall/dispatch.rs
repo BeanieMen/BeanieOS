@@ -1,10 +1,8 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
-use pc_keyboard::KeyCode::E;
 use spin::mutex::Mutex;
 
-use crate::input::event::EVENT_FILE_OPS;
 use crate::net::unix::SocketState::Closed;
 use crate::net::unix::UnixSocket;
 use crate::net::vfs::{SOCKET_REGISTRY, create_connected_pair, create_socket_file};
@@ -40,65 +38,87 @@ pub(crate) fn dispatch(
         Syscall::Write => sys_write(args[0], args[1], args[2]),
         Syscall::Open => sys_open(args[0], args[1]),
         Syscall::Close => sys_close(args[0]),
+        Syscall::Stat | Syscall::Lstat => sys_stat(args[0], args[1]),
         Syscall::Fstat => sys_fstat(args[0], args[1]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
         Syscall::Mmap => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         Syscall::Munmap => sys_mun_map(args[0], args[1]),
         Syscall::Brk => sys_brk(args[0]),
-        Syscall::Nanosleep => sys_nanosleep(args[0], args[1]),
-        Syscall::Readv => sys_readv(args[0], args[1], args[2]),
-        Syscall::Writev => sys_writev(args[0], args[1], args[2]),
-        Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
-        Syscall::Fork => sys_fork(frame),
-        Syscall::Exit => sys_exit(args[0]),
-        Syscall::ExitGroup => sys_exit(args[0]),
-        Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
-        Syscall::ArchPrctl => sys_arch_prctl(args[0], args[1]),
-        Syscall::Getpid => sys_getpid(),
-        Syscall::SchedYield => sys_yield(),
-        Syscall::Getdents64 => sys_getdents(args[0], args[1], args[2]),
-        Syscall::SetTidAddress => sys_set_tid_address(args[0]),
-        Syscall::Mkdir => sys_mkdir(args[0]),
-        Syscall::Create => sys_create(args[0]),
-        Syscall::Execve => sys_execve(args[0], args[1], args[2]),
-        Syscall::Poll => sys_poll(args[0], args[1], args[2]),
-        Syscall::Unlink => sys_unlink(args[0]),
-        Syscall::Rmdir => sys_rmdir(args[0]),
         Syscall::RtSigaction => sys_rt_sigaction(args[0], args[1], args[2], args[3]),
         Syscall::RtSigprocmask => sys_rt_sigprocmask(args[0], args[1], args[2], args[3]),
         Syscall::RtSigreturn => sys_rt_sigreturn(frame),
-        Syscall::Kill => sys_kill(args[0] as i64, args[1]),
-        Syscall::ClockGettime => sys_clock_gettime(args[0], args[1]),
-        Syscall::Socket => sys_socket(args[0], args[1], args[2]),
-        Syscall::Connect => sys_connect(args[0], args[1], args[2]),
-        Syscall::Accept => sys_accept(args[0], args[1], args[2], 0),
-        Syscall::Accept4 => sys_accept(args[0], args[1], args[2], args[3]),
+        Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
+        Syscall::Readv => sys_readv(args[0], args[1], args[2]),
+        Syscall::Writev => sys_writev(args[0], args[1], args[2]),
+        Syscall::Access => sys_access(args[0], args[1]),
+        Syscall::Pipe => sys_pipe(args[0]),
+        Syscall::Select | Syscall::Pselect6 => sys_select(args[0], args[1], args[2], args[3], args[4]),
+        Syscall::SchedYield => sys_yield(),
+        Syscall::Madvise => Ok(0),
         Syscall::Dup => sys_dup(args[0]),
         Syscall::Dup2 => sys_dup2(args[0], args[1]),
-        Syscall::Dup3 => sys_dup3(args[0], args[1], args[2]),
+        Syscall::Pause => sys_pause(),
+        Syscall::Nanosleep => sys_nanosleep(args[0], args[1]),
+        Syscall::Getpid => sys_getpid(),
+        Syscall::Socket => sys_socket(args[0], args[1], args[2]),
+        Syscall::Connect => sys_connect(args[0], args[1], args[2]),
+        Syscall::Accept | Syscall::Accept4 => sys_accept(args[0], args[1], args[2], args[3]),
+        Syscall::Shutdown => sys_shutdown(args[0], args[1]),
         Syscall::Bind => sys_bind(args[0], args[1], args[2]),
         Syscall::Listen => sys_listen(args[0], args[1]),
-        Syscall::Socketpair => sys_socketpair(args[0], args[1], args[2], args[3]),
-        Syscall::Select => sys_select(args[0], args[1], args[2], args[3], args[4]),
-        Syscall::Pselect6 => sys_select(args[0], args[1], args[2], args[3], args[4]),
-        Syscall::Shutdown => sys_shutdown(args[0], args[1]),
         Syscall::Getsockname => sys_getsockname(args[0], args[1], args[2]),
         Syscall::Getpeername => sys_getpeername(args[0], args[1], args[2]),
+        Syscall::Socketpair => sys_socketpair(args[0], args[1], args[2], args[3]),
         Syscall::Setsockopt => sys_setsockopt(args[0], args[1], args[2], args[3], args[4]),
         Syscall::Getsockopt => sys_getsockopt(args[0], args[1], args[2], args[3], args[4]),
+        Syscall::Fork => sys_fork(frame),
+        Syscall::Execve => sys_execve(args[0], args[1], args[2]),
+        Syscall::Exit => sys_exit(args[0]),
+        Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
+        Syscall::Kill => sys_kill(args[0] as i64, args[1]),
         Syscall::Uname => sys_uname(args[0]),
         Syscall::Fcntl => sys_fcntl(args[0], args[1], args[2]),
-        Syscall::Getuid | Syscall::Getgid | Syscall::Geteuid | Syscall::Getegid => Ok(0),
-        Syscall::Chmod | Syscall::Fchmod | Syscall::Chown | Syscall::Fchown => Ok(0),
-        Syscall::Pipe => sys_pipe(args[0]),
-        Syscall::Pipe2 => sys_pipe2(args[0], args[1]),
-        Syscall::Openat => sys_openat(args[0], args[1], args[2]),
-        Syscall::Readlink => sys_readlink(args[0], args[1], args[2]),
-        Syscall::Readlinkat => sys_readlinkat(args[0], args[1], args[2], args[3]),
+        Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync => Ok(0),
+        Syscall::Truncate => sys_truncate(args[0], args[1]),
+        Syscall::Ftruncate => sys_ftruncate(args[0], args[1]),
         Syscall::Getcwd => sys_getcwd(args[0], args[1]),
-        Syscall::Madavise => Ok(0),
+        Syscall::Rename => sys_rename(args[0], args[1]),
+        Syscall::Mkdir => sys_mkdir(args[0]),
+        Syscall::Rmdir => sys_rmdir(args[0]),
+        Syscall::Create => sys_create(args[0]),
+        Syscall::Unlink => sys_unlink(args[0]),
+        Syscall::Symlink => sys_symlink(args[0], args[1]),
+        Syscall::Readlink => sys_readlink(args[0], args[1], args[2]),
+        Syscall::Chmod | Syscall::Fchmod | Syscall::Chown | Syscall::Fchown => Ok(0),
+        Syscall::Sysinfo => sys_sysinfo(args[0]),
+        Syscall::Getuid | Syscall::Getgid | Syscall::Geteuid | Syscall::Getegid => Ok(0),
+        Syscall::Setpgid => Ok(0),
+        Syscall::Getppid => sys_getppid(),
+        Syscall::Getpgrp => sys_getpgrp(),
+        Syscall::Setsid => sys_setsid(),
+        Syscall::Getpgid => sys_getpgid(args[0]),
+        Syscall::Statfs | Syscall::Fstatfs => sys_statfs(args[0], args[1]),
+        Syscall::ArchPrctl => sys_arch_prctl(args[0], args[1]),
+        Syscall::Futex => sys_futex(args[0], args[1], args[2], args[3]),
+        Syscall::Getdents64 => sys_getdents(args[0], args[1], args[2]),
+        Syscall::SetTidAddress => sys_set_tid_address(args[0]),
+        Syscall::ClockGettime => sys_clock_gettime(args[0], args[1]),
+        Syscall::ExitGroup => sys_exit(args[0]),
+        Syscall::Poll => sys_poll(args[0], args[1], args[2]),
+        Syscall::Pipe2 => sys_pipe2(args[0], args[1]),
+        Syscall::Dup3 => sys_dup3(args[0], args[1], args[2]),
+        Syscall::Openat => sys_openat(args[0], args[1], args[2]),
+        Syscall::Mkdirat => sys_mkdirat(args[0], args[1], args[2]),
+        Syscall::Fchownat | Syscall::Futimesat | Syscall::Fchmodat => Ok(0),
         Syscall::Newfstatat => sys_newfstatat(args[0], args[1], args[2], args[3]),
-        Syscall::Ultimensat => Ok(0),
+        Syscall::Unlinkat => sys_unlinkat(args[0], args[1], args[2]),
+        Syscall::Renameat | Syscall::Renameat2 => sys_rename(args[1], args[3]),
+        Syscall::Symlinkat => sys_symlink(args[0], args[2]),
+        Syscall::Readlinkat => sys_readlinkat(args[0], args[1], args[2], args[3]),
+        Syscall::Faccessat => sys_faccessat(args[0], args[1], args[2], args[3]),
+        Syscall::Utimensat => Ok(0),
+        Syscall::Prlimit64 => sys_prlimit64(args[0], args[1], args[2], args[3]),
+        Syscall::Getrandom => sys_getrandom(args[0], args[1], args[2]),
     }
 }
 
@@ -107,6 +127,208 @@ pub(crate) fn dispatch(
 struct Timespec {
     tv_sec: i64,
     tv_nsec: i64,
+}
+
+fn sys_stat(path_ptr: u64, stat_buf: u64) -> SyscallResult {
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let resolved = resolve_relative_path(&path);
+    let fd = with_current_fds(|fds| fds.open(&resolved, OpenFlags::READ))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
+    let res = sys_fstat(fd, stat_buf);
+    let _ = with_current_fds(|fds| fds.close(fd));
+    res
+}
+
+fn sys_access(path_ptr: u64, _mode: u64) -> SyscallResult {
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let resolved = resolve_relative_path(&path);
+    let fd = with_current_fds(|fds| fds.open(&resolved, OpenFlags::READ))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
+    let _ = with_current_fds(|fds| fds.close(fd));
+    Ok(0)
+}
+
+fn sys_pause() -> SyscallResult {
+    loop {
+        if has_pending_signals() {
+            return Err(Errno::Intr);
+        }
+        sleep(10);
+    }
+}
+
+fn sys_truncate(path_ptr: u64, length: u64) -> SyscallResult {
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let resolved = resolve_relative_path(&path);
+    let fd = with_current_fds(|fds| fds.open(&resolved, OpenFlags::WRITE))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
+    let res = sys_ftruncate(fd, length);
+    let _ = with_current_fds(|fds| fds.close(fd));
+    res
+}
+
+fn sys_ftruncate(fd: u64, length: u64) -> SyscallResult {
+    with_current_fds(|fds| {
+        let file = fds.get_mut(fd).map_err(|_| Errno::BadFd)?;
+        let mut inode = file.inode.lock();
+        inode.size = length;
+        let _ = inode.file_ops.write(&mut inode, length, &[]);
+        Ok(0)
+    }).ok_or(Errno::BadFd)?
+}
+
+fn sys_rename(old_ptr: u64, new_ptr: u64) -> SyscallResult {
+    let Ok(old_path) = user_path(old_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let Ok(new_path) = user_path(new_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let old_res = resolve_relative_path(&old_path);
+    let new_res = resolve_relative_path(&new_path);
+    if old_res == new_res {
+        return Ok(0);
+    }
+    with_current_fds(|fds| {
+        let _ = fds.unlink(&new_res);
+        Ok(0)
+    }).ok_or(Errno::BadFd)?
+}
+
+fn sys_symlink(target: u64, linkpath: u64) -> SyscallResult {
+    let Ok(tgt) = user_path(target) else {
+        return Err(Errno::Fault);
+    };
+    let Ok(link) = user_path(linkpath) else {
+        return Err(Errno::Fault);
+    };
+    let link_res = resolve_relative_path(&link);
+    with_current_fds(|fds| {
+        let fd = fds.open(&link_res, OpenFlags {
+            read: false,
+            write: true,
+            create: true,
+            truncate: true,
+            append: false,
+            directory: false,
+            nonblock: false,
+            exclusive: true,
+        }).map_err(|_| Errno::Exist)?;
+        let _ = fds.write(fd, &tgt);
+        let _ = fds.close(fd);
+        Ok(0)
+    }).ok_or(Errno::BadFd)?
+}
+
+fn sys_sysinfo(info_ptr: u64) -> SyscallResult {
+    let mut buf = [0u8; 112];
+    let uptime = ticks() / 1000;
+    buf[0..8].copy_from_slice(&(uptime as i64).to_le_bytes());
+    let total_ram: u64 = 512 * 1024 * 1024;
+    let free_ram: u64 = 256 * 1024 * 1024;
+    buf[32..40].copy_from_slice(&total_ram.to_le_bytes());
+    buf[40..48].copy_from_slice(&free_ram.to_le_bytes());
+    buf[80..82].copy_from_slice(&1u16.to_le_bytes());
+    buf[104..108].copy_from_slice(&1u32.to_le_bytes());
+    copy_to_user(info_ptr, &buf).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+
+fn sys_getppid() -> SyscallResult {
+    let cur = current_pid();
+    let ppid = process::parent_of(cur).unwrap_or(crate::task::identity::ProcessId(1));
+    Ok(ppid.as_u64())
+}
+
+fn sys_getpgrp() -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
+
+fn sys_setsid() -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
+
+fn sys_getpgid(_pid: u64) -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
+
+fn sys_statfs(_path_or_fd: u64, buf_ptr: u64) -> SyscallResult {
+    let mut buf = [0u8; 120];
+    let bsize: u64 = 4096;
+    let blocks: u64 = 131072;
+    let bfree: u64 = 65536;
+    buf[0..8].copy_from_slice(&0x4d44u64.to_le_bytes());
+    buf[8..16].copy_from_slice(&bsize.to_le_bytes());
+    buf[16..24].copy_from_slice(&blocks.to_le_bytes());
+    buf[24..32].copy_from_slice(&bfree.to_le_bytes());
+    buf[32..40].copy_from_slice(&bfree.to_le_bytes());
+    buf[64..72].copy_from_slice(&255u64.to_le_bytes());
+    copy_to_user(buf_ptr, &buf).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+
+fn sys_futex(_uaddr: u64, op: u64, _val: u64, _timeout: u64) -> SyscallResult {
+    const FUTEX_WAIT: u64 = 0;
+    const FUTEX_WAKE: u64 = 1;
+    let cmd = op & 0x7f;
+    match cmd {
+        FUTEX_WAIT => Ok(0),
+        FUTEX_WAKE => Ok(1),
+        _ => Ok(0),
+    }
+}
+
+fn sys_mkdirat(_dirfd: u64, path: u64, _mode: u64) -> SyscallResult {
+    sys_mkdir(path)
+}
+
+fn sys_unlinkat(_dirfd: u64, path: u64, flags: u64) -> SyscallResult {
+    const AT_REMOVEDIR: u64 = 0x200;
+    if flags & AT_REMOVEDIR != 0 {
+        return sys_rmdir(path);
+    }
+    sys_unlink(path)
+}
+
+fn sys_faccessat(_dirfd: u64, path: u64, mode: u64, _flags: u64) -> SyscallResult {
+    sys_access(path, mode)
+}
+
+fn sys_prlimit64(_pid: u64, resource: u64, new_limit: u64, old_limit: u64) -> SyscallResult {
+    if old_limit != 0 {
+        let limits = match resource {
+            7 => [1024u64, 4096u64],
+            3 => [8 * 1024 * 1024, 8 * 1024 * 1024],
+            _ => [u64::MAX, u64::MAX],
+        };
+        let mut buf = [0u8; 16];
+        buf[0..8].copy_from_slice(&limits[0].to_le_bytes());
+        buf[8..16].copy_from_slice(&limits[1].to_le_bytes());
+        copy_to_user(old_limit, &buf).map_err(|_| Errno::Fault)?;
+    }
+    let _ = new_limit;
+    Ok(0)
+}
+
+fn sys_getrandom(buf_ptr: u64, buflen: u64, _flags: u64) -> SyscallResult {
+    let len = buflen.min(256) as usize;
+    let mut buf = [0u8; 256];
+    let mut seed = ticks();
+    for byte in buf[..len].iter_mut() {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *byte = (seed >> 33) as u8;
+    }
+    copy_to_user(buf_ptr, &buf[..len]).map_err(|_| Errno::Fault)?;
+    Ok(len as u64)
 }
 
 fn sys_newfstatat(dirfd: u64, path_ptr: u64, stat_buf: u64, _flags: u64) -> SyscallResult {

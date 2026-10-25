@@ -395,6 +395,10 @@ pub(crate) fn space_root_of(pid: ProcessId) -> Option<PhysFrame> {
     PROCESS_MANAGER.lock().get(pid)?.lock().space
 }
 
+pub(crate) fn parent_of(pid: ProcessId) -> Option<ProcessId> {
+    PROCESS_MANAGER.lock().parent_of(pid)
+}
+
 pub(crate) fn wait4(target: i64, options: u64) -> Result<Option<(ProcessId, i32)>, ()> {
     let current = identity::current_pid();
     let wnohang = (options & 1) != 0;
