@@ -88,5 +88,7 @@ syscalls! {
      Readlink = 80,
      Readlinkat = 267,
      Madavise = 28,
-     Getcwd = 79
+     Getcwd = 79,
+     Newfstatat = 262,
+     Ultimensat = 280,
 }

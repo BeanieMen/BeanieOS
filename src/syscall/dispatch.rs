@@ -8,7 +8,7 @@ use crate::input::event::EVENT_FILE_OPS;
 use crate::net::unix::SocketState::Closed;
 use crate::net::unix::UnixSocket;
 use crate::net::vfs::{SOCKET_REGISTRY, create_connected_pair, create_socket_file};
-use crate::syscall::entry::{copy_from_user, copy_to_user};
+use crate::syscall::entry::{copy_from_user, copy_to_user, user_path};
 use crate::task::process::{has_pending_signals, with_current_fds};
 use crate::task::scheduler::{sleep, yield_now};
 use crate::{
@@ -97,6 +97,8 @@ pub(crate) fn dispatch(
         Syscall::Readlinkat => sys_readlinkat(args[0], args[1], args[2], args[3]),
         Syscall::Getcwd => sys_getcwd(args[0], args[1]),
         Syscall::Madavise => Ok(0),
+        Syscall::Newfstatat => sys_newfstatat(args[0], args[1], args[2], args[3]),
+        Syscall::Ultimensat => Ok(0),
     }
 }
 
@@ -105,6 +107,24 @@ pub(crate) fn dispatch(
 struct Timespec {
     tv_sec: i64,
     tv_nsec: i64,
+}
+
+fn sys_newfstatat(dirfd: u64, path_ptr: u64, stat_buf: u64, _flags: u64) -> SyscallResult {
+    const AT_FDCWD: i64 = -100;
+    if dirfd as i64 != AT_FDCWD && dirfd != 0 {
+        return Err(Errno::Fault);
+    }
+
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+
+    let resolved_path = resolve_relative_path(&path);
+    let open_flags = OpenFlags::READ;
+    let fd = with_current_fds(|fds| fds.open(&resolved_path, open_flags)).ok_or(Errno::BadFd)?.map_err(|_| Errno::NoEntry)?;
+    let res = sys_fstat(fd, stat_buf);
+    let _ = with_current_fds(|fds| fds.close(fd));
+    res
 }
 
 fn sys_getcwd(buf_ptr: u64, size: u64) -> SyscallResult { 
