@@ -1,6 +1,7 @@
 use crate::memory::allocator::alloc_frame;
 use crate::memory::mmu::{AddressSpace, USER_STACK_TOP};
 use crate::paging::phys_to_direct;
+use alloc::vec::Vec;
 use x86_64::align_down;
 use x86_64::structures::paging::PageTableFlags;
 
@@ -49,9 +50,18 @@ pub struct LoadedProcess {
     pub phdr_vaddr: u64,
     pub phdr_count: u64,
     pub phdr_entry_size: u64,
+    pub interp: Option<Vec<u8>>,
+    pub base_addr: u64,
 }
 
 pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess, &'static str> {
+    load_elf_at(space, binary, 0)
+}
+pub fn load_elf_at(
+    space: &mut AddressSpace,
+    binary: &[u8],
+    default_base: u64,
+) -> Result<LoadedProcess, &'static str> {
     if binary.len() < core::mem::size_of::<ElfHeader>() {
         return Err("ELF file too small for header");
     }
@@ -69,15 +79,25 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
     if header.machine != EM_X86_64 {
         return Err("unsupported machine type");
     }
-    if header.elf_type != 2 {
+    if header.elf_type != 2 && header.elf_type != 3 {
         return Err("only statically linked ET_EXEC binaries supported");
     }
+    let base_addr = if header.elf_type == 3 {
+        if default_base == 0 {
+            0x0040_0000
+        } else {
+            default_base
+        }
+    } else {
+        0
+    };
 
     let ph_size = header.phentsize as usize;
     let ph_count = header.phnum as usize;
     let ph_table_offset = header.phoff as usize;
     let mut phdr_vaddr = 0u64;
-
+    let mut interp = None;
+    
     for i in 0..ph_count {
         let ph_offset = ph_table_offset + i * ph_size;
         if ph_offset + ph_size > binary.len() {
@@ -85,10 +105,19 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
         }
         let ph = unsafe { &*(binary.as_ptr().add(ph_offset) as *const Elf64ProgramHeader) };
         if ph.p_type == 3 {
-            return Err("dynamic ELF interpreters (PT_INTERP) not supported");
+            let offset = ph.p_offset as usize;
+            let filesz = ph.p_filesz as usize;
+            if offset + filesz > binary.len() {
+                let mut path = binary[offset..offset + filesz].to_vec();
+                if let Some(pos) = path.iter().position(|&b| b==0) {
+                    path.truncate(pos);
+                }
+                interp = Some(path);
+            }
+            continue
         }
         if ph.p_type == 6 {
-            phdr_vaddr = ph.p_vaddr;
+            phdr_vaddr = ph.p_vaddr + base_addr;
         }
         if ph.p_type != PT_LOAD {
             continue;
@@ -96,7 +125,7 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
         if phdr_vaddr == 0 {
             let ph_end = ph_table_offset as u64 + (ph_count * ph_size) as u64;
             if ph_end <= ph.p_offset + ph.p_filesz {
-                phdr_vaddr = ph.p_vaddr - ph.p_offset + ph_table_offset as u64;
+                phdr_vaddr = ph.p_vaddr - ph.p_offset - ph.p_offset + ph_table_offset as u64;
             }
         }
         if ph.p_memsz == 0 {
@@ -108,7 +137,7 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
             flags |= PageTableFlags::WRITABLE;
         }
 
-        let start_vaddr = ph.p_vaddr;
+        let start_vaddr = ph.p_vaddr + base_addr;
         let mem_size = ph.p_memsz;
         let file_size = ph.p_filesz;
         let file_offset = ph.p_offset as usize;
@@ -178,10 +207,12 @@ pub fn load_elf(space: &mut AddressSpace, binary: &[u8]) -> Result<LoadedProcess
     let user_stack_top = (USER_STACK_TOP - 16) & !0xf;
 
     Ok(LoadedProcess {
-        entry_point: header.entry,
+        entry_point: header.entry + base_addr,
         user_stack_top,
         phdr_vaddr,
         phdr_entry_size: ph_size as u64,
         phdr_count: ph_count as u64,
+        interp,
+        base_addr,
     })
 }

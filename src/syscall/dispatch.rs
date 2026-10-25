@@ -1,3 +1,5 @@
+use core::cmp::min;
+
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
@@ -718,7 +720,9 @@ fn sys_connect(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
         let port = u16::from_be_bytes([raw_addr[2], raw_addr[3]]);
         let ip = [raw_addr[4], raw_addr[5], raw_addr[6], raw_addr[7]];
         let endpoint = smoltcp::wire::IpEndpoint::new(
-            smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::new(ip[0], ip[1], ip[2], ip[3])),
+            smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::new(
+                ip[0], ip[1], ip[2], ip[3],
+            )),
             port,
         );
 
@@ -966,7 +970,7 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
     Ok(total_written)
 }
 
-fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -> SyscallResult {
+fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, offset: u64) -> SyscallResult {
     let pid = current_pid();
     let is_fb = fd >= 3
         && process::with_current_fds(|fds| {
@@ -986,10 +990,27 @@ fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -
         let size = (end - start).min(len);
         return process::mmap_phys(pid, start, size).map_err(|_| Errno::NoMem);
     }
-    match process::mmap(pid, addr, len, prot, flags) {
-        Ok(mapped_addr) => Ok(mapped_addr),
-        Err(_) => Err(Errno::NoMem),
+    let mapped = process::mmap(pid, addr, len, prot, flags).map_err(|_| Errno::NoMem)?;
+    if (flags & 0x20) == 0 && (fd as i64) >= 0 {
+        with_current_fds(|fds| {
+            let _ = fds.lseek(fd, offset as i64, 0);
+            let mut buf = alloc::vec![0u8; 4096];
+            let mut read_bytes = 0usize;
+            while read_bytes < len as usize {
+                let to_read = core::cmp::min(4096, len as usize - read_bytes);
+                let n = match fds.read(fd, &mut buf[..to_read]) {
+                    Ok(n) if n > 0 => n,
+                    _ => break,
+                };
+                let dest = mapped + read_bytes as u64;
+                if copy_to_user(dest, &buf[..n]).is_err() {
+                    break;
+                }
+                read_bytes += n;
+            }
+        });
     }
+    Ok(mapped)
 }
 
 fn sys_mun_map(addr: u64, len: u64) -> SyscallResult {
@@ -2221,7 +2242,9 @@ fn get_socket_by_fd(
     map.get(&inode_id).cloned().ok_or(Errno::BadFd)
 }
 
-fn get_inet_socket_by_fd(fd: u64) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::inet::InetSocket>>, Errno> {
+fn get_inet_socket_by_fd(
+    fd: u64,
+) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::inet::InetSocket>>, Errno> {
     let file = with_current_fds(|fds| fds.get(fd).cloned()).ok_or(Errno::BadFd)?;
     let f = file.map_err(|_| Errno::BadFd)?;
     let inode = f.inode.lock();
