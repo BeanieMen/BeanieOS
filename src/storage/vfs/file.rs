@@ -104,25 +104,8 @@ impl File {
 
             self.offset += 1;
 
-            let base = &entry.name[..8];
-            let ext = &entry.name[8..11];
-
-            let base_len = base.iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
-            let ext_len = ext.iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
-
-            let mut formatted = [0u8; 13];
-            let mut formatted_len = 0;
-            formatted[..base_len].copy_from_slice(&base[..base_len]);
-            formatted_len += base_len;
-
-            if ext_len > 0 {
-                formatted[formatted_len] = b'.';
-                formatted_len += 1;
-                formatted[formatted_len..formatted_len + ext_len].copy_from_slice(&ext[..ext_len]);
-                formatted_len += ext_len;
-            }
-
-            let name_len = formatted_len + 1;
+            let formatted = &entry.name[..entry.name_len];
+            let name_len = formatted.len() + 1;
             let reclen = (DIRENT_HEADER + name_len + 7) & !7;
 
             if written + reclen > buf.len() {
@@ -145,9 +128,9 @@ impl File {
             record[8..16].copy_from_slice(&self.offset.to_le_bytes());
             record[16..18].copy_from_slice(&(reclen as u16).to_le_bytes());
             record[18] = d_type;
-            record[DIRENT_HEADER..DIRENT_HEADER + formatted_len]
-                .copy_from_slice(&formatted[..formatted_len]);
-            record[DIRENT_HEADER + formatted_len..reclen].fill(0);
+            record[DIRENT_HEADER..DIRENT_HEADER + formatted.len()]
+                .copy_from_slice(formatted);
+            record[DIRENT_HEADER + formatted.len()..reclen].fill(0);
 
             written += reclen;
         }
