@@ -3,7 +3,7 @@ use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    arch::lock::InterruptMutex, memory::{allocator::alloc_frame, mmu::{self, free_user_tables}}, paging::phys_to_direct, storage::vfs::fd::FdTable, task::{
+    arch::lock::InterruptMutex, memory::{allocator::alloc_frame, mmu}, paging::phys_to_direct, storage::vfs::fd::FdTable, task::{
         identity::{self, ProcessId, ThreadId},
         signal::SigAction,
     },
@@ -347,6 +347,17 @@ impl ProcessManager {
         process.status = ProcessStatus::Zombie(exit_code);
         process.exit_code = Some(exit_code);
         process.fds.close_all();
+        let ppid = process.ppid;
+        drop(process);
+
+        if let Some(ppid) = ppid {
+            if let Some(parent) = self.processes.get(&ppid) {
+                let parent_threads = parent.lock().threads.clone();
+                for tid in parent_threads {
+                    crate::task::scheduler::wake(tid);
+                }
+            }
+        }
 
         // Reparent orphans to init (PID 1)
         for proc in self.processes.values() {
@@ -366,9 +377,6 @@ impl ProcessManager {
         };
 
         self.processes.remove(&pid);
-        if let Some(space_frame) = process.lock().space {
-                    unsafe { free_user_tables(space_frame) };
-            }
         Some(code)
     }
 }

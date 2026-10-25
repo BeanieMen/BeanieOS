@@ -80,6 +80,10 @@ $(DISK): kernel userbins
 	for f in userspace/fonts/*; do \
 		mcopy -i $@@@$(KERNEL_OFFSET) "$$f" "::usr/share/fonts/X11/misc/`basename "$$f"`" || exit 1; \
 	done
+	mmd -i $@@@$(KERNEL_OFFSET) ::packages
+	for pkg in userspace/packages/*; do \
+		[ -f "$$pkg" ] && mcopy -i $@@@$(KERNEL_OFFSET) "$$pkg" "::packages/`basename "$$pkg"`" || true; \
+	done
 	
 
 disk: $(DISK)

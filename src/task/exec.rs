@@ -72,8 +72,14 @@ pub(crate) fn execve(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> Result<
 fn read_program(path: &[u8]) -> Option<Vec<u8>> {
     process::with_current_fds(|fds| {
         let fd = fds.open_read(path).ok()?;
+        let size = fds.lseek(fd, 0, 2).ok().unwrap_or(0);
+        let _ = fds.lseek(fd, 0, 0);
 
-        let mut image = Vec::new();
+        let mut image = if size > 0 && (size as usize) <= MAX_IMAGE {
+            Vec::with_capacity(size as usize)
+        } else {
+            Vec::new()
+        };
         let mut chunk = alloc::vec![0u8; READ_CHUNK];
 
         loop {

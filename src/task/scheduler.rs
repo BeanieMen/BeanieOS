@@ -458,7 +458,15 @@ pub(crate) fn sleep(duration_ticks: u64) {
 }
 
 pub(crate) fn exit() -> ! {
-    let switch = SCHEDULER.lock().retire_current();
+    let mut switch = SCHEDULER.lock().retire_current();
+
+    while switch.is_none() {
+        x86_64::instructions::interrupts::enable_and_hlt();
+        x86_64::instructions::interrupts::disable();
+        let mut sched = SCHEDULER.lock();
+        sched.wake_sleeping_threads();
+        switch = sched.activate_next();
+    }
 
     apply(switch);
 

@@ -4,7 +4,6 @@ use multiboot2::MemoryMapTag;
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 use x86_64::registers::control::{Cr3, Cr3Flags};
-use x86_64::structures::paging::PageTable;
 use x86_64::structures::paging::{PageTableFlags, PhysFrame};
 
 use crate::arch::lock::InterruptMutex;
@@ -105,32 +104,7 @@ fn split_huge_at(slot: u64, virt: u64) -> Result<u64, MemoryError> {
 
     Ok(base)
 }
-pub(crate) unsafe fn free_user_tables(p4_frame: PhysFrame) {
-    let p4 = unsafe { &mut *(phys_to_direct(p4_frame.start_address().as_u64()) as *mut PageTable) };
 
-    for i in 0..256 {
-        if p4[i].flags().contains(PageTableFlags::PRESENT) {
-            let p3_frame = p4[i].frame().unwrap();
-            let p3 = unsafe {
-                &mut *(phys_to_direct(p3_frame.start_address().as_u64()) as *mut PageTable)
-            };
-
-            for j in 0..512 {
-                if p3[j].flags().contains(PageTableFlags::PRESENT)
-                    && !p3[j].flags().contains(PageTableFlags::HUGE_PAGE)
-                {
-                    let p2_frame = p3[j].frame().unwrap();
-                    {
-                        crate::memory::allocator::free_frame(p2_frame.start_address().as_u64())
-                    };
-                }
-            }
-
-             { crate::memory::allocator::free_frame(p3_frame.start_address().as_u64()) };
-        }
-    }
-    { crate::memory::allocator::free_frame(p4_frame.start_address().as_u64()) };
-}
 pub(crate) struct Mapper {
     root: PhysFrame,
 }
