@@ -16,6 +16,22 @@
 #define SYS_YIELD 24
 #define SYS_NANOSLEEP 35
 #define SYS_GETPID 39
+
+#define SYS_SOCKET 41
+#define SYS_CONNECT 42
+#define SYS_ACCEPT 43
+#define SYS_BIND 49
+#define SYS_LISTEN 50
+#define SYS_SOCKETPAIR 53
+
+#define AF_UNIX 1
+#define SOCK_STREAM 1
+
+struct sockaddr_un {
+  unsigned short sun_family;
+  char sun_path[108];
+};
+
 #define SYS_FORK 57
 #define SYS_EXECVE 59
 #define SYS_EXIT 60
@@ -59,9 +75,17 @@
 #define EMFILE 24
 #define ENOSYS 38
 
+#define AF_UNIX 1
+#define SOCK_STREAM 1
+
 struct timespec {
   long tv_sec;
   long tv_nsec;
+};
+
+struct socketaddr_un {
+  unsigned short sun_family;
+  char sun_path[100];
 };
 
 static inline long syscall(long num, long a1, long a2, long a3) {
@@ -87,13 +111,36 @@ static inline long syscall6(long num, long a1, long a2, long a3, long a4,
   return ret;
 }
 
+static inline int sys_socket(int domain, int type, int protocol) {
+  return (int)syscall(SYS_SOCKET, domain, type, protocol);
+}
+
+static inline int sys_bind(int fd, const struct sockaddr_un *addr,
+                           int addrlen) {
+  return (int)syscall(SYS_BIND, fd, (long)addr, addrlen);
+}
+static inline int sys_listen(int fd, int backlog) {
+  return (int)syscall(SYS_LISTEN, fd, backlog, 0);
+}
+static inline int sys_connect(int fd, const struct sockaddr_un *addr,
+                              int addrlen) {
+  return (int)syscall(SYS_CONNECT, fd, (long)addr, addrlen);
+}
+static inline int sys_accept(int fd, struct sockaddr_un *addr, int *addrlen) {
+  return (int)syscall(SYS_ACCEPT, fd, (long)addr, (long)addrlen);
+}
+static inline int sys_socketpair(int domain, int type, int protocol,
+                                 int sv[2]) {
+  return (int)syscall6(SYS_SOCKETPAIR, domain, type, protocol, (long)sv, 0, 0);
+}
+
 static inline int sys_nanosleep(const struct timespec *req,
                                 struct timespec *rem) {
   return (int)syscall(SYS_NANOSLEEP, (long)req, (long)rem, 0);
 }
 
 static inline int sys_clock_gettime(int clock_id, struct timespec *tp) {
-    return (int)syscall(SYS_CLOCK_GETTIME, clock_id, (long)tp, 0);    
+  return (int)syscall(SYS_CLOCK_GETTIME, clock_id, (long)tp, 0);
 }
 
 static inline void sys_sleep_ms(unsigned long ms) {

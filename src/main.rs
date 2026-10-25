@@ -9,6 +9,7 @@ use core::panic::PanicInfo;
 
 use multiboot2::BootInformation;
 
+mod net;
 mod arch;
 mod audio;
 mod console;
