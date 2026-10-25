@@ -5,7 +5,8 @@ use x86_64::instructions::port::Port;
 use x86_64::structures::idt::InterruptDescriptorTable;
 
 use super::consts::{
-    AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, MOUSE_VECTOR, PIC_MOUSE_VECTOR, SPURIOUS_VECTOR,
+    AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, LEGACY_PIC0_COMMAND, MOUSE_VECTOR, PIC_EOI,
+    PIC_MASTER_SPURIOUS_VECTOR, PIC_MOUSE_VECTOR, PIC_SLAVE_SPURIOUS_VECTOR, SPURIOUS_VECTOR,
 };
 use super::pic;
 
@@ -53,9 +54,34 @@ extern "C" fn timer_interrupt_rust(cs: u64) {
     }
 }
 
+extern "x86-interrupt" fn generic_interrupt_handler(
+    _stack_frame: x86_64::structures::idt::InterruptStackFrame,
+) {
+    unsafe {
+        pic::eoi();
+    }
+}
+
 extern "x86-interrupt" fn spurious_interrupt_handler(
     _stack_frame: x86_64::structures::idt::InterruptStackFrame,
 ) {
+}
+
+extern "x86-interrupt" fn pic_master_spurious_handler(
+    _stack_frame: x86_64::structures::idt::InterruptStackFrame,
+) {
+    unsafe {
+        pic::lapic::send_eoi();
+    }
+}
+
+extern "x86-interrupt" fn pic_slave_spurious_handler(
+    _stack_frame: x86_64::structures::idt::InterruptStackFrame,
+) {
+    unsafe {
+        Port::<u8>::new(LEGACY_PIC0_COMMAND).write(PIC_EOI);
+        pic::lapic::send_eoi();
+    }
 }
 
 extern "x86-interrupt" fn ps2_interrupt_handler(
@@ -68,9 +94,15 @@ extern "x86-interrupt" fn ps2_interrupt_handler(
 }
 
 pub(crate) fn register_vectors(idt: &mut InterruptDescriptorTable) {
+    for vector in 32..=255u8 {
+        idt[vector].set_handler_fn(generic_interrupt_handler);
+    }
+
     idt[KEYBOARD_VECTOR].set_handler_fn(ps2_interrupt_handler);
     idt[MOUSE_VECTOR].set_handler_fn(ps2_interrupt_handler);
     idt[PIC_MOUSE_VECTOR].set_handler_fn(ps2_interrupt_handler);
+    idt[PIC_MASTER_SPURIOUS_VECTOR].set_handler_fn(pic_master_spurious_handler);
+    idt[PIC_SLAVE_SPURIOUS_VECTOR].set_handler_fn(pic_slave_spurious_handler);
     idt[SPURIOUS_VECTOR].set_handler_fn(spurious_interrupt_handler);
     idt[AHCI_VECTOR].set_handler_fn(crate::storage::ahci::on_interrupt);
 

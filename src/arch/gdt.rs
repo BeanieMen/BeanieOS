@@ -57,9 +57,17 @@ fn gdt() -> &'static (GlobalDescriptorTable, Selectors) {
         let mut gdt = GlobalDescriptorTable::new();
         let code_selector = gdt.append(Descriptor::kernel_code_segment());
         let kernel_data_selector = gdt.append(Descriptor::kernel_data_segment());
-        let tss_selector = gdt.append(Descriptor::tss_segment(tss()));
+        gdt.append(Descriptor::user_data_segment());
         let user_data_selector = gdt.append(Descriptor::user_data_segment());
         let user_code_selector = gdt.append(Descriptor::user_code_segment());
+        let tss_selector = gdt.append(Descriptor::tss_segment(tss()));
+
+        debug_assert_eq!(code_selector.0, 0x08);
+        debug_assert_eq!(kernel_data_selector.0, 0x10);
+        debug_assert_eq!(user_data_selector.0, 0x23);
+        debug_assert_eq!(user_code_selector.0, 0x2b);
+        debug_assert_eq!(tss_selector.0, 0x30);
+
         (
             gdt,
             Selectors {
