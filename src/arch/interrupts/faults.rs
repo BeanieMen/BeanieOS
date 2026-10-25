@@ -3,22 +3,27 @@ use x86_64::structures::idt::{InterruptDescriptorTable, PageFaultErrorCode};
 use crate::arch::gdt;
 
 macro_rules! fault_handler {
-    ($name:ident, $label:literal) => {
+    ($name:ident, $label:literal, $sig:literal) => {
         extern "x86-interrupt" fn $name(stack_frame: x86_64::structures::idt::InterruptStackFrame) {
             crate::kerror!(concat!("EXCEPTION: ", $label, "\n{:#?}"), stack_frame);
             if stack_frame.code_segment.0 & 3 == 3 {
-                crate::task::process::exit(crate::task::identity::current_pid(), 139);
-                crate::task::scheduler::exit();
+                let handled =
+                    crate::task::process::send_signal(crate::task::identity::current_pid(), $sig);
+                if !handled {
+                    crate::task::process::exit(crate::task::identity::current_pid(), 128 + $sig);
+                    crate::task::scheduler::exit();
+                }
             }
-            loop {
-                x86_64::instructions::hlt();
-            }
+            panic!(
+                concat!("KERNEL FAULT: ", $label, " in ring 0: {:#?}"),
+                stack_frame
+            );
         }
     };
 }
 
 macro_rules! fault_handler_with_err {
-    ($name:ident, $label:literal) => {
+    ($name:ident, $label:literal, $sig:literal) => {
         extern "x86-interrupt" fn $name(
             stack_frame: x86_64::structures::idt::InterruptStackFrame,
             error_code: u64,
@@ -29,32 +34,42 @@ macro_rules! fault_handler_with_err {
                 stack_frame
             );
             if stack_frame.code_segment.0 & 3 == 3 {
-                crate::task::process::exit(crate::task::identity::current_pid(), 139);
-                crate::task::scheduler::exit();
+                let handled =
+                    crate::task::process::send_signal(crate::task::identity::current_pid(), $sig);
+
+                if !handled {
+                    crate::task::process::exit(crate::task::identity::current_pid(), 128 + $sig);
+                    crate::task::scheduler::exit();
+                }
             }
-            loop {
-                x86_64::instructions::hlt();
-            }
+            panic!(
+                concat!(
+                    "KERNEL FAULT: ",
+                    $label,
+                    " in ring 0 (error code {:#x}): {:#?}"
+                ),
+                error_code, stack_frame
+            );
         }
     };
 }
 
-fault_handler!(divide_error_handler, "DIVIDE ERROR");
-fault_handler!(debug_handler, "DEBUG EXCEPTION");
-fault_handler!(nmi_handler, "NON-MASKABLE INTERRUPT");
-fault_handler!(overflow_handler, "OVERFLOW");
-fault_handler!(bound_range_handler, "BOUND RANGE EXCEEDED");
-fault_handler!(invalid_opcode_handler, "INVALID OPCODE");
-fault_handler!(device_not_available_handler, "DEVICE NOT AVAILABLE");
-fault_handler!(simd_handler, "SIMD FLOATING-POINT EXCEPTION");
-fault_handler!(virtualization_handler, "VIRTUALIZATION EXCEPTION");
+fault_handler!(divide_error_handler, "DIVIDE ERROR", 8);
+fault_handler!(debug_handler, "DEBUG EXCEPTION", 5);
+fault_handler!(nmi_handler, "NON-MASKABLE INTERRUPT", 7);
+fault_handler!(overflow_handler, "OVERFLOW", 4);
+fault_handler!(bound_range_handler, "BOUND RANGE EXCEEDED", 11);
+fault_handler!(invalid_opcode_handler, "INVALID OPCODE", 4);
+fault_handler!(device_not_available_handler, "DEVICE NOT AVAILABLE", 7);
+fault_handler!(simd_handler, "SIMD FLOATING-POINT EXCEPTION", 8);
+fault_handler!(virtualization_handler, "VIRTUALIZATION EXCEPTION", 7);
 
-fault_handler_with_err!(invalid_tss_handler, "INVALID TSS");
-fault_handler_with_err!(segment_not_present_handler, "SEGMENT NOT PRESENT");
-fault_handler_with_err!(stack_segment_fault_handler, "STACK SEGMENT FAULT");
-fault_handler_with_err!(general_protection_handler, "GENERAL PROTECTION FAULT");
-fault_handler_with_err!(alignment_check_handler, "ALIGNMENT CHECK");
-fault_handler_with_err!(cp_protection_handler, "CONTROL PROTECTION EXCEPTION");
+fault_handler_with_err!(invalid_tss_handler, "INVALID TSS", 11);
+fault_handler_with_err!(segment_not_present_handler, "SEGMENT NOT PRESENT", 11);
+fault_handler_with_err!(stack_segment_fault_handler, "STACK SEGMENT FAULT", 11);
+fault_handler_with_err!(general_protection_handler, "GENERAL PROTECTION FAULT", 11);
+fault_handler_with_err!(alignment_check_handler, "ALIGNMENT CHECK", 7);
+fault_handler_with_err!(cp_protection_handler, "CONTROL PROTECTION EXCEPTION", 11);
 
 extern "x86-interrupt" fn machine_check_handler(
     stack_frame: x86_64::structures::idt::InterruptStackFrame,
@@ -92,9 +107,12 @@ extern "x86-interrupt" fn page_fault_handler(
         crate::task::process::exit(crate::task::identity::current_pid(), 139);
         crate::task::scheduler::exit();
     }
-    loop {
-        x86_64::instructions::hlt();
-    }
+    panic!(
+        "KERNEL PAGE FAULT at {:?} (error code {:?}): {:#?}",
+        Cr2::read(),
+        error_code,
+        stack_frame
+    );
 }
 
 pub(crate) fn register_faults(idt: &mut InterruptDescriptorTable) {

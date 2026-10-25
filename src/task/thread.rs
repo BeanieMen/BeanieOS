@@ -27,6 +27,25 @@ const FRAME_BYTES: usize = FRAME_WORDS * 8;
 
 const RFLAGS_IF: usize = 0x202;
 
+#[repr(C, align(16))]
+#[derive(Clone)]
+pub struct FxsaveArea {
+    pub data: [u8; 512],
+}
+
+impl FxsaveArea {
+    pub const fn default_state() -> Self {
+        let mut area = FxsaveArea { data: [0u8; 512] };
+        // FCW = 0x037F (default rounding to nearest, all 6 exceptions masked)
+        area.data[0] = 0x7f;
+        area.data[1] = 0x03;
+        // MXCSR = 0x1F80 (all 6 SSE exceptions masked)
+        area.data[24] = 0x80;
+        area.data[25] = 0x1f;
+        area
+    }
+}
+
 pub(crate) struct Thread {
     pub id: ThreadId,
     pub pid: ProcessId,
@@ -38,6 +57,7 @@ pub(crate) struct Thread {
     pub stack: Option<Box<[u8]>>,
     pub fs_base: u64,
     pub timeslice: u64,
+    pub fpu_state: Box<FxsaveArea>,
     rsp: UnsafeCell<usize>,
 }
 
@@ -53,6 +73,7 @@ impl Thread {
             stack: None,
             fs_base: 0,
             timeslice: TIMESLICE_TICKS,
+            fpu_state: Box::new(FxsaveArea::default_state()),
         }
     }
 
@@ -77,6 +98,7 @@ impl Thread {
             stack: Some(stack),
             fs_base: 0,
             timeslice: TIMESLICE_TICKS,
+            fpu_state: Box::new(FxsaveArea::default_state()),
         }
     }
 
@@ -116,6 +138,15 @@ impl Thread {
                 .write(crate::syscall::entry::fork_return_trampoline as *const () as usize);
         }
 
+        let mut fpu_state = Box::new(FxsaveArea::default_state());
+        unsafe {
+            core::arch::asm!(
+                "fxsave64 [{0}]",
+                in(reg) fpu_state.data.as_mut_ptr(),
+                options(nostack, preserves_flags)
+            );
+        }
+
         Thread {
             id: ThreadId::new(),
             pid,
@@ -126,6 +157,7 @@ impl Thread {
             stack: Some(stack),
             fs_base: x86_64::registers::model_specific::FsBase::read().as_u64(),
             timeslice: TIMESLICE_TICKS,
+            fpu_state,
         }
     }
 
@@ -177,7 +209,12 @@ fn thread_trampoline_exit() -> ! {
 
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn switch_context(old_rsp: *mut usize, new_rsp: usize) {
+pub unsafe extern "C" fn switch_context(
+    old_rsp: *mut usize,
+    new_rsp: usize,
+    old_fx: *mut u8,
+    new_fx: *const u8,
+) {
     naked_asm!(
         "pushfq",
         "push r15",
@@ -186,8 +223,16 @@ pub unsafe extern "C" fn switch_context(old_rsp: *mut usize, new_rsp: usize) {
         "push r12",
         "push rbx",
         "push rbp",
+        "test rdx, rdx",
+        "jz 1f",
+        "fxsave64 [rdx]",
+        "1:",
         "mov [rdi], rsp",
         "mov rsp, rsi",
+        "test rcx, rcx",
+        "jz 2f",
+        "fxrstor64 [rcx]",
+        "2:",
         "pop rbp",
         "pop rbx",
         "pop r12",

@@ -8,6 +8,7 @@ timer_interrupt_entry:
     push %rax
     push %rcx
     push %rdx
+    push %rbx
     push %rsi
     push %rdi
     push %rbp
@@ -20,6 +21,11 @@ timer_interrupt_entry:
     push %r14
     push %r15
 
+    # 15 registers * 8 = 120 bytes.
+    # CPU interrupt frame: rip (8), cs (8), rflags (8), rsp (8), ss (8) = 40 bytes.
+    # Total on stack = 160 bytes (16-byte aligned before call).
+    # CS is at offset: 15*8 + 8 = 128(%rsp).
+    mov 128(%rsp), %rdi
     call timer_interrupt_rust
 
     pop %r15
@@ -33,6 +39,7 @@ timer_interrupt_entry:
     pop %rbp
     pop %rdi
     pop %rsi
+    pop %rbx
     pop %rdx
     pop %rcx
     pop %rax

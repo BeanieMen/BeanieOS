@@ -18,7 +18,12 @@ impl FileOperations for DspFileOps {
         buf: &[u8],
     ) -> Result<usize, &'static str> {
         if let Some(ref mut dev) = *AC97_DEV.lock() {
-            Ok(dev.write_samples(buf))
+            let written = dev.write_samples(buf);
+            if written == 0 && !buf.is_empty() {
+                Err("would block")
+            } else {
+                Ok(written)
+            }
         } else {
             Ok(buf.len())
         }
@@ -53,6 +58,8 @@ pub fn create_dsp_file(flags: OpenFlags) -> File {
         size: 0,
         cluster: 0,
         dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
     File::new(Arc::new(Mutex::new(inode)), flags)
 }

@@ -133,14 +133,20 @@ impl FileOperations for SocketFileOps {
         };
         let mut peer_sock = peer_arc.lock();
         if let SocketState::Connected { rx_buffer, .. } = &mut peer_sock.state {
+            let mut pushed = 0;
             for &b in buf {
                 if rx_buffer.len() < 65536 {
                     rx_buffer.push_back(b);
+                    pushed += 1;
                 } else {
                     break;
                 }
             }
-            Ok(buf.len())
+            if pushed == 0 && !buf.is_empty() {
+                Err("would block")
+            } else {
+                Ok(pushed)
+            }
         } else {
             Err("broken pipe")
         }
@@ -156,7 +162,8 @@ impl FileOperations for SocketFileOps {
 }
 
 pub static SOCKET_MAP: Mutex<BTreeMap<u64, Arc<Mutex<UnixSocket>>>> = Mutex::new(BTreeMap::new());
-static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(1000);
+pub const SOCKET_INODE_BASE: u64 = 0x2_0000_0000;
+static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(SOCKET_INODE_BASE);
 
 pub static SOCKET_REGISTRY: Mutex<BTreeMap<Vec<u8>, Arc<Mutex<UnixSocket>>>> =
     Mutex::new(BTreeMap::new());
@@ -177,6 +184,8 @@ pub fn create_socket_file(sock: Arc<Mutex<UnixSocket>>) -> File {
         inode_ops: &SOCKET_INODE_OPS,
         file_ops: &SOCKET_FILE_OPS,
         dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
 
     File::new(Arc::new(Mutex::new(inode)), OpenFlags::RDWR)

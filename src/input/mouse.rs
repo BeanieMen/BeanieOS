@@ -11,8 +11,11 @@ pub static MOUSE_QUEUE: InterruptMutex<VecDeque<u8>> = InterruptMutex::new(VecDe
 /// Push a standard 3-byte PS/2 mouse packet into the queue.
 pub fn push_packet(flags: u8, x: u8, y: u8) {
     let mut q = MOUSE_QUEUE.lock();
-    // Maintain at most 1024 bytes (approx 341 packets) to prevent stale lag
+    // Maintain at most 1024 bytes (approx 341 packets) to prevent stale lag.
+    // Drop complete 3-byte packets so packet framing is never corrupted.
     while q.len() + 3 > 1024 {
+        q.pop_front();
+        q.pop_front();
         q.pop_front();
     }
     q.push_back(flags);
@@ -133,6 +136,8 @@ pub fn create_mouse_file(flags: OpenFlags) -> File {
         inode_ops: &MOUSE_INODE_OPS,
         file_ops: &MOUSE_FILE_OPS,
         dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
     File::new(Arc::new(Mutex::new(inode)), flags)
 }

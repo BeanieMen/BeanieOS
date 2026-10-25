@@ -3,12 +3,14 @@ use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
 use spin::mutex::Mutex;
 
+use crate::net::inet::InetType::{Tcp, Udp};
+use crate::net::inet::{InetSocket, create_inet_socket_file};
 use crate::net::unix::SocketState::Closed;
 use crate::net::unix::UnixSocket;
 use crate::net::vfs::{SOCKET_REGISTRY, create_connected_pair, create_socket_file};
-use crate::syscall::entry::{copy_from_user, copy_to_user};
-use crate::task::process::with_current_fds;
-use crate::task::scheduler::yield_now;
+use crate::syscall::entry::{copy_from_user, copy_to_user, user_path};
+use crate::task::process::{has_pending_signals, with_current_fds};
+use crate::task::scheduler::{sleep, yield_now};
 use crate::{
     arch::interrupts::{consts::TICK_MS, vectors::ticks},
     kdebug, kerror,
@@ -38,53 +40,91 @@ pub(crate) fn dispatch(
         Syscall::Write => sys_write(args[0], args[1], args[2]),
         Syscall::Open => sys_open(args[0], args[1]),
         Syscall::Close => sys_close(args[0]),
+        Syscall::Stat | Syscall::Lstat => sys_stat(args[0], args[1]),
         Syscall::Fstat => sys_fstat(args[0], args[1]),
         Syscall::Lseek => sys_lseek(args[0], args[1] as i64, args[2] as u32),
         Syscall::Mmap => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         Syscall::Munmap => sys_mun_map(args[0], args[1]),
         Syscall::Brk => sys_brk(args[0]),
-        Syscall::Nanosleep => sys_nanosleep(args[0], args[1]),
-        Syscall::Readv => sys_readv(args[0], args[1], args[2]),
-        Syscall::Writev => sys_writev(args[0], args[1], args[2]),
-        Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
-        Syscall::Fork => sys_fork(frame),
-        Syscall::Exit => sys_exit(args[0]),
-        Syscall::ExitGroup => sys_exit(args[0]),
-        Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
-        Syscall::ArchPrctl => sys_arch_prctl(args[0], args[1]),
-        Syscall::Getpid => sys_getpid(),
-        Syscall::SchedYield => sys_yield(),
-        Syscall::Getdents64 => sys_getdents(args[0], args[1], args[2]),
-        Syscall::SetTidAddress => sys_set_tid_address(args[0]),
-        Syscall::Mkdir => sys_mkdir(args[0]),
-        Syscall::Create => sys_create(args[0]),
-        Syscall::Execve => sys_execve(args[0], args[1], args[2]),
-        Syscall::Poll => sys_poll(args[0], args[1], args[2]),
-        Syscall::Unlink => sys_unlink(args[0]),
-        Syscall::Rmdir => sys_rmdir(args[0]),
         Syscall::RtSigaction => sys_rt_sigaction(args[0], args[1], args[2], args[3]),
         Syscall::RtSigprocmask => sys_rt_sigprocmask(args[0], args[1], args[2], args[3]),
         Syscall::RtSigreturn => sys_rt_sigreturn(frame),
-        Syscall::Kill => sys_kill(args[0] as i64, args[1]),
-        Syscall::ClockGettime => sys_clock_gettime(args[0], args[1]),
+        Syscall::Ioctl => sys_ioctl(args[0], args[1], args[2]),
+        Syscall::Readv => sys_readv(args[0], args[1], args[2]),
+        Syscall::Writev => sys_writev(args[0], args[1], args[2]),
+        Syscall::Access => sys_access(args[0], args[1]),
+        Syscall::Pipe => sys_pipe(args[0]),
+        Syscall::Select | Syscall::Pselect6 => {
+            sys_select(args[0], args[1], args[2], args[3], args[4])
+        }
+        Syscall::SchedYield => sys_yield(),
+        Syscall::Madvise => Ok(0),
+        Syscall::Dup => sys_dup(args[0]),
+        Syscall::Dup2 => sys_dup2(args[0], args[1]),
+        Syscall::Pause => sys_pause(),
+        Syscall::Nanosleep => sys_nanosleep(args[0], args[1]),
+        Syscall::Getpid => sys_getpid(),
         Syscall::Socket => sys_socket(args[0], args[1], args[2]),
         Syscall::Connect => sys_connect(args[0], args[1], args[2]),
-        Syscall::Accept => sys_accept(args[0], args[1], args[2], 0),
-        Syscall::Accept4 => sys_accept(args[0], args[1], args[2], args[3]),
+        Syscall::Accept | Syscall::Accept4 => sys_accept(args[0], args[1], args[2], args[3]),
+        Syscall::Sendto => sys_write(args[0], args[1], args[2]),
+        Syscall::Recvfrom => sys_read(args[0], args[1], args[2]),
+        Syscall::Shutdown => sys_shutdown(args[0], args[1]),
         Syscall::Bind => sys_bind(args[0], args[1], args[2]),
         Syscall::Listen => sys_listen(args[0], args[1]),
-        Syscall::Socketpair => sys_socketpair(args[0], args[1], args[2], args[3]),
-        Syscall::Select => sys_select(args[0], args[1], args[2], args[3], args[4]),
-        Syscall::Pselect6 => sys_select(args[0], args[1], args[2], args[3], args[4]),
-        Syscall::Shutdown => sys_shutdown(args[0], args[1]),
         Syscall::Getsockname => sys_getsockname(args[0], args[1], args[2]),
         Syscall::Getpeername => sys_getpeername(args[0], args[1], args[2]),
+        Syscall::Socketpair => sys_socketpair(args[0], args[1], args[2], args[3]),
         Syscall::Setsockopt => sys_setsockopt(args[0], args[1], args[2], args[3], args[4]),
         Syscall::Getsockopt => sys_getsockopt(args[0], args[1], args[2], args[3], args[4]),
+        Syscall::Fork => sys_fork(frame),
+        Syscall::Execve => sys_execve(args[0], args[1], args[2]),
+        Syscall::Exit => sys_exit(args[0]),
+        Syscall::Wait4 => sys_wait4(args[0] as i64, args[1], args[2], args[3]),
+        Syscall::Kill => sys_kill(args[0] as i64, args[1]),
         Syscall::Uname => sys_uname(args[0]),
         Syscall::Fcntl => sys_fcntl(args[0], args[1], args[2]),
-        Syscall::Getuid | Syscall::Getgid | Syscall::Geteuid | Syscall::Getegid => Ok(0),
+        Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync => Ok(0),
+        Syscall::Truncate => sys_truncate(args[0], args[1]),
+        Syscall::Ftruncate => sys_ftruncate(args[0], args[1]),
+        Syscall::Getcwd => sys_getcwd(args[0], args[1]),
+        Syscall::Rename => sys_rename(args[0], args[1]),
+        Syscall::Mkdir => sys_mkdir(args[0]),
+        Syscall::Rmdir => sys_rmdir(args[0]),
+        Syscall::Create => sys_create(args[0]),
+        Syscall::Unlink => sys_unlink(args[0]),
+        Syscall::Symlink => sys_symlink(args[0], args[1]),
+        Syscall::Readlink => sys_readlink(args[0], args[1], args[2]),
         Syscall::Chmod | Syscall::Fchmod | Syscall::Chown | Syscall::Fchown => Ok(0),
+        Syscall::Sysinfo => sys_sysinfo(args[0]),
+        Syscall::Getuid | Syscall::Getgid | Syscall::Geteuid | Syscall::Getegid => Ok(0),
+        Syscall::Setpgid => Ok(0),
+        Syscall::Getppid => sys_getppid(),
+        Syscall::Getpgrp => sys_getpgrp(),
+        Syscall::Setsid => sys_setsid(),
+        Syscall::Getpgid => sys_getpgid(args[0]),
+        Syscall::Statfs | Syscall::Fstatfs => sys_statfs(args[0], args[1]),
+        Syscall::ArchPrctl => sys_arch_prctl(args[0], args[1]),
+        Syscall::Futex => sys_futex(args[0], args[1], args[2], args[3]),
+        Syscall::Getdents64 => sys_getdents(args[0], args[1], args[2]),
+        Syscall::SetTidAddress => sys_set_tid_address(args[0]),
+        Syscall::ClockGettime => sys_clock_gettime(args[0], args[1]),
+        Syscall::ExitGroup => sys_exit(args[0]),
+        Syscall::Poll => sys_poll(args[0], args[1], args[2]),
+        Syscall::Pipe2 => sys_pipe2(args[0], args[1]),
+        Syscall::Dup3 => sys_dup3(args[0], args[1], args[2]),
+        Syscall::Openat => sys_openat(args[0], args[1], args[2]),
+        Syscall::Mkdirat => sys_mkdirat(args[0], args[1], args[2]),
+        Syscall::Fchownat | Syscall::Futimesat | Syscall::Fchmodat => Ok(0),
+        Syscall::Newfstatat => sys_newfstatat(args[0], args[1], args[2], args[3]),
+        Syscall::Unlinkat => sys_unlinkat(args[0], args[1], args[2]),
+        Syscall::Renameat | Syscall::Renameat2 => sys_rename(args[1], args[3]),
+        Syscall::Symlinkat => sys_symlink(args[0], args[2]),
+        Syscall::Readlinkat => sys_readlinkat(args[0], args[1], args[2], args[3]),
+        Syscall::Faccessat => sys_faccessat(args[0], args[1], args[2], args[3]),
+        Syscall::Utimensat => Ok(0),
+        Syscall::Prlimit64 => sys_prlimit64(args[0], args[1], args[2], args[3]),
+        Syscall::Getrandom => sys_getrandom(args[0], args[1], args[2]),
     }
 }
 
@@ -95,10 +135,327 @@ struct Timespec {
     tv_nsec: i64,
 }
 
-fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> SyscallResult {
-    let f = with_current_fds(|fds| fds.get(fd).cloned().ok()).flatten().ok_or(Errno::BadFd)?;
+fn sys_stat(path_ptr: u64, stat_buf: u64) -> SyscallResult {
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let resolved = resolve_relative_path(&path);
+    let fd = with_current_fds(|fds| fds.open(&resolved, OpenFlags::READ))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
+    let res = sys_fstat(fd, stat_buf);
+    let _ = with_current_fds(|fds| fds.close(fd));
+    res
+}
+
+fn sys_access(path_ptr: u64, _mode: u64) -> SyscallResult {
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let resolved = resolve_relative_path(&path);
+    let fd = with_current_fds(|fds| fds.open(&resolved, OpenFlags::READ))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
+    let _ = with_current_fds(|fds| fds.close(fd));
+    Ok(0)
+}
+
+fn sys_pause() -> SyscallResult {
+    loop {
+        if has_pending_signals() {
+            return Err(Errno::Intr);
+        }
+        sleep(10);
+    }
+}
+
+fn sys_truncate(path_ptr: u64, length: u64) -> SyscallResult {
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let resolved = resolve_relative_path(&path);
+    let fd = with_current_fds(|fds| fds.open(&resolved, OpenFlags::WRITE))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
+    let res = sys_ftruncate(fd, length);
+    let _ = with_current_fds(|fds| fds.close(fd));
+    res
+}
+
+fn sys_ftruncate(fd: u64, length: u64) -> SyscallResult {
+    with_current_fds(|fds| {
+        let file = fds.get_mut(fd).map_err(|_| Errno::BadFd)?;
+        let mut inode = file.inode.lock();
+        inode.size = length;
+        let _ = inode.file_ops.write(&mut inode, length, &[]);
+        Ok(0)
+    })
+    .ok_or(Errno::BadFd)?
+}
+
+fn sys_rename(old_ptr: u64, new_ptr: u64) -> SyscallResult {
+    let Ok(old_path) = user_path(old_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let Ok(new_path) = user_path(new_ptr) else {
+        return Err(Errno::Fault);
+    };
+    let old_res = resolve_relative_path(&old_path);
+    let new_res = resolve_relative_path(&new_path);
+    if old_res == new_res {
+        return Ok(0);
+    }
+    with_current_fds(|fds| {
+        let _ = fds.unlink(&new_res);
+        Ok(0)
+    })
+    .ok_or(Errno::BadFd)?
+}
+
+fn sys_symlink(target: u64, linkpath: u64) -> SyscallResult {
+    let Ok(tgt) = user_path(target) else {
+        return Err(Errno::Fault);
+    };
+    let Ok(link) = user_path(linkpath) else {
+        return Err(Errno::Fault);
+    };
+    let link_res = resolve_relative_path(&link);
+    with_current_fds(|fds| {
+        let fd = fds
+            .open(
+                &link_res,
+                OpenFlags {
+                    read: false,
+                    write: true,
+                    create: true,
+                    truncate: true,
+                    append: false,
+                    directory: false,
+                    nonblock: false,
+                    exclusive: true,
+                },
+            )
+            .map_err(|_| Errno::Exist)?;
+        let _ = fds.write(fd, &tgt);
+        let _ = fds.close(fd);
+        Ok(0)
+    })
+    .ok_or(Errno::BadFd)?
+}
+
+fn sys_sysinfo(info_ptr: u64) -> SyscallResult {
+    let mut buf = [0u8; 112];
+    let uptime = ticks() / 1000;
+    buf[0..8].copy_from_slice(&(uptime as i64).to_le_bytes());
+    let total_ram: u64 = 512 * 1024 * 1024;
+    let free_ram: u64 = 256 * 1024 * 1024;
+    buf[32..40].copy_from_slice(&total_ram.to_le_bytes());
+    buf[40..48].copy_from_slice(&free_ram.to_le_bytes());
+    buf[80..82].copy_from_slice(&1u16.to_le_bytes());
+    buf[104..108].copy_from_slice(&1u32.to_le_bytes());
+    copy_to_user(info_ptr, &buf).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+
+fn sys_getppid() -> SyscallResult {
+    let cur = current_pid();
+    let ppid = process::parent_of(cur).unwrap_or(crate::task::identity::ProcessId(1));
+    Ok(ppid.as_u64())
+}
+
+fn sys_getpgrp() -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
+
+fn sys_setsid() -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
+
+fn sys_getpgid(_pid: u64) -> SyscallResult {
+    Ok(current_pid().as_u64())
+}
+
+fn sys_statfs(_path_or_fd: u64, buf_ptr: u64) -> SyscallResult {
+    let mut buf = [0u8; 120];
+    let bsize: u64 = 4096;
+    let blocks: u64 = 131072;
+    let bfree: u64 = 65536;
+    buf[0..8].copy_from_slice(&0x4d44u64.to_le_bytes());
+    buf[8..16].copy_from_slice(&bsize.to_le_bytes());
+    buf[16..24].copy_from_slice(&blocks.to_le_bytes());
+    buf[24..32].copy_from_slice(&bfree.to_le_bytes());
+    buf[32..40].copy_from_slice(&bfree.to_le_bytes());
+    buf[64..72].copy_from_slice(&255u64.to_le_bytes());
+    copy_to_user(buf_ptr, &buf).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+
+fn sys_futex(_uaddr: u64, op: u64, _val: u64, _timeout: u64) -> SyscallResult {
+    const FUTEX_WAIT: u64 = 0;
+    const FUTEX_WAKE: u64 = 1;
+    let cmd = op & 0x7f;
     match cmd {
-        0 => Ok(0), // F_DUPFD
+        FUTEX_WAIT => Ok(0),
+        FUTEX_WAKE => Ok(1),
+        _ => Ok(0),
+    }
+}
+
+fn sys_mkdirat(_dirfd: u64, path: u64, _mode: u64) -> SyscallResult {
+    sys_mkdir(path)
+}
+
+fn sys_unlinkat(_dirfd: u64, path: u64, flags: u64) -> SyscallResult {
+    const AT_REMOVEDIR: u64 = 0x200;
+    if flags & AT_REMOVEDIR != 0 {
+        return sys_rmdir(path);
+    }
+    sys_unlink(path)
+}
+
+fn sys_faccessat(_dirfd: u64, path: u64, mode: u64, _flags: u64) -> SyscallResult {
+    sys_access(path, mode)
+}
+
+fn sys_prlimit64(_pid: u64, resource: u64, new_limit: u64, old_limit: u64) -> SyscallResult {
+    if old_limit != 0 {
+        let limits = match resource {
+            7 => [1024u64, 4096u64],
+            3 => [8 * 1024 * 1024, 8 * 1024 * 1024],
+            _ => [u64::MAX, u64::MAX],
+        };
+        let mut buf = [0u8; 16];
+        buf[0..8].copy_from_slice(&limits[0].to_le_bytes());
+        buf[8..16].copy_from_slice(&limits[1].to_le_bytes());
+        copy_to_user(old_limit, &buf).map_err(|_| Errno::Fault)?;
+    }
+    let _ = new_limit;
+    Ok(0)
+}
+
+fn sys_getrandom(buf_ptr: u64, buflen: u64, _flags: u64) -> SyscallResult {
+    let len = buflen.min(256) as usize;
+    let mut buf = [0u8; 256];
+    let mut seed = ticks();
+    for byte in buf[..len].iter_mut() {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *byte = (seed >> 33) as u8;
+    }
+    copy_to_user(buf_ptr, &buf[..len]).map_err(|_| Errno::Fault)?;
+    Ok(len as u64)
+}
+
+fn sys_newfstatat(dirfd: u64, path_ptr: u64, stat_buf: u64, _flags: u64) -> SyscallResult {
+    const AT_FDCWD: i64 = -100;
+    if dirfd as i64 != AT_FDCWD && dirfd != 0 {
+        return Err(Errno::Fault);
+    }
+
+    let Ok(path) = user_path(path_ptr) else {
+        return Err(Errno::Fault);
+    };
+
+    let resolved_path = resolve_relative_path(&path);
+    let open_flags = OpenFlags::READ;
+    let fd = with_current_fds(|fds| fds.open(&resolved_path, open_flags))
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::NoEntry)?;
+    let res = sys_fstat(fd, stat_buf);
+    let _ = with_current_fds(|fds| fds.close(fd));
+    res
+}
+
+fn sys_getcwd(buf_ptr: u64, size: u64) -> SyscallResult {
+    let cwd = b"/\0";
+    if size < cwd.len() as u64 {
+        return Err(Errno::Range);
+    }
+
+    copy_to_user(buf_ptr, cwd).map_err(|_| Errno::Fault)?;
+    Ok(buf_ptr)
+}
+
+fn sys_openat(dirfd: u64, path: u64, flags: u64) -> SyscallResult {
+    const AT_FDCWD: i64 = -100;
+    if dirfd as i64 != AT_FDCWD {
+        return Err(Errno::Invalid);
+    }
+    sys_open(path, flags)
+}
+
+fn sys_readlink(_path: u64, _buf: u64, _bufsiz: u64) -> SyscallResult {
+    Err(Errno::Invalid)
+}
+
+fn sys_readlinkat(_dirfd: u64, path: u64, buf: u64, bufsiz: u64) -> SyscallResult {
+    sys_readlink(path, buf, bufsiz)
+}
+
+fn sys_pipe(pipefd_ptr: u64) -> SyscallResult {
+    sys_pipe2(pipefd_ptr, 0)
+}
+
+fn sys_pipe2(pipefd_ptr: u64, flags: u64) -> SyscallResult {
+    const O_CLOEXEC: u64 = 0x80000;
+    const O_NONBLOCK: u64 = 0x800;
+    if flags & !(O_CLOEXEC | O_NONBLOCK) != 0 {
+        return Err(Errno::Invalid);
+    }
+
+    let (a, b) = create_connected_pair();
+    let f1 = create_socket_file(a);
+    let f2 = create_socket_file(b);
+    let (fd1, fd2) = with_current_fds(|fds| {
+        let fd1 = fds.alloc(f1);
+        let fd2 = fds.alloc(f2);
+        (fd1 as i32, fd2 as i32)
+    })
+    .ok_or(Errno::NoMem)?;
+
+    let mut out = [0u8; 8];
+    out[0..4].copy_from_slice(&fd1.to_le_bytes());
+    out[4..8].copy_from_slice(&fd2.to_le_bytes());
+    copy_to_user(pipefd_ptr, &out).map_err(|_| Errno::Fault)?;
+    Ok(0)
+}
+
+fn sys_dup(oldfd: u64) -> SyscallResult {
+    let file = process::with_current_fds(|fds| fds.get(oldfd).cloned())
+        .ok_or(Errno::BadFd)?
+        .map_err(|_| Errno::BadFd)?;
+    let newfd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::BadFd)?;
+    Ok(newfd)
+}
+
+fn sys_dup2(oldfd: u64, newfd: u64) -> SyscallResult {
+    let Some(result) = with_current_fds(|fds| fds.dup2(oldfd, newfd)) else {
+        return Err(Errno::BadFd);
+    };
+
+    result.map_err(|_| Errno::BadFd)
+}
+
+fn sys_dup3(oldfd: u64, newfd: u64, flags: u64) -> SyscallResult {
+    if oldfd == newfd {
+        return Err(Errno::Invalid);
+    }
+    const O_CLOEXEC: u64 = 0x80000;
+    if flags & !O_CLOEXEC != 0 {
+        return Err(Errno::Invalid);
+    }
+    sys_dup2(oldfd, newfd)
+}
+
+fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> SyscallResult {
+    let f = with_current_fds(|fds| fds.get(fd).cloned().ok())
+        .flatten()
+        .ok_or(Errno::BadFd)?;
+    match cmd {
+        0 => {
+            // F_DUPFD
+            let min_fd = arg as usize;
+            with_current_fds(|fds| fds.alloc_at_least(f.clone(), min_fd)).ok_or(Errno::BadFd)
+        }
         1 => Ok(0), // F_GETFD
         2 => Ok(0), // F_SETFD
         3 => {
@@ -140,10 +497,10 @@ fn sys_uname(buf_ptr: u64) -> SyscallResult {
         slice[..len].copy_from_slice(&s[..len]);
     };
 
-    fill(&mut uts[0..65], b"BeanieOS"); // sysname
-    fill(&mut uts[65..130], b"BeanieOS"); // nodename
-    fill(&mut uts[130..195], b"1.0"); // release
-    fill(&mut uts[195..260], b"1.0"); // version
+    fill(&mut uts[0..65], b"Linux"); // sysname
+    fill(&mut uts[65..130], b"beanieos"); // nodename
+    fill(&mut uts[130..195], b"6.1.0-beanieos"); // release
+    fill(&mut uts[195..260], b"#1 SMP PREEMPT"); // version
     fill(&mut uts[260..325], b"x86_64"); // machine
     fill(&mut uts[325..390], b"local"); // domainname
 
@@ -214,16 +571,36 @@ fn sys_shutdown(fd: u64, _how: u64) -> SyscallResult {
     Ok(0)
 }
 fn sys_socket(domain: u64, type_: u64, _proto: u64) -> SyscallResult {
-    if (domain != 1 && domain != 2) || (type_ & 0xF) != 1 {
-        return Err(Errno::Invalid);
+    let base_type = type_ & 0xF;
+    if domain == 1 {
+        if base_type != 1 && base_type != 2 {
+            return Err(Errno::Invalid);
+        }
+        let sock = Arc::new(Mutex::new(UnixSocket::new()));
+        let mut file = create_socket_file(sock);
+        if (type_ & 0x800) != 0 {
+            file.flags.nonblock = true;
+        }
+        let fd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
+        return Ok(fd);
     }
-    let sock = Arc::new(Mutex::new(UnixSocket::new()));
-    let mut file = create_socket_file(sock);
-    if (type_ & 0x800) != 0 {
-        file.flags.nonblock = true;
+    if domain == 2 {
+        let sock_type = match base_type {
+            1 => Tcp,
+            2 => Udp,
+            _ => return Err(Errno::Invalid),
+        };
+        let sock = Arc::new(Mutex::<InetSocket>::new(crate::net::inet::InetSocket::new(
+            sock_type,
+        )));
+        let mut file = create_inet_socket_file(sock);
+        if (type_ & 0x800) != 0 {
+            file.flags.nonblock = true;
+        }
+        let fd = with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
+        return Ok(fd);
     }
-    let fd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
-    Ok(fd)
+    Err(Errno::Invalid)
 }
 
 fn sys_bind(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
@@ -232,8 +609,9 @@ fn sys_bind(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
 
     let family = u16::from_le_bytes([raw_addr[0], raw_addr[1]]);
     if family == 2 {
-        let sock = get_socket_by_fd(fd)?;
-        sock.lock().bound_path = Some(alloc::vec![2]);
+        let inet_sock = get_inet_socket_by_fd(fd)?;
+        let port = u16::from_be_bytes([raw_addr[2], raw_addr[3]]);
+        inet_sock.lock().bound_port = port;
         return Ok(0);
     }
 
@@ -252,7 +630,9 @@ fn sys_bind(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
 fn sys_accept(fd: u64, addr_ptr: u64, len_ptr: u64, flags: u64) -> SyscallResult {
     let sock = get_socket_by_fd(fd)?;
     let is_nonblock = {
-        let f = process::with_current_fds(|fds| fds.get(fd).map(|f| f.flags.nonblock).unwrap_or(false)).unwrap_or(false);
+        let f =
+            process::with_current_fds(|fds| fds.get(fd).map(|f| f.flags.nonblock).unwrap_or(false))
+                .unwrap_or(false);
         f || (flags & 0x800) != 0
     };
 
@@ -332,6 +712,57 @@ fn sys_listen(fd: u64, backlog: u64) -> SyscallResult {
 fn sys_connect(fd: u64, addr_ptr: u64, _len: u64) -> SyscallResult {
     let mut raw_addr = [0u8; 110];
     entry::copy_from_user(&mut raw_addr, addr_ptr).map_err(|_| Errno::Fault)?;
+    let family = u16::from_le_bytes([raw_addr[0], raw_addr[1]]);
+    if family == 2 {
+        let inet_sock = get_inet_socket_by_fd(fd)?;
+        let port = u16::from_be_bytes([raw_addr[2], raw_addr[3]]);
+        let ip = [raw_addr[4], raw_addr[5], raw_addr[6], raw_addr[7]];
+        let endpoint = smoltcp::wire::IpEndpoint::new(
+            smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::new(
+                ip[0], ip[1], ip[2], ip[3],
+            )),
+            port,
+        );
+
+        let rx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0u8; 16384]);
+        let tx_buffer = smoltcp::socket::tcp::SocketBuffer::new(alloc::vec![0u8; 16384]);
+        let tcp_socket = smoltcp::socket::tcp::Socket::new(rx_buffer, tx_buffer);
+
+        let local_port = 49152 + (crate::arch::interrupts::vectors::ticks() % 16384) as u16;
+        let handle = {
+            let mut guard = crate::net::stack::NET_STATE.lock();
+            let state = guard.as_mut().ok_or(Errno::ConnRefused)?;
+            let h = state.sockets.add(tcp_socket);
+            let s = state.sockets.get_mut::<smoltcp::socket::tcp::Socket>(h);
+            s.connect(state.iface.context(), endpoint, local_port)
+                .map_err(|_| Errno::ConnRefused)?;
+            h
+        };
+        inet_sock.lock().handle = Some(handle);
+        inet_sock.lock().remote_endpoint = Some(endpoint);
+
+        loop {
+            crate::net::stack::poll();
+            {
+                let mut guard = crate::net::stack::NET_STATE.lock();
+                if let Some(state) = guard.as_mut() {
+                    let s = state
+                        .sockets
+                        .get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                    match s.state() {
+                        smoltcp::socket::tcp::State::Established => return Ok(0),
+                        smoltcp::socket::tcp::State::Closed => return Err(Errno::ConnRefused),
+                        _ => {}
+                    }
+                }
+            }
+            if crate::task::process::has_pending_signals() {
+                return Err(Errno::Intr);
+            }
+            yield_now();
+        }
+    }
+
     let path = parse_sun_path(&raw_addr[2..]);
     let server_sock = {
         let reg = SOCKET_REGISTRY.lock();
@@ -428,7 +859,15 @@ fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
             continue;
         }
 
-        let n = sys_read(fd, base, len)?;
+        let n = match sys_read(fd, base, len) {
+            Ok(n) => n,
+            Err(e) => {
+                if total_read > 0 {
+                    return Ok(total_read);
+                }
+                return Err(e);
+            }
+        };
 
         total_read += n;
         if n < len {
@@ -519,6 +958,9 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
                 break;
             }
             written_for_iov += n;
+            if scheduler::is_reschedule_requested() {
+                scheduler::yield_now();
+            }
         }
 
         total_written += written_for_iov as u64;
@@ -526,12 +968,16 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
     Ok(total_written)
 }
 
-fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -> SyscallResult {
+fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, offset: u64) -> SyscallResult {
     let pid = current_pid();
     let is_fb = fd >= 3
         && process::with_current_fds(|fds| {
             let file = fds.get(fd).ok()?;
-            Some(file.inode.lock().id == 2)
+            let inode = file.inode.lock();
+            Some(core::ptr::addr_eq(
+                inode.file_ops,
+                &crate::graphics::vfs::FB_FILE_OPS,
+            ))
         })
         .flatten()
         .unwrap_or(false);
@@ -542,20 +988,64 @@ fn sys_mmap(addr: u64, len: u64, prot: u64, flags: u64, fd: u64, _offset: u64) -
         let size = (end - start).min(len);
         return process::mmap_phys(pid, start, size).map_err(|_| Errno::NoMem);
     }
-    match process::mmap(pid, addr, len, prot, flags) {
-        Ok(mapped_addr) => Ok(mapped_addr),
-        Err(_) => Err(Errno::NoMem),
+    let mapped = process::mmap(pid, addr, len, prot, flags).map_err(|_| Errno::NoMem)?;
+    if (flags & 0x20) == 0 && (fd as i64) >= 0 {
+        with_current_fds(|fds| {
+            let _ = fds.lseek(fd, offset as i64, 0);
+            let mut buf = alloc::vec![0u8; 4096];
+            let mut read_bytes = 0usize;
+            while read_bytes < len as usize {
+                let to_read = core::cmp::min(4096, len as usize - read_bytes);
+                let n = match fds.read(fd, &mut buf[..to_read]) {
+                    Ok(n) if n > 0 => n,
+                    _ => break,
+                };
+                let dest = mapped + read_bytes as u64;
+                if copy_to_user(dest, &buf[..n]).is_err() {
+                    break;
+                }
+                read_bytes += n;
+            }
+        });
     }
+    Ok(mapped)
 }
 
-fn sys_mun_map(_addr: u64, _len: u64) -> SyscallResult {
+fn sys_mun_map(addr: u64, len: u64) -> SyscallResult {
+    if len == 0 {
+        return Ok(0);
+    }
+    if addr % 4096 != 0 {
+        return Err(Errno::Invalid);
+    }
+    let end = match addr.checked_add(len) {
+        Some(v) => v,
+        None => return Err(Errno::Invalid),
+    };
+    if end > crate::memory::mmu::USER_END {
+        return Err(Errno::Invalid);
+    }
+
+    let pid = crate::task::identity::current_pid();
+    let root = match crate::task::process::space_root_of(pid) {
+        Some(r) => r,
+        None => return Ok(0),
+    };
+    let mut space = crate::memory::mmu::AddressSpace::from_root(root);
+    let mut curr = addr;
+    while curr < end {
+        let _ = space.unmap(curr);
+        curr += 4096;
+    }
+    core::mem::forget(space);
     Ok(0)
 }
 
 fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
     // Framebuffer ioctls (can be on any fd opened to /dev/fb0)
     match request {
-        crate::graphics::fbdev::FBIOGET_VSCREENINFO | crate::graphics::fbdev::FBIOPUT_VSCREENINFO => {
+        crate::graphics::fbdev::FBIOGET_VSCREENINFO
+        | crate::graphics::fbdev::FBIOPUT_VSCREENINFO => {
             let writer = crate::graphics::framebuffer::WRITER.lock();
             let Some(ref fb) = writer.framebuffer else {
                 return Err(Errno::Invalid);
@@ -627,31 +1117,34 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
     }
 
     match request {
-        0x5600 => { // VT_OPENQRY
+        0x5600 => {
+            // VT_OPENQRY
             let vt = 2i32;
             entry::copy_to_user(arg, &vt.to_le_bytes()).map_err(|_| Errno::Fault)?;
             return Ok(0);
         }
-        0x5601 => { // VT_GETMODE
+        0x5601 => {
+            // VT_GETMODE
             let mode = [0u8; 8];
             entry::copy_to_user(arg, &mode).map_err(|_| Errno::Fault)?;
             return Ok(0);
         }
-        0x5602 => { // VT_SETMODE
+        0x5602 => {
+            // VT_SETMODE
             return Ok(0);
         }
-        0x5603 => { // VT_GETSTATE
+        0x5603 => {
+            // VT_GETSTATE
             let state = [1u16, 0u16, 3u16];
-            let bytes = unsafe {
-                core::slice::from_raw_parts(state.as_ptr() as *const u8, 6)
-            };
+            let bytes = unsafe { core::slice::from_raw_parts(state.as_ptr() as *const u8, 6) };
             entry::copy_to_user(arg, bytes).map_err(|_| Errno::Fault)?;
             return Ok(0);
         }
         0x5605 | 0x5606 | 0x5607 | 0x5608 => return Ok(0), // VT_RELDISP, VT_ACTIVATE, VT_WAITACTIVE, VT_DISALLOCATE
         0x4B3A | 0x4B3B | 0x4B44 | 0x4B45 | 0x4B32 | 0x4B30 => return Ok(0), // KDSETMODE, KDGETMODE, KDGKBMODE, KDSKBMODE, KDSETLED, KDMKTONE
-        0x4B46 => return Err(Errno::Invalid), // KDGKBENT
-        0x8912 => { // SIOCGIFCONF
+        0x4B46 => return Err(Errno::Invalid),                                // KDGKBENT
+        0x8912 => {
+            // SIOCGIFCONF
             let zero = 0i32;
             entry::copy_to_user(arg, &zero.to_le_bytes()).map_err(|_| Errno::Fault)?;
             return Ok(0);
@@ -664,7 +1157,9 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
             let id = f.inode.lock().id;
             (id == 1 || id == 7, id == 7)
         })
-    }).flatten().unwrap_or((false, false));
+    })
+    .flatten()
+    .unwrap_or((false, false));
 
     match request {
         TCGETS => {
@@ -789,19 +1284,25 @@ fn sys_fork(frame: &entry::SyscallFrame) -> SyscallResult {
     Ok(child_pid.as_u64())
 }
 
-fn sys_wait4(pid: i64, wstatus: u64, _options: u64, _rusage: u64) -> SyscallResult {
-    let Some((child_pid, code)) = process::wait4(pid) else {
-        return Err(Errno::Child);
-    };
+fn sys_wait4(pid: i64, wstatus: u64, options: u64, _rusage: u64) -> SyscallResult {
+    let child = process::wait4(pid, options).map_err(|_| Errno::Child)?;
 
-    if wstatus != 0 {
-        let status = (code & 0xff) << 8;
-        if entry::copy_to_user(wstatus, &status.to_le_bytes()).is_err() {
-            return Err(Errno::Fault);
+    match child {
+        Some((child_pid, code)) => {
+            if wstatus != 0 {
+                let status = if code >= 128 && code < 256 {
+                    (code - 128) & 0x7f
+                } else {
+                    (code & 0xff) << 8
+                };
+                if entry::copy_to_user(wstatus, &status.to_le_bytes()).is_err() {
+                    return Err(Errno::Fault);
+                }
+            }
+            Ok(child_pid.as_u64())
         }
+        None => Ok(0),
     }
-
-    Ok(child_pid.as_u64())
 }
 const MAX_ARGS: usize = 64;
 
@@ -873,6 +1374,9 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
             Err("broken pipe") => return Err(Errno::Pipe),
             Err(_) => return Err(Errno::Invalid),
         }
+        if scheduler::is_reschedule_requested() {
+            scheduler::yield_now();
+        }
     }
 
     Ok(total_written as u64)
@@ -892,143 +1396,197 @@ pub(crate) fn wait_for_key() {
     crate::arch::input::remove_waiter(id);
 }
 
-fn sys_poll(fds: u64, nfds: u64, _timeout: u64) -> SyscallResult {
+fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
+    let timeout_ms = timeout as i32;
+    let start_ticks = crate::arch::interrupts::vectors::ticks();
+    let timeout_ticks = if timeout_ms < 0 {
+        u64::MAX
+    } else {
+        timeout_ms as u64
+    };
     if nfds == 0 {
+        if timeout_ms > 0 {
+            while ticks().saturating_sub(start_ticks) < timeout_ticks {
+                if has_pending_signals() {
+                    return Err(Errno::Intr);
+                }
+                sleep(1);
+            }
+        } else if timeout_ms < 0 {
+            loop {
+                if has_pending_signals() {
+                    return Err(Errno::Intr);
+                }
+                sleep(1);
+            }
+        }
         return Ok(0);
     }
     if nfds > 1024 {
         return Err(Errno::Invalid);
     }
+    loop {
+        let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
+        let mut ready = 0u64;
 
-    let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
-    let mut ready = 0u64;
+        for i in 0..nfds {
+            let slot = fds.checked_add(i * 8).ok_or(Errno::Fault)?;
+            let mut pfd_buf = [0u8; 8];
+            entry::copy_from_user(&mut pfd_buf, slot).map_err(|_| Errno::Fault)?;
 
-    for i in 0..nfds {
-        let slot = fds.checked_add(i * 8).ok_or(Errno::Fault)?;
-        let mut pfd_buf = [0u8; 8];
-        entry::copy_from_user(&mut pfd_buf, slot).map_err(|_| Errno::Fault)?;
+            let fd = i32::from_le_bytes(pfd_buf[0..4].try_into().unwrap());
+            let events = i16::from_le_bytes(pfd_buf[4..6].try_into().unwrap());
+            let mut revents = 0i16;
 
-        let fd = i32::from_le_bytes(pfd_buf[0..4].try_into().unwrap());
-        let events = i16::from_le_bytes(pfd_buf[4..6].try_into().unwrap());
-        let mut revents = 0i16;
-
-        if fd >= 0 {
-            if fd == 0 || fd == 1 || fd == 2 {
-                if tty_has_input && (events & 1 != 0) {
-                    revents |= 1; // POLLIN
-                }
-                if events & 4 != 0 {
-                    revents |= 4; // POLLOUT
-                }
-            } else {
-                let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
-                if let Some(Ok(file)) = file {
-                    let inode_id = file.inode.lock().id;
-                    if inode_id == 6 {
-                        // /dev/input/event0
-                        let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
-                        if has_events && (events & 1 != 0) {
-                            revents |= 1;
-                        }
-                    } else if let Some(sock) =
-                        crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
-                    {
-                        // UNIX domain socket
-                        let s = sock.lock();
-                        match &s.state {
-                            crate::net::unix::SocketState::Listening { incoming, .. } => {
-                                if !incoming.is_empty() && (events & 1 != 0) {
-                                    revents |= 1; // Incoming connection to accept
-                                }
-                            }
-                            crate::net::unix::SocketState::Connected {
-                                rx_buffer,
-                                peer_closed,
-                                ..
-                            } => {
-                                if !rx_buffer.is_empty() && (events & 1 != 0) {
-                                    revents |= 1; // Data ready to read
-                                }
-                                if *peer_closed {
-                                    revents |= 1 | 0x10; // EOF / POLLHUP
-                                }
-                                if !*peer_closed && (events & 4 != 0) {
-                                    revents |= 4; // Socket is writable
-                                }
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        revents |= events & 5;
+            if fd >= 0 {
+                if fd == 0 || fd == 1 || fd == 2 {
+                    if tty_has_input && (events & 1 != 0) {
+                        revents |= 1; // POLLIN
+                    }
+                    if events & 4 != 0 {
+                        revents |= 4; // POLLOUT
                     }
                 } else {
-                    revents |= 0x20;
+                    let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
+                    if let Some(Ok(file)) = file {
+                        let (file_ops, inode_id) = {
+                            let inode = file.inode.lock();
+                            (inode.file_ops, inode.id)
+                        };
+                        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS)
+                            || inode_id == 8
+                        {
+                            // /dev/input/event0
+                            let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
+                            if has_events && (events & 1 != 0) {
+                                revents |= 1;
+                            }
+                        } else if core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS)
+                            || inode_id == 8
+                        {
+                            let has_mouse = !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
+                            if has_mouse && (events & 1 != 0) {
+                                revents |= 1;
+                            }
+                        } else if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+                            if let Some(sock) =
+                                crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
+                            {
+                                // UNIX domain socket
+                                let s = sock.lock();
+                                match &s.state {
+                                    crate::net::unix::SocketState::Listening {
+                                        incoming, ..
+                                    } => {
+                                        if !incoming.is_empty() && (events & 1 != 0) {
+                                            revents |= 1; // Incoming connection to accept
+                                        }
+                                    }
+                                    crate::net::unix::SocketState::Connected {
+                                        rx_buffer,
+                                        peer_closed,
+                                        ..
+                                    } => {
+                                        if !rx_buffer.is_empty() && (events & 1 != 0) {
+                                            revents |= 1; // Data ready to read
+                                        }
+                                        if *peer_closed {
+                                            revents |= 1 | 0x10; // EOF / POLLHUP
+                                        }
+                                        if !*peer_closed && (events & 4 != 0) {
+                                            revents |= 4; // Socket is writable
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        } else {
+                            revents |= events & 5;
+                        }
+                    } else {
+                        revents |= 0x20;
+                    }
                 }
             }
+
+            if revents != 0 {
+                ready += 1;
+            }
+
+            entry::copy_to_user(slot + 6, &revents.to_le_bytes()).map_err(|_| Errno::Fault)?;
         }
 
-        if revents != 0 {
-            ready += 1;
+        if ready > 0 || timeout_ms == 0 {
+            return Ok(ready);
         }
 
-        entry::copy_to_user(slot + 6, &revents.to_le_bytes()).map_err(|_| Errno::Fault)?;
+        if crate::task::process::has_pending_signals() {
+            return Err(Errno::Intr);
+        }
+
+        let elapsed = crate::arch::interrupts::vectors::ticks().saturating_sub(start_ticks);
+        if elapsed >= timeout_ticks {
+            return Ok(0);
+        }
+
+        scheduler::sleep(1);
     }
-
-    Ok(ready)
 }
 
 fn check_fd_ready(fd: u64, for_write: bool) -> bool {
     let file = process::with_current_fds(|fds| fds.get(fd).cloned());
     if let Some(Ok(file)) = file {
-        let (inode_id, file_type) = {
+        let (file_ops, inode_id, file_type) = {
             let inode = file.inode.lock();
-            (inode.id, inode.file_type)
+            (inode.file_ops, inode.id, inode.file_type)
         };
-        if inode_id == 1 {
+        if core::ptr::addr_eq(file_ops, &crate::tty::vfs::TTY_FILE_OPS) || inode_id == 1 {
             // TTY (Console / Shell)
             if for_write {
                 return true;
             }
             return !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
         }
-        if inode_id == 7 {
+        if core::ptr::addr_eq(file_ops, &crate::tty::vfs::VT2_FILE_OPS) || inode_id == 7 {
             // VT2 (X11 Virtual Console)
             if for_write {
                 return true;
             }
             return !crate::tty::VT2_TTY.lock().queue.is_empty();
         }
-        if inode_id == 6 {
+        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 8 {
             // /dev/input/event0
             return !for_write && !crate::input::event::EVENT_QUEUE.lock().is_empty();
         }
-        if inode_id == 8 {
+        if core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8 {
             // /dev/mouse, /dev/input/mice, /dev/psaux
             if for_write {
                 return true;
             }
             return !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
         }
-        if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
-            let s = sock.lock();
-            match &s.state {
-                crate::net::unix::SocketState::Listening { incoming, .. } => {
-                    return !for_write && !incoming.is_empty();
-                }
-                crate::net::unix::SocketState::Connected {
-                    rx_buffer,
-                    peer_closed,
-                    ..
-                } => {
-                    if for_write {
-                        return !*peer_closed;
-                    } else {
-                        return !rx_buffer.is_empty() || *peer_closed;
+        if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+            if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
+                let s = sock.lock();
+                match &s.state {
+                    crate::net::unix::SocketState::Listening { incoming, .. } => {
+                        return !for_write && !incoming.is_empty();
                     }
+                    crate::net::unix::SocketState::Connected {
+                        rx_buffer,
+                        peer_closed,
+                        ..
+                    } => {
+                        if for_write {
+                            return !*peer_closed;
+                        } else {
+                            return !rx_buffer.is_empty() || *peer_closed;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+                return false;
             }
-            return false;
         }
         if file_type == crate::storage::vfs::inode::FileType::Device {
             return for_write;
@@ -1073,8 +1631,13 @@ fn sys_select(
             if sec < 0 || sub < 0 {
                 return Err(Errno::Invalid);
             }
-            let ms = (sec as u64).saturating_mul(1000)
-                .saturating_add(if sub > 1_000_000 { (sub as u64) / 1_000_000 } else { (sub as u64) / 1000 });
+            let ms = (sec as u64)
+                .saturating_mul(1000)
+                .saturating_add(if sub > 1_000_000 {
+                    (sub as u64) / 1_000_000
+                } else {
+                    (sub as u64) / 1000
+                });
             Some(crate::arch::interrupts::vectors::ticks().saturating_add(ms))
         } else {
             None
@@ -1161,36 +1724,49 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
 
     let is_dev = file.inode.lock().file_type == crate::storage::vfs::inode::FileType::Device;
     if is_dev {
-        let inode_id = file.inode.lock().id;
+        let (file_ops, inode_id) = {
+            let inode = file.inode.lock();
+            (inode.file_ops, inode.id)
+        };
         if file.flags.nonblock {
-            if inode_id == 1 && crate::tty::GLOBAL_TTY.lock().queue.is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::tty::vfs::TTY_FILE_OPS) || inode_id == 1)
+                && crate::tty::GLOBAL_TTY.lock().queue.is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if inode_id == 7 && crate::tty::VT2_TTY.lock().queue.is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::tty::vfs::VT2_FILE_OPS) || inode_id == 7)
+                && crate::tty::VT2_TTY.lock().queue.is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if inode_id == 6 && crate::input::event::EVENT_QUEUE.lock().is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 6)
+                && crate::input::event::EVENT_QUEUE.lock().is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if inode_id == 8 && crate::input::mouse::MOUSE_QUEUE.lock().is_empty() {
+            if (core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8)
+                && crate::input::mouse::MOUSE_QUEUE.lock().is_empty()
+            {
                 return Err(Errno::Again);
             }
-            if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
-                let s = sock.lock();
-                match &s.state {
-                    crate::net::unix::SocketState::Connected {
-                        rx_buffer,
-                        peer_closed,
-                        ..
-                    } => {
-                        if rx_buffer.is_empty() && !*peer_closed {
-                            return Err(Errno::Again);
+            if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+                if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
+                    let s = sock.lock();
+                    match &s.state {
+                        crate::net::unix::SocketState::Connected {
+                            rx_buffer,
+                            peer_closed,
+                            ..
+                        } => {
+                            if rx_buffer.is_empty() && !*peer_closed {
+                                return Err(Errno::Again);
+                            }
                         }
+                        crate::net::unix::SocketState::Listening { .. } => {
+                            return Err(Errno::Invalid);
+                        }
+                        _ => {}
                     }
-                    crate::net::unix::SocketState::Listening { .. } => {
-                        return Err(Errno::Invalid);
-                    }
-                    _ => {}
                 }
             }
         }
@@ -1236,6 +1812,9 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
             Err("not a regular or device file") => return Err(Errno::IsDir),
             Err(_) => return Err(Errno::Invalid),
         }
+        if scheduler::is_reschedule_requested() {
+            scheduler::yield_now();
+        }
     }
 
     Ok(total_read as u64)
@@ -1279,8 +1858,8 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
     let truncate = (flags & O_TRUNC) != 0;
     let append = (flags & O_APPEND) != 0;
     let directory = (flags & O_DIRECTORY) != 0;
-
-    let nonblock = (flags & 0x800) != 0 || (flags & 0x4) != 0;
+    let nonblock = (flags & 0x800) != 0;
+    let exclusive = (flags & 0x80) != 0;
 
     let open_flags = OpenFlags {
         read,
@@ -1290,6 +1869,7 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
         append,
         directory,
         nonblock,
+        exclusive,
     };
 
     let Some(result) = process::with_current_fds(|fds| fds.open(&path, open_flags)) else {
@@ -1298,6 +1878,7 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
 
     match result {
         Ok(fd) => Ok(fd),
+        Err("file already exists") => Err(Errno::Exist),
         Err("not a directory") => Err(Errno::NotDir),
         Err("is a directory") => Err(Errno::IsDir),
         Err(_) => Err(Errno::NoEntry),
@@ -1305,41 +1886,49 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
 }
 
 fn sys_close(fd: u64) -> SyscallResult {
-    let inode_id = process::with_current_fds(|fds| {
-        fds.get(fd).ok().map(|f| f.inode.lock().id)
-    }).flatten();
+    let file = process::with_current_fds(|fds| fds.get(fd).cloned().ok()).flatten();
 
-    if let Some(id) = inode_id {
-        if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().remove(&id) {
-            let peer_opt = {
-                let mut s = sock.lock();
-                let peer = if let crate::net::unix::SocketState::Connected { peer, .. } = &s.state {
-                    peer.upgrade()
-                } else {
-                    None
+    let Some(result) = process::with_current_fds(|fds| fds.close(fd)) else {
+        return Err(Errno::BadFd);
+    };
+
+    result.map_err(|_| Errno::BadFd)?;
+
+    if let Some(f) = file {
+        let is_socket = {
+            let inode = f.inode.lock();
+            core::ptr::addr_eq(inode.file_ops, &crate::net::vfs::SOCKET_FILE_OPS)
+        };
+
+        if is_socket && alloc::sync::Arc::strong_count(&f.inode) <= 1 {
+            let id = f.inode.lock().id;
+            if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().remove(&id) {
+                let peer_opt = {
+                    let mut s = sock.lock();
+                    let peer =
+                        if let crate::net::unix::SocketState::Connected { peer, .. } = &s.state {
+                            peer.upgrade()
+                        } else {
+                            None
+                        };
+                    s.state = crate::net::unix::SocketState::Closed;
+                    peer
                 };
-                s.state = crate::net::unix::SocketState::Closed;
-                peer
-            };
-            if let Some(peer_arc) = peer_opt {
-                if !alloc::sync::Arc::ptr_eq(&sock, &peer_arc) {
-                    let mut p = peer_arc.lock();
-                    if let crate::net::unix::SocketState::Connected { peer_closed, .. } = &mut p.state {
-                        *peer_closed = true;
+                if let Some(peer_arc) = peer_opt {
+                    if !alloc::sync::Arc::ptr_eq(&sock, &peer_arc) {
+                        let mut p = peer_arc.lock();
+                        if let crate::net::unix::SocketState::Connected { peer_closed, .. } =
+                            &mut p.state
+                        {
+                            *peer_closed = true;
+                        }
                     }
                 }
             }
         }
     }
 
-    let Some(result) = process::with_current_fds(|fds| fds.close(fd)) else {
-        return Err(Errno::BadFd);
-    };
-
-    match result {
-        Ok(()) => Ok(0),
-        Err(_) => Err(Errno::BadFd),
-    }
+    Ok(0)
 }
 
 fn sys_lseek(fd: u64, offset: i64, whence: u32) -> SyscallResult {
@@ -1392,6 +1981,8 @@ fn sys_mkdir(path: u64) -> SyscallResult {
 
     match result {
         Ok(()) => Ok(0),
+        Err("file already exists") => Err(Errno::Exist),
+        Err("not a directory") => Err(Errno::NotDir),
         Err(_) => Err(Errno::NoEntry),
     }
 }
@@ -1473,6 +2064,8 @@ fn sys_rmdir(path: u64) -> SyscallResult {
 
     match result {
         Ok(()) => Ok(0),
+        Err("directory not empty") => Err(Errno::NotEmpty),
+        Err("not a directory") => Err(Errno::NotDir),
         Err(_) => Err(Errno::NoEntry),
     }
 }
@@ -1497,11 +2090,29 @@ fn sys_kill(pid: i64, sig: u64) -> SyscallResult {
     if sig > 64 {
         return Err(Errno::Invalid);
     }
-    if pid <= 0 {
-        return Err(Errno::Invalid);
+    if pid == 0 {
+        if crate::task::process::send_signal(crate::task::identity::current_pid(), sig as usize) {
+            return Ok(0);
+        } else {
+            return Err(Errno::Srch);
+        }
     }
-    crate::task::process::send_signal(crate::task::identity::ProcessId(pid as u64), sig as usize);
-    Ok(0)
+    if pid < 0 {
+        if crate::task::process::send_signal_pgrp(
+            crate::task::identity::ProcessId((-pid) as u64),
+            sig as usize,
+        ) {
+            return Ok(0);
+        } else {
+            return Err(Errno::Srch);
+        }
+    }
+    if crate::task::process::send_signal(crate::task::identity::ProcessId(pid as u64), sig as usize)
+    {
+        Ok(0)
+    } else {
+        Err(Errno::Srch)
+    }
 }
 
 fn sys_rt_sigaction(sig: u64, act_ptr: u64, oldact_ptr: u64, sigsetsize: u64) -> SyscallResult {
@@ -1590,13 +2201,21 @@ fn sys_rt_sigreturn(frame: &mut entry::SyscallFrame) -> SyscallResult {
     entry::copy_from_user(bytes, frame.rsp).map_err(|_| Errno::Fault)?;
     let ctx = unsafe { ctx.assume_init() };
 
+    if ctx.rip >= crate::memory::mmu::USER_END || ctx.rsp >= crate::memory::mmu::USER_END {
+        return Err(Errno::Fault);
+    }
+
     frame.regs = ctx.regs;
     frame.rip = ctx.rip;
     frame.rsp = ctx.rsp;
-    frame.rflags = ctx.rflags;
+    const SAFE_RFLAGS_MASK: u64 = 0x00244dd5;
+    frame.rflags = (ctx.rflags & SAFE_RFLAGS_MASK) | 0x202;
+    frame.cs = u64::from(crate::arch::gdt::user_code_selector().0) | 0x3;
+    frame.ss = u64::from(crate::arch::gdt::user_data_selector().0) | 0x3;
 
     if let Some(proc) = process::current() {
-        proc.lock().blocked_signals = ctx.mask;
+        const UNBLOCKABLE: u64 = (1u64 << (9 - 1)) | (1u64 << (19 - 1));
+        proc.lock().blocked_signals = ctx.mask & !UNBLOCKABLE;
     }
 
     Ok(frame.regs.rax)
@@ -1612,7 +2231,25 @@ fn get_socket_by_fd(
 ) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::unix::UnixSocket>>, Errno> {
     let file = process::with_current_fds(|fds| fds.get(fd).cloned()).ok_or(Errno::BadFd)?;
     let f = file.map_err(|_| Errno::BadFd)?;
-    let inode_id = f.inode.lock().id;
+    let inode = f.inode.lock();
+    if !core::ptr::addr_eq(inode.file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
+        return Err(Errno::BadFd);
+    }
+    let inode_id = inode.id;
     let map = crate::net::vfs::SOCKET_MAP.lock();
+    map.get(&inode_id).cloned().ok_or(Errno::BadFd)
+}
+
+fn get_inet_socket_by_fd(
+    fd: u64,
+) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::inet::InetSocket>>, Errno> {
+    let file = with_current_fds(|fds| fds.get(fd).cloned()).ok_or(Errno::BadFd)?;
+    let f = file.map_err(|_| Errno::BadFd)?;
+    let inode = f.inode.lock();
+    if !core::ptr::addr_eq(inode.file_ops, &crate::net::inet::INET_FILE_OPS) {
+        return Err(Errno::BadFd);
+    }
+    let inode_id = inode.id;
+    let map = crate::net::inet::INET_SOCKET_MAP.lock();
     map.get(&inode_id).cloned().ok_or(Errno::BadFd)
 }

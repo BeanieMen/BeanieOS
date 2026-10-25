@@ -22,6 +22,8 @@ pub(crate) struct Inode {
     pub file_ops: &'static dyn FileOperations,
 
     pub dentry: Option<Weak<Mutex<Dentry>>>,
+    pub parent_cluster: u32,
+    pub dir_name: [u8; 11],
 }
 
 pub(crate) trait InodeOperations: Sync {
@@ -45,7 +47,8 @@ pub(crate) struct RawEntry {
     pub inode: u64,
     pub file_type: FileType,
     pub size: u32,
-    pub name: [u8; 11],
+    pub name: [u8; 256],
+    pub name_len: usize,
 }
 
 pub(crate) trait FileOperations: Sync {

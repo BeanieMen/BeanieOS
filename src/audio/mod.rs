@@ -1,9 +1,9 @@
 pub mod ac97;
 pub mod vfs;
+use crate::arch::lock::InterruptMutex;
 use crate::kinfo;
-use spin::Mutex;
 
-static AC97_DEV: Mutex<Option<ac97::Ac97>> = Mutex::new(None);
+static AC97_DEV: InterruptMutex<Option<ac97::Ac97>> = InterruptMutex::new(None);
 
 pub fn init() {
     let audio_devices = crate::hal::hal().pci.find_audio();

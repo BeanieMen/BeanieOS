@@ -69,6 +69,12 @@ impl Device {
             _ => None,
         }
     }
+    pub(crate) fn bar0_info(&self) -> Option<(u64, u64)> {
+        self.bar_info(0)
+    }
+    pub(crate) fn is_network(&self) -> bool {
+        self.class == 0x02 && self.subclass == 0x00
+    }
 
     pub(crate) fn bar5_info(&self) -> Option<(u64, u64)> {
         self.bar_info(5)
@@ -270,7 +276,9 @@ impl Pci {
 
         devices
     }
-
+    pub(crate) fn find_network(&self) -> Vec<Device> {
+        self.scan().into_iter().filter(Device::is_network).collect()
+    }
     pub(crate) fn find_ahci(&self) -> Vec<Device> {
         self.scan().into_iter().filter(Device::is_ahci).collect()
     }

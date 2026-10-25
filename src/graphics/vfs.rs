@@ -89,6 +89,8 @@ pub fn create_fb_file(flags: OpenFlags) -> File {
         size: 0,
         cluster: 0,
         dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
 
     File::new(Arc::new(Mutex::new(inode)), flags)

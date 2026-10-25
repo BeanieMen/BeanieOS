@@ -38,7 +38,11 @@ impl FdTable {
     }
 
     pub(crate) fn alloc(&mut self, file: File) -> u64 {
-        while self.slots.len() < 3 {
+        self.alloc_at_least(file, 0)
+    }
+
+    pub(crate) fn alloc_at_least(&mut self, file: File, min_fd: usize) -> u64 {
+        while self.slots.len() <= min_fd {
             self.slots.push(None);
         }
 
@@ -46,7 +50,7 @@ impl FdTable {
             .slots
             .iter()
             .enumerate()
-            .position(|(i, slot)| i >= 3 && slot.is_none())
+            .position(|(i, slot)| i >= min_fd && slot.is_none())
         {
             self.slots[fd] = Some(file);
             return fd as u64;
@@ -55,6 +59,19 @@ impl FdTable {
         self.slots.push(Some(file));
 
         (self.slots.len() - 1) as u64
+    }
+
+    pub(crate) fn dup2(&mut self, oldfd: u64, newfd: u64) -> Result<u64, &'static str> {
+        let file = self.get(oldfd)?.clone();
+        if oldfd == newfd {
+            return Ok(newfd);
+        }
+        let target = newfd as usize;
+        while self.slots.len() <= target {
+            self.slots.push(None);
+        }
+        self.slots[target] = Some(file);
+        Ok(newfd)
     }
 
     pub(crate) fn get(&self, fd: u64) -> Result<&File, &'static str> {
@@ -133,16 +150,27 @@ impl FdTable {
             return Ok(self.alloc(event_file));
         }
 
-        if path == b"/dev/mouse" || path == b"dev/mouse"
-            || path == b"/dev/psaux" || path == b"dev/psaux"
-            || path == b"/dev/input/mice" || path == b"dev/input/mice"
-            || path == b"/dev/input/mouse0" || path == b"dev/input/mouse0"
+        if path == b"/dev/mouse"
+            || path == b"dev/mouse"
+            || path == b"/dev/psaux"
+            || path == b"dev/psaux"
+            || path == b"/dev/input/mice"
+            || path == b"dev/input/mice"
+            || path == b"/dev/input/mouse0"
+            || path == b"dev/input/mouse0"
         {
             let mouse_file = crate::input::mouse::create_mouse_file(flags);
             return Ok(self.alloc(mouse_file));
         }
 
-        if path == b"/dev/tty1" || path == b"dev/tty1" || path == b"/dev/tty0" || path == b"dev/tty0" || path == b"/dev/tty" || path == b"dev/tty" || path == b"/dev/console" {
+        if path == b"/dev/tty1"
+            || path == b"dev/tty1"
+            || path == b"/dev/tty0"
+            || path == b"dev/tty0"
+            || path == b"/dev/tty"
+            || path == b"dev/tty"
+            || path == b"/dev/console"
+        {
             let tty_file = crate::tty::vfs::create_tty_file(flags);
             return Ok(self.alloc(tty_file));
         }
@@ -152,24 +180,40 @@ impl FdTable {
             return Ok(self.alloc(vt2_file));
         }
 
-        
-        let resolved = self.mounts.resolve(path)?;
+        let resolved = match self.mounts.resolve(path) {
+            Ok(dentry) => {
+                if flags.create && flags.exclusive {
+                    return Err("file already exists");
+                }
+                dentry
+            }
+            Err(_) if flags.create => {
+                let _ = self.touch(path)?;
+                self.mounts.resolve(path)?
+            }
+            Err(e) => return Err(e),
+        };
 
         let inode = resolved.inode();
 
         {
-            let inode = inode.lock();
+            let mut inode_guard = inode.lock();
 
-            if flags.directory && inode.file_type != FileType::Directory {
+            if flags.directory && inode_guard.file_type != FileType::Directory {
                 return Err("not a directory");
             }
 
-            if inode.file_type == FileType::Directory {
+            if inode_guard.file_type == FileType::Directory {
                 if flags.write {
                     return Err("is a directory");
                 }
-            } else if inode.file_type != FileType::Regular {
+            } else if inode_guard.file_type != FileType::Regular {
                 return Err("not a regular file");
+            }
+
+            if flags.truncate && inode_guard.file_type == FileType::Regular {
+                inode_guard.size = 0;
+                let _ = inode_guard.file_ops.write(&mut inode_guard, 0, &[]);
             }
         }
 
@@ -277,7 +321,7 @@ impl FdTable {
         self.len() == 0
     }
 
-    fn close_all(&mut self) {
+    pub(crate) fn close_all(&mut self) {
         self.slots.clear();
     }
 }

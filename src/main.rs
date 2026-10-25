@@ -9,20 +9,20 @@ use core::panic::PanicInfo;
 
 use multiboot2::BootInformation;
 
-mod net;
 mod arch;
 mod audio;
 mod console;
 mod graphics;
 mod hal;
+mod input;
 mod logger;
 mod memory;
+mod net;
 mod paging;
 mod storage;
 mod syscall;
 mod task;
 mod tty;
-mod input;
 
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 
@@ -59,7 +59,19 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     task::process::init();
     task::scheduler::init();
 
+    for dev in hal::hal().pci.find_network() {
+        if let Some((bar0, _size)) = dev.bar0_info() {
+            let va = paging::phys_to_direct(bar0);
+            let e1000 = net::e1000::E1000::init(x86_64::VirtAddr::new(va));
+            *net::e1000::E1000_DEVICE.lock() = Some(e1000);
+            net::stack::init_stack();
+            kinfo!("e1000 initialized at {:#x}", va);
+            break;
+        }
+    }
+
     mount_disk();
+    memory::mmu::unmap_boot_identity();
 
     let init = task::process::create("init", "/");
 
@@ -236,7 +248,11 @@ extern "C" fn user_task() {
     }
 
     let elf_data = task::process::with_current_fds(|fds| {
-        let fd = fds.open_read(b"/INIT").ok()?;
+        let fd = fds
+            .open_read(b"/bin/init")
+            .or_else(|_| fds.open_read(b"/INIT"))
+            .or_else(|_| fds.open_read(b"/BIN/INIT"))
+            .ok()?;
         let mut buf = alloc::vec![0u8; 65536];
         let n = fds.read(fd, &mut buf).ok()?;
         buf.truncate(n);
@@ -363,11 +379,9 @@ pub(crate) fn init(boot_info: &BootInformation<'_>, mbi_addr: u32, mbi_size: usi
     kinfo!("kernel initialized");
 
     let info = memory::mmu::memory_info();
-    kinfo!(
-        "  framebuffer {:#x}..{:#x}",
-        info.framebuffer.expect("set at boot").0,
-        info.framebuffer.expect("set at boot").1
-    );
+    if let Some((start, end)) = info.framebuffer {
+        kinfo!("  framebuffer {:#x}..{:#x}", start, end);
+    }
     kinfo!("  kernel     {:#x}..{:#x}", info.kernel.0, info.kernel.1);
     kinfo!(
         "  boot info  {:#x}..{:#x}",

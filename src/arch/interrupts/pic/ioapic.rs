@@ -51,7 +51,7 @@ pub(crate) fn route(gsi: u32, vector: u8) {
 
         ioapic_write(
             low,
-            vector as u32 | IOAPIC_ENTRY_LOGICAL | IOAPIC_PHYSICAL_DEST | IOAPIC_PHYSICAL_MODE,
+            vector as u32 | IOAPIC_PHYSICAL_DEST | IOAPIC_PHYSICAL_MODE,
         );
     }
 }

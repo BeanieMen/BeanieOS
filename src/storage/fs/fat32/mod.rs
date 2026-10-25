@@ -201,6 +201,8 @@ impl Geometry {
     }
 }
 
+pub const FAT_INODE_BASE: u64 = 0x1_0000_0000;
+
 pub(crate) struct Fat32<D: BlockDevice> {
     pub device: Arc<Mutex<D>>,
 
@@ -288,13 +290,15 @@ impl<D: BlockDevice> Fat32<D> {
         }));
 
         let inode = Arc::new(Mutex::new(Inode {
-            id: root_cluster as u64,
+            id: FAT_INODE_BASE | (root_cluster as u64),
             cluster: root_cluster,
             file_type: FileType::Directory,
             size: 0,
             inode_ops,
             file_ops,
             dentry: None,
+            parent_cluster: 0,
+            dir_name: *b"/          ",
         }));
 
         let root = Arc::new(Mutex::new(Dentry {
@@ -313,6 +317,146 @@ impl<D: BlockDevice> Fat32<D> {
             inode_ops,
             file_ops,
         }))
+    }
+}
+
+fn lfn_checksum(short_name: &[u8]) -> u8 {
+    let mut sum: u8 = 0;
+    for &b in &short_name[..11] {
+        sum = (sum.rotate_right(1)).wrapping_add(b);
+    }
+    sum
+}
+
+fn format_8_3(entry: &[u8; 32]) -> ([u8; 256], usize) {
+    let mut out = [0u8; 256];
+    let mut len = 0;
+    if entry[0] == b'.' {
+        out[0] = b'.';
+        if entry[1] == b'.' {
+            out[1] = b'.';
+            return (out, 2);
+        }
+        return (out, 1);
+    }
+    let base = &entry[0..8];
+    let ext = &entry[8..11];
+    let base_len = base.iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
+    let ext_len = ext.iter().rposition(|&b| b != b' ').map_or(0, |p| p + 1);
+    let lower_base = entry[12] & 0x08 != 0;
+    let lower_ext = entry[12] & 0x10 != 0;
+    for &b in &base[..base_len] {
+        out[len] = if lower_base { b.to_ascii_lowercase() } else { b };
+        len += 1;
+    }
+    if ext_len > 0 {
+        out[len] = b'.';
+        len += 1;
+        for &b in &ext[..ext_len] {
+            out[len] = if lower_ext { b.to_ascii_lowercase() } else { b };
+            len += 1;
+        }
+    }
+    (out, len)
+}
+
+struct LfnCollector {
+    chars: [u16; 260],
+    checksum: u8,
+    valid: bool,
+}
+
+impl LfnCollector {
+    fn new() -> Self {
+        Self {
+            chars: [0u16; 260],
+            checksum: 0,
+            valid: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.chars = [0u16; 260];
+        self.checksum = 0;
+        self.valid = false;
+    }
+
+    fn process_lfn_entry(&mut self, entry: &[u8; 32]) {
+        let seq = entry[0] & 0x1F;
+        let is_last = (entry[0] & 0x40) != 0;
+
+        if is_last {
+            self.chars = [0u16; 260];
+            self.checksum = entry[13];
+            self.valid = true;
+        } else if !self.valid || self.checksum != entry[13] {
+            self.valid = false;
+            return;
+        }
+
+        if seq >= 1 && seq <= 20 {
+            let base = (seq as usize - 1) * 13;
+            let pairs = [
+                (1, 2), (3, 4), (5, 6), (7, 8), (9, 10),
+                (14, 15), (16, 17), (18, 19), (20, 21), (22, 23), (24, 25),
+                (28, 29), (30, 31),
+            ];
+            for (i, &(l, h)) in pairs.iter().enumerate() {
+                if base + i < 260 {
+                    self.chars[base + i] = u16::from_le_bytes([entry[l], entry[h]]);
+                }
+            }
+        }
+    }
+
+    fn get_name(&self, short_entry: &[u8; 32]) -> Option<([u8; 256], usize)> {
+        if !self.valid || self.checksum != lfn_checksum(&short_entry[..11]) {
+            return None;
+        }
+        let mut out = [0u8; 256];
+        let mut len = 0;
+        for &c in &self.chars {
+            if c == 0 || c == 0xFFFF {
+                break;
+            }
+            if c < 0x80 {
+                if len < 256 {
+                    out[len] = c as u8;
+                    len += 1;
+                }
+            } else if c < 0x800 {
+                if len + 1 < 256 {
+                    out[len] = (0xC0 | (c >> 6)) as u8;
+                    out[len + 1] = (0x80 | (c & 0x3F)) as u8;
+                    len += 2;
+                }
+            } else {
+                if len + 2 < 256 {
+                    out[len] = (0xE0 | (c >> 12)) as u8;
+                    out[len + 1] = (0x80 | ((c >> 6) & 0x3F)) as u8;
+                    out[len + 2] = (0x80 | (c & 0x3F)) as u8;
+                    len += 3;
+                }
+            }
+        }
+        if len > 0 {
+            Some((out, len))
+        } else {
+            None
+        }
+    }
+
+    fn matches(&self, short_entry: &[u8; 32], target: &[u8]) -> bool {
+        if let Some((name, len)) = self.get_name(short_entry) {
+            let name_slice = &name[..len];
+            if name_slice.len() == target.len() {
+                return name_slice
+                    .iter()
+                    .zip(target.iter())
+                    .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase());
+            }
+        }
+        false
     }
 }
 
@@ -365,8 +509,26 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
 }
 
 impl<D: BlockDevice> Fat32InodeOps<D> {
+    fn free_chain(&self, cluster: u32) -> Result<(), &'static str> {
+        let mut next = Some(cluster);
+        let mut hops = 0u64;
+        let max_hops = self.geom.sectors_per_fat as u64 * 128;
+        while let Some(c) = next {
+            self.geom.free_cluster(&self.device, c)?;
+            hops += 1;
+            if hops >= max_hops {
+                return Err("corrupt FAT chain");
+            }
+            next = self.geom.next_cluster(&self.device, c)?;
+        }
+        Ok(())
+    }
+
     fn find_entry(&self, start_cluster: u32, name: &[u8]) -> Result<[u8; 32], &'static str> {
         let mut cluster = start_cluster;
+        let mut hops = 0u64;
+        let max_hops = self.geom.sectors_per_fat as u64 * 128;
+        let mut lfn = LfnCollector::new();
 
         loop {
             let first_sector = self.geom.cluster_sector(cluster);
@@ -389,16 +551,33 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                         return Err("file not found");
                     }
 
-                    if entry[0] == 0xE5 || entry[11] == 0x0F || entry[11] & 0x08 != 0 {
+                    if entry[0] == 0xE5 {
+                        lfn.reset();
                         continue;
                     }
 
-                    if Self::short_name_matches(&entry, name) {
+                    if entry[11] == 0x0F {
+                        lfn.process_lfn_entry(&entry);
+                        continue;
+                    }
+
+                    if entry[11] & 0x08 != 0 {
+                        lfn.reset();
+                        continue;
+                    }
+
+                    if lfn.matches(&entry, name) || Self::short_name_matches(&entry, name) {
                         return Ok(entry);
                     }
+
+                    lfn.reset();
                 }
             }
 
+            hops += 1;
+            if hops >= max_hops {
+                return Err("corrupt FAT chain");
+            }
             match self.geom.next_cluster(&self.device, cluster)? {
                 Some(next) => cluster = next,
                 None => return Err("file not found"),
@@ -406,14 +585,13 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         }
     }
 
-    /// Walks a directory, returning the entry at `index`.
-    ///
-    /// `index` counts directory slots, not bytes, so a caller can keep it as a
-    /// cookie and resume where it stopped.
     fn entry_at(&self, start_cluster: u32, index: u64) -> Result<Option<RawEntry>, &'static str> {
         let mut cluster = start_cluster;
         let mut valid_count = 0u64;
         let mut raw_slot = 0u64;
+        let mut hops = 0u64;
+        let max_hops = self.geom.sectors_per_fat as u64 * 128;
+        let mut lfn = LfnCollector::new();
 
         loop {
             let first_sector = self.geom.cluster_sector(cluster);
@@ -439,13 +617,27 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                     let slot = raw_slot;
                     raw_slot += 1;
 
-                    if entry[0] == 0xE5 || entry[11] == 0x0F || entry[11] & 0x08 != 0 {
+                    if entry[0] == 0xE5 {
+                        lfn.reset();
+                        continue;
+                    }
+
+                    if entry[11] == 0x0F {
+                        lfn.process_lfn_entry(&entry);
+                        continue;
+                    }
+
+                    if entry[11] & 0x08 != 0 {
+                        lfn.reset();
                         continue;
                     }
 
                     if valid_count == index {
-                        let mut name = [b' '; 11];
-                        name.copy_from_slice(&entry[..11]);
+                        let (name, name_len) = if let Some((lfn_name, len)) = lfn.get_name(&entry) {
+                            (lfn_name, len)
+                        } else {
+                            format_8_3(&entry)
+                        };
 
                         let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
                         let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
@@ -461,13 +653,19 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                             file_type,
                             size: u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]),
                             name,
+                            name_len,
                         }));
                     }
 
                     valid_count += 1;
+                    lfn.reset();
                 }
             }
 
+            hops += 1;
+            if hops >= max_hops {
+                return Err("corrupt FAT chain");
+            }
             match self.geom.next_cluster(&self.device, cluster)? {
                 Some(next) => cluster = next,
                 None => return Ok(None),
@@ -477,6 +675,8 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
 
     fn free_slot(&self, start_cluster: u32) -> Result<(u64, usize), &'static str> {
         let mut cluster = start_cluster;
+        let mut hops = 0u64;
+        let max_hops = self.geom.sectors_per_fat as u64 * 128;
 
         loop {
             let first_sector = self.geom.cluster_sector(cluster);
@@ -504,6 +704,10 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                 }
             }
 
+            hops += 1;
+            if hops >= max_hops {
+                return Err("corrupt FAT chain");
+            }
             match self.geom.next_cluster(&self.device, cluster)? {
                 Some(next) => cluster = next,
                 None => return Err("directory is full"),
@@ -520,7 +724,8 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
             return Err("bad name for FAT32");
         }
 
-        let mut entry = [b' '; 32];
+        let mut entry = [0u8; 32];
+        entry[0..11].fill(b' ');
 
         let (base, ext) = match name.iter().position(|b| *b == b'.') {
             Some(dot) => (&name[..dot], &name[dot + 1..]),
@@ -567,19 +772,22 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
             0x20u8
         };
 
-        let mut me = [b' '; 32];
+        let mut me = [0u8; 32];
+        me[0..11].fill(b' ');
         me[0] = b'.';
         me[11] = attr;
         me[20..22].copy_from_slice(&((self_cluster >> 16) as u16).to_le_bytes());
         me[26..28].copy_from_slice(&(self_cluster as u16).to_le_bytes());
         me[28..32].copy_from_slice(&0u32.to_le_bytes());
 
-        let mut up = [b' '; 32];
+        let up_cluster = if parent_cluster <= 2 { 0 } else { parent_cluster };
+        let mut up = [0u8; 32];
+        up[0..11].fill(b' ');
         up[0] = b'.';
         up[1] = b'.';
         up[11] = attr;
-        up[20..22].copy_from_slice(&((parent_cluster >> 16) as u16).to_le_bytes());
-        up[26..28].copy_from_slice(&(parent_cluster as u16).to_le_bytes());
+        up[20..22].copy_from_slice(&((up_cluster >> 16) as u16).to_le_bytes());
+        up[26..28].copy_from_slice(&(up_cluster as u16).to_le_bytes());
         up[28..32].copy_from_slice(&0u32.to_le_bytes());
 
         Ok((me, up))
@@ -591,6 +799,8 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         cluster: u32,
     ) -> Result<bool, &'static str> {
         let mut cluster = cluster;
+        let mut hops = 0u64;
+        let max_hops = geom.sectors_per_fat as u64 * 128;
 
         loop {
             let first_sector = geom.cluster_sector(cluster);
@@ -624,6 +834,10 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                 }
             }
 
+            hops += 1;
+            if hops >= max_hops {
+                return Err("corrupt FAT chain");
+            }
             match geom.next_cluster(device, cluster)? {
                 Some(next) => cluster = next,
                 None => return Ok(true),
@@ -638,6 +852,8 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         entry: &mut [u8; 32],
     ) -> Result<(), &'static str> {
         let mut cluster = dir_cluster;
+        let mut hops = 0u64;
+        let max_hops = geom.sectors_per_fat as u64 * 128;
 
         loop {
             let first_sector = geom.cluster_sector(cluster);
@@ -662,6 +878,10 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
                 }
             }
 
+            hops += 1;
+            if hops >= max_hops {
+                return Err("corrupt FAT chain");
+            }
             match geom.next_cluster(device, cluster)? {
                 Some(next) => cluster = next,
                 None => return Err("entry vanished"),
@@ -672,6 +892,7 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
     fn inode_from_entry(
         &self,
         entry: &[u8; 32],
+        parent_cluster: u32,
         inode_ops: &'static dyn InodeOperations,
         file_ops: &'static dyn FileOperations,
     ) -> Arc<Mutex<Inode>> {
@@ -688,14 +909,19 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
 
         let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as u64;
 
+        let mut dir_name = [b' '; 11];
+        dir_name.copy_from_slice(&entry[..11]);
+
         Arc::new(Mutex::new(Inode {
-            id: cluster as u64,
+            id: FAT_INODE_BASE | (cluster as u64),
             cluster,
             file_type,
             size,
             inode_ops,
             file_ops,
             dentry: None,
+            parent_cluster,
+            dir_name,
         }))
     }
 }
@@ -712,7 +938,7 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
 
         let entry = self.find_entry(inode.cluster, name)?;
 
-        Ok(self.inode_from_entry(&entry, inode.inode_ops, inode.file_ops))
+        Ok(self.inode_from_entry(&entry, inode.cluster, inode.inode_ops, inode.file_ops))
     }
     fn create(
         &self,
@@ -722,6 +948,10 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
     ) -> Result<Arc<Mutex<Inode>>, &'static str> {
         if inode.file_type != FileType::Directory {
             return Err("not a directory");
+        }
+
+        if self.find_entry(inode.cluster, name).is_ok() {
+            return Err("file already exists");
         }
 
         let parent_cluster = inode.cluster;
@@ -776,14 +1006,19 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
         }
         .write_within_sector(sector_number, offset, &entry)?;
 
+        let mut dir_name = [b' '; 11];
+        dir_name.copy_from_slice(&entry[..11]);
+
         Ok(Arc::new(Mutex::new(Inode {
-            id: cluster as u64,
+            id: FAT_INODE_BASE | (cluster as u64),
             cluster,
             file_type,
             size: 0,
             inode_ops: inode.inode_ops,
             file_ops: inode.file_ops,
             dentry: None,
+            parent_cluster,
+            dir_name,
         })))
     }
 
@@ -794,6 +1029,10 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
     fn rmdir(&self, inode: &mut Inode, name: &[u8]) -> Result<(), &'static str> {
         if inode.file_type != FileType::Directory {
             return Err("not a directory");
+        }
+
+        if name == b"." || name == b".." {
+            return Err("cannot remove . or ..");
         }
 
         let mut entry = self.find_entry(inode.cluster, name)?;
@@ -812,7 +1051,9 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
 
         Self::mark_deleted(&self.device, self.geom, inode.cluster, &mut entry)?;
 
-        self.geom.free_cluster(&self.device, cluster)?;
+        if cluster >= FIRST_DATA_CLUSTER {
+            self.free_chain(cluster)?;
+        }
 
         Ok(())
     }
@@ -820,6 +1061,10 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
     fn unlink(&self, inode: &mut Inode, name: &[u8]) -> Result<(), &'static str> {
         if inode.file_type != FileType::Directory {
             return Err("not a directory");
+        }
+
+        if name == b"." || name == b".." {
+            return Err("cannot remove . or ..");
         }
 
         let mut entry = self.find_entry(inode.cluster, name)?;
@@ -835,7 +1080,7 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
         Self::mark_deleted(&self.device, self.geom, inode.cluster, &mut entry)?;
 
         if cluster >= FIRST_DATA_CLUSTER {
-            self.geom.free_cluster(&self.device, cluster)?;
+            self.free_chain(cluster)?;
         }
 
         Ok(())
@@ -861,6 +1106,11 @@ impl<D: BlockDevice> Fat32FileOps<D> {
                 start_idx = c_idx;
                 cluster = c_cluster;
             }
+        }
+
+        let max_hops = self.geom.sectors_per_fat as u64 * 128;
+        if target_idx.saturating_sub(start_idx) > max_hops {
+            return Err("corrupt FAT chain");
         }
 
         for _ in start_idx..target_idx {
@@ -940,8 +1190,13 @@ impl<D: BlockDevice> Fat32FileOps<D> {
 
         let mut cluster = inode.cluster;
         let mut index = 0u64;
+        let max_hops = self.geom.sectors_per_fat as u64 * 128;
 
         loop {
+            if index > wanted || index > max_hops {
+                return Err("corrupt FAT chain");
+            }
+
             if index == wanted {
                 return Ok(cluster);
             }
@@ -1121,32 +1376,16 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
 
 impl<D: BlockDevice> Fat32FileOps<D> {
     fn write_directory_size(&self, inode: &Inode) -> Result<(), &'static str> {
-        let Some(dentry) = inode.dentry.as_ref().and_then(|w| w.upgrade()) else {
+        let parent_cluster = inode.parent_cluster;
+        let target = inode.dir_name;
+
+        if parent_cluster == 0 {
             return Ok(());
-        };
-
-        let name = dentry.lock().name.clone();
-
-        let parent = dentry.lock().parent.clone();
-
-        let Some(parent) = parent else {
-            return Ok(());
-        };
-
-        let parent_cluster = {
-            let parent_dentry = parent.lock();
-            let parent_inode = parent_dentry.inode.lock();
-
-            if parent_inode.file_type != FileType::Directory {
-                return Ok(());
-            }
-
-            parent_inode.cluster
-        };
-
-        let name_bytes = name.as_bytes();
+        }
 
         let mut cluster = parent_cluster;
+        let mut hops = 0u64;
+        let max_hops = self.geom.sectors_per_fat as u64 * 128;
 
         loop {
             let first_sector = self.geom.cluster_sector(cluster);
@@ -1176,31 +1415,17 @@ impl<D: BlockDevice> Fat32FileOps<D> {
                         continue;
                     }
 
-                    let mut target = [b' '; 11];
-
-                    let mut parts = name_bytes.splitn(2, |b| *b == b'.');
-
-                    let base = parts.next().unwrap_or(&[]);
-                    let ext = parts.next().unwrap_or(&[]);
-
-                    if base.is_empty() || base.len() > 8 || ext.len() > 3 {
-                        continue;
-                    }
-
-                    for (i, byte) in base.iter().enumerate() {
-                        target[i] = byte.to_ascii_uppercase();
-                    }
-
-                    for (i, byte) in ext.iter().enumerate() {
-                        target[8 + i] = byte.to_ascii_uppercase();
-                    }
-
                     if entry[..11] != target {
                         continue;
                     }
 
                     sector[offset + 28..offset + 32]
                         .copy_from_slice(&(inode.size as u32).to_le_bytes());
+
+                    let cluster_high = ((inode.cluster >> 16) as u16).to_le_bytes();
+                    let cluster_low = (inode.cluster as u16).to_le_bytes();
+                    sector[offset + 20..offset + 22].copy_from_slice(&cluster_high);
+                    sector[offset + 26..offset + 28].copy_from_slice(&cluster_low);
 
                     return write_sector(
                         &self.device,
@@ -1211,6 +1436,10 @@ impl<D: BlockDevice> Fat32FileOps<D> {
                 }
             }
 
+            hops += 1;
+            if hops >= max_hops {
+                return Err("corrupt FAT chain");
+            }
             match self.geom.next_cluster(&self.device, cluster)? {
                 Some(next) => cluster = next,
                 None => return Ok(()),

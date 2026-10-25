@@ -3,11 +3,7 @@ use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use x86_64::structures::paging::PhysFrame;
 
 use crate::{
-    arch::lock::InterruptMutex,
-    memory::{allocator::alloc_frame, mmu},
-    paging::phys_to_direct,
-    storage::vfs::fd::FdTable,
-    task::{
+    arch::lock::InterruptMutex, memory::{allocator::alloc_frame, mmu}, paging::phys_to_direct, storage::vfs::fd::FdTable, task::{
         identity::{self, ProcessId, ThreadId},
         signal::SigAction,
     },
@@ -40,6 +36,15 @@ pub(crate) struct Process {
 
 pub const DEFAULT_HEAP_BASE: u64 = 0x1000_0000;
 pub const DEFAULT_MMAP_BASE: u64 = 0x7000_0000_0000;
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        if let Some(root) = self.space.take() {
+            let space = mmu::AddressSpace::from_root(root);
+            drop(space);
+        }
+    }
+}
 
 impl Process {
     fn boot() -> Self {
@@ -202,17 +207,33 @@ impl ProcessManager {
             next
         };
 
+        let span = (len + 4095) & !4095;
+        if target == 0 || target.checked_add(span).is_none_or(|end| end > mmu::USER_END) {
+            core::mem::forget(space);
+            return Err(());
+        }
+
         let pages = len.div_ceil(4096);
+        let mut failed = false;
         for i in 0..pages {
             let virt = target + i * 4096;
-            let frame = alloc_frame().ok_or(())?;
+            let Some(frame) = alloc_frame() else {
+                failed = true;
+                break;
+            };
             let direct = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
             unsafe {
                 core::ptr::write_bytes(direct, 0, 4096);
             }
-            space.map(virt, frame, mmu::USER_RW).map_err(|_| ())?;
+            if space.map(virt, frame, mmu::USER_RW).is_err() {
+                failed = true;
+                break;
+            }
         }
         core::mem::forget(space);
+        if failed {
+            return Err(());
+        }
         Ok(target)
     }
 
@@ -234,14 +255,27 @@ impl ProcessManager {
         let target = p.mmap_next;
         p.mmap_next += (len + 4095) & !4095;
 
+        let span = (len + 4095) & !4095;
+        if target == 0 || target.checked_add(span).is_none_or(|end| end > mmu::USER_END) {
+            core::mem::forget(space);
+            return Err(());
+        }
+
         let pages = len.div_ceil(4096);
+        let mut failed = false;
         for i in 0..pages {
             let virt = target + i * 4096;
             let phys_addr = phys_start + i * 4096;
             let frame = PhysFrame::containing_address(x86_64::PhysAddr::new(phys_addr));
-            space.map(virt, frame, mmu::USER_WC).map_err(|_| ())?;
+            if space.map(virt, frame, mmu::USER_WC).is_err() {
+                failed = true;
+                break;
+            }
         }
         core::mem::forget(space);
+        if failed {
+            return Err(());
+        }
         Ok(target)
     }
     pub(crate) fn update_brk(&mut self, pid: ProcessId, new_brk: u64) -> Result<u64, ()> {
@@ -258,18 +292,34 @@ impl ProcessManager {
         let old_page = (p.heap_break + 4095) & !4095;
         let new_page = (new_brk + 4095) & !4095;
 
+        if new_page >= mmu::USER_END || new_page >= p.mmap_next {
+            return Ok(p.heap_break);
+        }
+
         if new_page > old_page {
             let mut curr = old_page;
             while curr < new_page {
-                let frame = alloc_frame().ok_or(())?;
+                let Some(frame) = alloc_frame() else {
+                    core::mem::forget(space);
+                    return Err(());
+                };
                 let direct = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
 
                 unsafe {
                     core::ptr::write_bytes(direct, 0, 4096);
                 }
 
-                space.map(curr, frame, mmu::USER_RW).map_err(|_| ())?;
+                if space.map(curr, frame, mmu::USER_RW).is_err() {
+                    core::mem::forget(space);
+                    return Err(());
+                }
 
+                curr += 4096;
+            }
+        } else if new_page < old_page {
+            let mut curr = new_page;
+            while curr < old_page {
+                let _ = space.unmap(curr);
                 curr += 4096;
             }
         }
@@ -296,10 +346,30 @@ impl ProcessManager {
 
         process.status = ProcessStatus::Zombie(exit_code);
         process.exit_code = Some(exit_code);
+        process.fds.close_all();
+        let ppid = process.ppid;
+        drop(process);
+
+        if let Some(ppid) = ppid {
+            if let Some(parent) = self.processes.get(&ppid) {
+                let parent_threads = parent.lock().threads.clone();
+                for tid in parent_threads {
+                    crate::task::scheduler::wake(tid);
+                }
+            }
+        }
+
+        // Reparent orphans to init (PID 1)
+        for proc in self.processes.values() {
+            let mut p = proc.lock();
+            if p.ppid == Some(pid) {
+                p.ppid = Some(ProcessId(1));
+            }
+        }
     }
 
     pub(crate) fn reap(&mut self, pid: ProcessId) -> Option<i32> {
-        let process = self.processes.get(&pid)?;
+        let process = self.processes.get(&pid).cloned()?;
 
         let code = match process.lock().status {
             ProcessStatus::Zombie(code) => code,
@@ -307,7 +377,6 @@ impl ProcessManager {
         };
 
         self.processes.remove(&pid);
-
         Some(code)
     }
 }
@@ -334,8 +403,13 @@ pub(crate) fn space_root_of(pid: ProcessId) -> Option<PhysFrame> {
     PROCESS_MANAGER.lock().get(pid)?.lock().space
 }
 
-pub(crate) fn wait4(target: i64) -> Option<(ProcessId, i32)> {
+pub(crate) fn parent_of(pid: ProcessId) -> Option<ProcessId> {
+    PROCESS_MANAGER.lock().parent_of(pid)
+}
+
+pub(crate) fn wait4(target: i64, options: u64) -> Result<Option<(ProcessId, i32)>, ()> {
     let current = identity::current_pid();
+    let wnohang = (options & 1) != 0;
 
     loop {
         {
@@ -344,7 +418,7 @@ pub(crate) fn wait4(target: i64) -> Option<(ProcessId, i32)> {
             let target_pid = if target > 0 {
                 let pid = ProcessId(target as u64);
                 if manager.parent_of(pid) != Some(current) {
-                    return None;
+                    return Err(());
                 }
                 Some(pid)
             } else {
@@ -365,16 +439,24 @@ pub(crate) fn wait4(target: i64) -> Option<(ProcessId, i32)> {
             if let Some((pid, code)) =
                 target_pid.and_then(|pid| manager.reap(pid).map(|code| (pid, code)))
             {
-                return Some((pid, code));
+                return Ok(Some((pid, code)));
             }
 
-            let has_children = manager
-                .processes
-                .values()
-                .any(|proc| proc.lock().ppid == Some(current));
+            let has_children = if target > 0 {
+                manager.parent_of(ProcessId(target as u64)) == Some(current)
+            } else {
+                manager
+                    .processes
+                    .values()
+                    .any(|proc| proc.lock().ppid == Some(current))
+            };
 
             if !has_children {
-                return None;
+                return Err(());
+            }
+
+            if wnohang {
+                return Ok(None);
             }
         }
 
@@ -399,6 +481,8 @@ pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
         guard.heap_start = DEFAULT_HEAP_BASE;
         guard.heap_break = DEFAULT_HEAP_BASE;
         guard.mmap_next = DEFAULT_MMAP_BASE;
+        guard.sigactions = [crate::task::signal::SigAction::default(); 64];
+        guard.pending_signals = 0;
     }
 }
 pub(crate) fn mmap(pid: ProcessId, addr: u64, len: u64, prot: u64, flags: u64) -> Result<u64, ()> {
@@ -439,34 +523,40 @@ pub(crate) fn with_current_fds<R>(f: impl FnOnce(&mut FdTable) -> R) -> Option<R
     Some(f(&mut guard.fds))
 }
 
-pub(crate) fn send_signal(pid: ProcessId, sig: usize) {
-    if sig == 0 || sig > 64 {
-        return;
-    }
+pub(crate) fn send_signal(pid: ProcessId, sig: usize) -> bool {
     let manager = PROCESS_MANAGER.lock();
-    if let Some(proc) = manager.get(pid) {
+    let Some(proc) = manager.get(pid) else {
+        return false;
+    };
+    if sig == 0 {
+        return true;
+    }
+    if sig <= 64 {
         let mut p = proc.lock();
         p.pending_signals |= 1u64 << (sig - 1);
         for &thread_id in &p.threads {
             crate::task::scheduler::wake(thread_id);
         }
     }
+    true
 }
 
-pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) {
-    if sig == 0 || sig > 64 {
-        return;
-    }
+pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) -> bool {
     let manager = PROCESS_MANAGER.lock();
+    let mut found = false;
     for proc in manager.processes.values() {
         let mut p = proc.lock();
         if p.pgid == pgid || p.pid == pgid {
-            p.pending_signals |= 1u64 << (sig - 1);
-            for &thread_id in &p.threads {
-                crate::task::scheduler::wake(thread_id);
+            found = true;
+            if sig > 0 && sig <= 64 {
+                p.pending_signals |= 1u64 << (sig - 1);
+                for &thread_id in &p.threads {
+                    crate::task::scheduler::wake(thread_id);
+                }
             }
         }
     }
+    found
 }
 
 pub(crate) fn has_pending_signals() -> bool {

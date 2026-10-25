@@ -49,7 +49,7 @@ impl AhciController {
             return Err("HBA reset did not complete");
         }
 
-        set_reg(abar, GHC, GHC_AE);
+        set_reg(abar, GHC, GHC_AE | GHC_IE);
 
         AHCI_DMA.clear();
 

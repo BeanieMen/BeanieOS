@@ -1,7 +1,8 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use pc_keyboard::{layouts, DecodedKey, HandleControl, KeyCode, KeyState, PS2Keyboard, ScancodeSet1};
-use spin::Mutex;
 use x86_64::instructions::port::Port;
+
+use crate::arch::lock::InterruptMutex;
 
 use crate::arch::interrupts::consts::{PS2_DATA_PORT, PS2_STATUS_PORT};
 
@@ -23,11 +24,12 @@ const POLL_LIMIT: u32 = 100_000;
 
 static KEYS: AtomicU64 = AtomicU64::new(0);
 
-static KEYBOARD: Mutex<PS2Keyboard<layouts::Us104Key, ScancodeSet1>> = Mutex::new(PS2Keyboard::new(
-    ScancodeSet1::new(),
-    layouts::Us104Key,
-    HandleControl::MapLettersToUnicode,
-));
+static KEYBOARD: InterruptMutex<PS2Keyboard<layouts::Us104Key, ScancodeSet1>> =
+    InterruptMutex::new(PS2Keyboard::new(
+        ScancodeSet1::new(),
+        layouts::Us104Key,
+        HandleControl::MapLettersToUnicode,
+    ));
 
 struct MouseState {
     phase: u8,
@@ -43,7 +45,7 @@ impl MouseState {
     }
 }
 
-static MOUSE: Mutex<MouseState> = Mutex::new(MouseState::new());
+static MOUSE: InterruptMutex<MouseState> = InterruptMutex::new(MouseState::new());
 
 fn status() -> u8 {
     unsafe { Port::<u8>::new(PS2_STATUS_PORT).read() }
@@ -173,6 +175,10 @@ fn handle_mouse_byte(byte: u8) {
             mouse.phase = 0;
 
             let flags = mouse.bytes[0];
+            if flags & 0xC0 != 0 {
+                return;
+            }
+
             let raw_x = mouse.bytes[1];
             let raw_y = mouse.bytes[2];
 

@@ -10,7 +10,10 @@ pub(crate) fn push_key(_key: char) {
 }
 
 pub(crate) fn add_waiter(id: ThreadId) {
-    WAITERS.lock().push(id);
+    let mut list = WAITERS.lock();
+    if !list.contains(&id) {
+        list.push(id);
+    }
 }
 
 pub(crate) fn remove_waiter(id: ThreadId) {

@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use crate::arch::interrupts::vectors::ticks;
 use crate::memory::mmu::AddressSpace;
 use crate::paging::{PAGE_SIZE, align_down, phys_to_direct};
-use crate::task::elf::{LoadedProcess, load_elf};
+use crate::task::elf::{LoadedProcess, load_elf, load_elf_at};
 use crate::task::{identity, process};
 
 const AT_NULL: u64 = 0;
@@ -37,7 +37,18 @@ pub(crate) fn execve(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> Result<
 
     let loaded = load_elf(&mut space, &binary)?;
 
-    let stack = build_stack(&mut space, &loaded, path, argv, envp)?;
+    let (entry_point, interp_base) = if let Some(interp_path) = &loaded.interp {
+        let Some(interp_bin) = read_program(interp_path) else {
+            return Err("could not read dynamic linker");
+        };
+        let interp_base = 0x7fff_f000_0000u64;
+        let loaded_interp = load_elf_at(&mut space, &interp_bin, interp_base)?;
+        (loaded_interp.entry_point, interp_base)
+    } else {
+        (loaded.entry_point, 0)
+    };
+
+    let stack = build_stack(&mut space, &loaded, interp_base, path, argv, envp)?;
 
     let previous = space_of_current();
 
@@ -52,9 +63,15 @@ pub(crate) fn execve(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> Result<
     // still walking. The scheduler has to reclaim it once this thread is gone.
     core::mem::forget(previous);
 
+    let default_fpu = crate::task::thread::FxsaveArea::default_state();
     unsafe {
+        core::arch::asm!(
+            "fxrstor64 [{0}]",
+            in(reg) default_fpu.data.as_ptr(),
+            options(nostack, preserves_flags)
+        );
         crate::task::userland::enter_userland(
-            loaded.entry_point,
+            entry_point,
             stack,
             0x202,
             ss & 0xffff,
@@ -66,8 +83,14 @@ pub(crate) fn execve(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> Result<
 fn read_program(path: &[u8]) -> Option<Vec<u8>> {
     process::with_current_fds(|fds| {
         let fd = fds.open_read(path).ok()?;
+        let size = fds.lseek(fd, 0, 2).ok().unwrap_or(0);
+        let _ = fds.lseek(fd, 0, 0);
 
-        let mut image = Vec::new();
+        let mut image = if size > 0 && (size as usize) <= MAX_IMAGE {
+            Vec::with_capacity(size as usize)
+        } else {
+            Vec::new()
+        };
         let mut chunk = alloc::vec![0u8; READ_CHUNK];
 
         loop {
@@ -78,11 +101,14 @@ fn read_program(path: &[u8]) -> Option<Vec<u8>> {
             }
 
             if image.len() + n > MAX_IMAGE {
+                let _ = fds.close(fd);
                 return None;
             }
 
             image.extend_from_slice(&chunk[..n]);
         }
+
+        let _ = fds.close(fd);
 
         if image.is_empty() {
             return None;
@@ -100,10 +126,19 @@ fn space_of_current() -> Option<AddressSpace> {
 fn build_stack(
     space: &mut AddressSpace,
     loaded: &LoadedProcess,
+    interp_base: u64,
     path: &[u8],
     argv: &[Vec<u8>],
     envp: &[Vec<u8>],
 ) -> Result<u64, &'static str> {
+    let total_payload: usize = argv.iter().map(|a| a.len() + 1).sum::<usize>()
+        + envp.iter().map(|e| e.len() + 1).sum::<usize>()
+        + path.len()
+        + 1;
+    if total_payload > 32 * 1024 {
+        return Err("argument list too long");
+    }
+
     let mut at = align_down(loaded.user_stack_top);
 
     at -= RANDOM_LEN;
@@ -128,7 +163,7 @@ fn build_stack(
         (AT_PHENT, loaded.phdr_entry_size),
         (AT_PHNUM, loaded.phdr_count),
         (AT_PAGESZ, PAGE_SIZE),
-        (AT_BASE, 0),
+        (AT_BASE, interp_base),
         (AT_FLAGS, 0),
         (AT_ENTRY, loaded.entry_point),
         (AT_UID, 0),

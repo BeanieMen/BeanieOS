@@ -27,7 +27,8 @@ pub(crate) const PX_SERR: usize = 0x30;
 pub(crate) const PX_CI: usize = 0x38;
 
 pub(crate) const GHC_HR: u32 = 1 << 0;
-pub(crate) const GHC_AE: u32 = 1 << 1;
+pub(crate) const GHC_IE: u32 = 1 << 1;
+pub(crate) const GHC_AE: u32 = 1 << 31;
 
 pub(crate) const CMD_ST: u32 = 1 << 0;
 pub(crate) const CMD_SRE: u32 = 1 << 1;

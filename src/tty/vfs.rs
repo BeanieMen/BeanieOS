@@ -75,6 +75,8 @@ pub fn create_tty_file(flags: OpenFlags) -> File {
         inode_ops: &TTY_INODE_OPS,
         file_ops: &TTY_FILE_OPS,
         dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
     File::new(Arc::new(Mutex::new(inode)), flags)
 }
@@ -83,7 +85,21 @@ pub struct Vt2FileOps;
 
 impl FileOperations for Vt2FileOps {
     fn read(&self, _inode: &Inode, _offset: u64, buf: &mut [u8]) -> Result<usize, &'static str> {
-        Ok(crate::tty::VT2_TTY.lock().read(buf))
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        while count == 0 {
+            count = crate::tty::VT2_TTY.lock().read(buf);
+            if count > 0 {
+                return Ok(count);
+            }
+            if crate::task::process::has_pending_signals() {
+                return Err("interrupted");
+            }
+            crate::syscall::dispatch::wait_for_key();
+        }
+        Ok(count)
     }
 
     fn write(&self, _inode: &mut Inode, _offset: u64, buf: &[u8]) -> Result<usize, &'static str> {
@@ -106,6 +122,8 @@ pub fn create_vt2_file(flags: OpenFlags) -> File {
         inode_ops: &TTY_INODE_OPS,
         file_ops: &VT2_FILE_OPS,
         dentry: None,
+        parent_cluster: 0,
+        dir_name: [0u8; 11],
     };
     File::new(Arc::new(Mutex::new(inode)), flags)
 }

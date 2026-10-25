@@ -67,10 +67,35 @@ $(DISK): kernel userbins
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
 	mcopy -i $@@@$(ESP_OFFSET) $(LIMINE)/limine.conf ::limine.conf
 	mmd -i $@@@$(KERNEL_OFFSET) ::boot
+	mmd -i $@@@$(KERNEL_OFFSET) ::bin
+	mmd -i $@@@$(KERNEL_OFFSET) ::sbin
+	mmd -i $@@@$(KERNEL_OFFSET) ::etc
+	mmd -i $@@@$(KERNEL_OFFSET) ::etc/apk
+	mmd -i $@@@$(KERNEL_OFFSET) ::lib
+	mmd -i $@@@$(KERNEL_OFFSET) ::lib/apk
+	mmd -i $@@@$(KERNEL_OFFSET) ::lib/apk/db
+	mmd -i $@@@$(KERNEL_OFFSET) ::var
+	mmd -i $@@@$(KERNEL_OFFSET) ::var/cache
+	mmd -i $@@@$(KERNEL_OFFSET) ::var/cache/apk
+	mmd -i $@@@$(KERNEL_OFFSET) ::dev
+	mmd -i $@@@$(KERNEL_OFFSET) ::proc
+	mmd -i $@@@$(KERNEL_OFFSET) ::sys
+	mmd -i $@@@$(KERNEL_OFFSET) ::root
+	mmd -i $@@@$(KERNEL_OFFSET) ::home
 	mmd -i $@@@$(KERNEL_OFFSET) ::tmp
+
+	echo "nameserver 10.0.2.3" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/resolv.conf
+	printf "http://dl-cdn.alpinelinux.org/alpine/v3.20/main\nhttp://dl-cdn.alpinelinux.org/alpine/v3.20/community\n" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/apk/repositories
+	echo "root:x:0:0:root:/root:/bin/sh" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/passwd
+	echo "127.0.0.1 localhost" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/hosts
+
 	mcopy -i $@@@$(KERNEL_OFFSET) $(KERNEL) ::boot/kernel
+	if [ -f /usr/lib/musl/lib/libc.so ]; then \
+		mcopy -i $@@@$(KERNEL_OFFSET) /usr/lib/musl/lib/libc.so ::lib/ld-musl-x86_64.so.1 || true; \
+		mcopy -i $@@@$(KERNEL_OFFSET) /usr/lib/musl/lib/libc.so ::lib/libc.musl-x86_64.so.1 || true; \
+	fi
 	for bin in $(USER_BIN_DIR)/*; do \
-		mcopy -i $@@@$(KERNEL_OFFSET) "$$bin" ::`basename "$$bin"` || exit 1; \
+		mcopy -i $@@@$(KERNEL_OFFSET) "$$bin" "::bin/`basename "$$bin"`" || exit 1; \
 	done
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share
@@ -80,7 +105,11 @@ $(DISK): kernel userbins
 	for f in userspace/fonts/*; do \
 		mcopy -i $@@@$(KERNEL_OFFSET) "$$f" "::usr/share/fonts/X11/misc/`basename "$$f"`" || exit 1; \
 	done
-	
+	mmd -i $@@@$(KERNEL_OFFSET) ::packages
+	for pkg in userspace/packages/*; do \
+		[ -f "$$pkg" ] && mcopy -i $@@@$(KERNEL_OFFSET) "$$pkg" "::packages/`basename "$$pkg"`" || true; \
+	done
+
 
 disk: $(DISK)
 
@@ -91,10 +120,12 @@ $(OVMF_VARS): $(OVMF_VARS_TEMPLATE)
 QEMU_DISPLAY ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "sdl" || echo "none")
 QEMU_KVM ?= $(shell test -w /dev/kvm && echo "-enable-kvm -cpu host")
 QEMU_AUDIO ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "-audiodev sdl,id=snd0 -device AC97,audiodev=snd0 -machine q35,pcspk-audiodev=snd0" || echo "-audiodev none,id=snd0 -device AC97,audiodev=snd0")
+QEMU_NET ?= -netdev user,id=net0,hostfwd=tcp::10022-:22 -device e1000,netdev=net0
 
 run: $(DISK) $(OVMF_VARS)
 	qemu-system-x86_64 \
 		$(QEMU_AUDIO) \
+		$(QEMU_NET) \
 		$(QEMU_KVM) \
 		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \

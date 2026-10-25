@@ -2,12 +2,21 @@ pub mod ioapic;
 pub mod lapic;
 pub mod madt;
 
-use super::consts::{LEGACY_PIC0_MASK, LEGACY_PIC1_MASK};
+use super::consts::{
+    LEGACY_PIC0_COMMAND, LEGACY_PIC0_MASK, LEGACY_PIC1_COMMAND, LEGACY_PIC1_MASK, PIC_EOI,
+};
 
 static mut CASCADE_OFFSET: (u8, u8) = (0, 0);
 
 pub(crate) fn legacy_cascade() -> (u8, u8) {
     unsafe { CASCADE_OFFSET }
+}
+
+fn io_wait() {
+    use x86_64::instructions::port::Port;
+    unsafe {
+        Port::<u8>::new(0x80).write(0);
+    }
 }
 
 fn remap_legacy_pic() {
@@ -17,32 +26,32 @@ fn remap_legacy_pic() {
     const SLAVE_OFFSET: u8 = 0x28;
 
     unsafe {
-        let mut mask0 = Port::<u8>::new(LEGACY_PIC0_MASK);
-        let mut mask1 = Port::<u8>::new(LEGACY_PIC1_MASK);
-        let mut command0 = Port::<u8>::new(0x20);
-        let mut command1 = Port::<u8>::new(0xA0);
-        let mut data0 = Port::<u8>::new(0x21);
-        let mut data1 = Port::<u8>::new(0xA1);
-
-        mask0.write(0xFF);
-        mask1.write(0xFF);
+        let mut command0 = Port::<u8>::new(LEGACY_PIC0_COMMAND);
+        let mut command1 = Port::<u8>::new(LEGACY_PIC1_COMMAND);
+        let mut data0 = Port::<u8>::new(LEGACY_PIC0_MASK);
+        let mut data1 = Port::<u8>::new(LEGACY_PIC1_MASK);
 
         command0.write(0x11);
-        data0.write(MASTER_OFFSET);
-        data0.write(0x04);
-        command0.write(0x01);
-        data0.write(0x02);
-
+        io_wait();
         command1.write(0x11);
+        io_wait();
+
+        data0.write(MASTER_OFFSET);
+        io_wait();
         data1.write(SLAVE_OFFSET);
+        io_wait();
+
+        data0.write(0x04);
+        io_wait();
         data1.write(0x02);
-        command1.write(0x01);
-        data1.write(0x02);
+        io_wait();
+
+        data0.write(0x01);
+        io_wait();
+        data1.write(0x01);
+        io_wait();
 
         CASCADE_OFFSET = (SLAVE_OFFSET + 2, MASTER_OFFSET + 2);
-
-        mask0.write(0);
-        mask1.write(0);
     }
 }
 
@@ -91,8 +100,11 @@ pub(crate) unsafe fn init(acpi_root_addr: usize) {
 }
 
 pub(crate) unsafe fn eoi() {
+    use x86_64::instructions::port::Port;
     unsafe {
         lapic::send_eoi();
         ioapic::send_eoi();
+        Port::<u8>::new(LEGACY_PIC1_COMMAND).write(PIC_EOI);
+        Port::<u8>::new(LEGACY_PIC0_COMMAND).write(PIC_EOI);
     }
 }

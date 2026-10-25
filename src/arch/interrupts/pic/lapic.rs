@@ -136,6 +136,6 @@ pub(super) unsafe fn id() -> u32 {
     read32(LAPIC_ID_OFFSET) >> 24
 }
 
-pub(super) unsafe fn send_eoi() {
+pub(crate) unsafe fn send_eoi() {
     write32(LAPIC_EOI_OFFSET, 0);
 }

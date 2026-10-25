@@ -10,9 +10,8 @@ use crate::arch::lock::InterruptMutex;
 use crate::memory::allocator::{alloc_frame, free_frame, init_frames, kernel_phys_range};
 use crate::memory::heap::{HEAP_SIZE, HEAP_START};
 use crate::paging::{
-    DIRECT_MAP_P4_INDEX, ENTRIES_PER_TABLE, ENTRY_SIZE, KERNEL_P4_INDEX, KERNEL_VIRTUAL_BASE,
-    PAGE_SIZE, PTE_ADDR_MASK, PTE_HUGE, PTE_LEAF_MASK, PTE_PRESENT, PTE_USER, PTE_WRITABLE,
-    phys_to_direct,
+    DIRECT_MAP_P4_INDEX, ENTRIES_PER_TABLE, ENTRY_SIZE, HUGE_PAGE_SIZE, KERNEL_P4_INDEX, PAGE_SIZE,
+    PTE_ADDR_MASK, PTE_HUGE, PTE_PRESENT, PTE_USER, PTE_WRITABLE, phys_to_direct,
 };
 
 pub(crate) const KERNEL_RW: PageTableFlags =
@@ -44,11 +43,15 @@ const P1_LEVEL: u8 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MemoryError {
     OutOfFrames,
+    AddressOutOfRange,
 }
 
 impl core::fmt::Display for MemoryError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("out of frames")
+        match self {
+            Self::OutOfFrames => f.write_str("out of frames"),
+            Self::AddressOutOfRange => f.write_str("address out of range"),
+        }
     }
 }
 
@@ -80,24 +83,24 @@ fn new_table() -> Result<u64, MemoryError> {
     Ok(base)
 }
 
-fn split_huge_at(slot: u64) -> Result<u64, MemoryError> {
+fn split_huge_at(slot: u64, virt: u64) -> Result<u64, MemoryError> {
     let base = new_table()?;
 
     let old = unsafe { core::ptr::read_volatile(slot as *const u64) };
-    let leaf = old & PTE_LEAF_MASK;
+    let leaf_flags = old & !PTE_ADDR_MASK & !PTE_HUGE;
     let huge_base = old & PTE_ADDR_MASK;
 
     for i in 0..ENTRIES_PER_TABLE {
         unsafe {
-            write_entry(base, i, (huge_base + i * PAGE_SIZE) | leaf);
+            write_entry(base, i, (huge_base + i * PAGE_SIZE) | leaf_flags);
         }
     }
 
-    let replacement = base | PTE_PRESENT | PTE_WRITABLE | leaf;
+    let replacement = base | PTE_PRESENT | PTE_WRITABLE | (leaf_flags & PTE_USER);
 
     unsafe { core::ptr::write_volatile(slot as *mut u64, replacement) };
 
-    x86_64::instructions::tlb::flush(VirtAddr::new(huge_base));
+    x86_64::instructions::tlb::flush(VirtAddr::new(virt & !(HUGE_PAGE_SIZE - 1)));
 
     Ok(base)
 }
@@ -132,7 +135,7 @@ impl Mapper {
 
                 child
             } else if entry & PTE_HUGE != 0 {
-                split_huge_at(slot)?
+                split_huge_at(slot, virt)?
             } else {
                 entry & PTE_ADDR_MASK
             };
@@ -212,6 +215,71 @@ fn translate_in(root: u64, virt: u64) -> PhysFrame {
     );
 
     PhysFrame::containing_address(PhysAddr::new(leaf & PTE_ADDR_MASK))
+}
+
+pub(crate) fn try_translate_in(root: u64, virt: u64, require_write: bool) -> Result<PhysFrame, ()> {
+    let mut frame = root;
+
+    for level in 0..P1_LEVEL {
+        let table = phys_to_direct(frame);
+        let entry = unsafe { read_entry(table, index(virt, level as usize)) };
+
+        if entry & PTE_PRESENT == 0 {
+            return Err(());
+        }
+
+        if require_write && (entry & PTE_WRITABLE == 0) {
+            return Err(());
+        }
+
+        if level > 0 && entry & PTE_HUGE != 0 {
+            let shift = if level == 1 { 30 } else { 21 };
+            let page = (1 << shift) - 1;
+
+            return Ok(PhysFrame::containing_address(PhysAddr::new(
+                (entry & PTE_ADDR_MASK & !page) + (virt & page),
+            )));
+        }
+
+        frame = entry & PTE_ADDR_MASK;
+    }
+
+    let table = phys_to_direct(frame);
+    let leaf = unsafe { read_entry(table, index(virt, P1_LEVEL as usize)) };
+
+    if leaf & PTE_PRESENT == 0 {
+        return Err(());
+    }
+
+    if require_write && (leaf & PTE_WRITABLE == 0) {
+        return Err(());
+    }
+
+    Ok(PhysFrame::containing_address(PhysAddr::new(
+        leaf & PTE_ADDR_MASK,
+    )))
+}
+
+pub(crate) fn check_user_range(start: u64, len: u64, require_write: bool) -> Result<(), ()> {
+    if len == 0 {
+        return Ok(());
+    }
+    let end = start.checked_add(len).ok_or(())?;
+    if end > USER_END {
+        return Err(());
+    }
+    let root = current_cr3().start_address().as_u64();
+    let start_page = start & !(PAGE_SIZE - 1);
+    let end_page = (end - 1) & !(PAGE_SIZE - 1);
+    let mut page = start_page;
+    while page <= end_page {
+        try_translate_in(root, page, require_write)?;
+        page = match page.checked_add(PAGE_SIZE) {
+            Some(next) => next,
+            None => break,
+        };
+    }
+    Ok(())
 }
 
 fn is_shared_slot(index: u64) -> bool {
@@ -311,7 +379,7 @@ impl AddressSpace {
 
                 child
             } else if entry & PTE_HUGE != 0 {
-                split_huge_at(slot)?
+                split_huge_at(slot, virt)?
             } else {
                 entry & PTE_ADDR_MASK
             };
@@ -357,7 +425,17 @@ impl AddressSpace {
     pub(crate) fn from_root(root: PhysFrame) -> Self {
         AddressSpace { root, owned: true }
     }
+}
 
+pub(crate) fn unmap_boot_identity() {
+    let boot_p4 = (&raw const P4_TABLE) as u64;
+    unsafe {
+        write_entry(boot_p4, 0, 0);
+    }
+    x86_64::instructions::tlb::flush_all();
+}
+
+impl AddressSpace {
     pub(crate) fn clone_from_root(root: PhysFrame) -> Result<Self, MemoryError> {
         let new_space = Self::new_with_kernel()?;
         Self::clone_level(root.start_address().as_u64(), new_space.root_addr(), 0)?;
@@ -414,6 +492,10 @@ impl AddressSpace {
     ) -> Result<(), MemoryError> {
         let virt = virt & !(PAGE_SIZE - 1);
 
+        if virt >= USER_END {
+            return Err(MemoryError::AddressOutOfRange);
+        }
+
         let frame = self.walk(virt, flags)?;
         let table = phys_to_direct(frame);
 
@@ -426,6 +508,40 @@ impl AddressSpace {
             x86_64::instructions::tlb::flush(VirtAddr::new(virt));
         }
 
+        Ok(())
+    }
+    pub(crate) fn unmap(&mut self, virt: u64) -> Result<(), MemoryError> {
+        let virt = virt & !(PAGE_SIZE - 1);
+
+        if virt >= USER_END {
+            return Err(MemoryError::AddressOutOfRange);
+        }
+
+        let mut frame = self.root_addr();
+        for level in 0..P1_LEVEL as usize {
+            let table = phys_to_direct(frame);
+            let idx = index(virt, level);
+            let entry = unsafe { read_entry(table, idx) };
+            if entry & PTE_PRESENT == 0 {
+                return Ok(());
+            }
+            if entry & PTE_HUGE != 0 {
+                return Ok(());
+            }
+            frame = entry & PTE_ADDR_MASK;
+        }
+        let table = phys_to_direct(frame);
+        let leaf_idx = index(virt, P1_LEVEL as usize);
+        let leaf = unsafe { read_entry(table, leaf_idx) };
+        if leaf & PTE_PRESENT != 0 {
+            let phys = leaf & PTE_ADDR_MASK;
+            unsafe { write_entry(table, leaf_idx, 0) };
+            crate::memory::allocator::free_frame(phys);
+        }
+        let (current_cr3, _) = Cr3::read();
+        if self.root == current_cr3 {
+            x86_64::instructions::tlb::flush(VirtAddr::new(virt));
+        }
         Ok(())
     }
 
@@ -475,7 +591,7 @@ impl Drop for AddressSpace {
 
 /// Lowest user address, and the top of the canonical lower half.
 pub(crate) const USER_START: u64 = 0x0000_0000_0000_0000;
-pub(crate) const USER_END: u64 = KERNEL_VIRTUAL_BASE - 1;
+pub(crate) const USER_END: u64 = 0x0000_7FFF_FFFF_FFFF;
 
 /// Code, stack and data, low enough to be well clear of the firmware's.
 pub(crate) const USER_BASE: u64 = 0x0040_0000;

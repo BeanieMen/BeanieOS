@@ -15,9 +15,9 @@ struct Scheduler {
     threads: BTreeMap<ThreadId, Arc<InterruptMutex<Thread>>>,
     ready_queues: [VecDeque<ThreadId>; NUM_PRIORITIES],
     sleeping: Vec<(u64, ThreadId)>,
+    dead_threads: Vec<ThreadId>,
     current: ThreadId,
     reschedule_requested: bool,
-    charged_up_to: u64,
     initialized: bool,
     live: usize,
 }
@@ -30,9 +30,9 @@ impl Scheduler {
             threads: BTreeMap::new(),
             ready_queues: [EMPTY; NUM_PRIORITIES],
             sleeping: Vec::new(),
+            dead_threads: Vec::new(),
             current: ThreadId::MAIN,
             reschedule_requested: false,
-            charged_up_to: 0,
             initialized: false,
             live: 0,
         }
@@ -159,8 +159,6 @@ impl Scheduler {
     }
 
     fn yield_to(&mut self) -> Option<ContextSwitch> {
-        self.charge_ticks();
-
         let forced = core::mem::take(&mut self.reschedule_requested);
 
         if forced {
@@ -168,25 +166,6 @@ impl Scheduler {
         }
 
         self.switch_if_others_runnable()
-    }
-
-    fn charge_ticks(&mut self) {
-        let now = self.ticks();
-        let elapsed = now.saturating_sub(self.charged_up_to);
-        self.charged_up_to = now;
-
-        let Some(current) = self.threads.get(&self.current) else {
-            return;
-        };
-
-        let mut current = current.lock();
-
-        if current.timeslice <= elapsed {
-            current.timeslice = TIMESLICE_TICKS;
-            self.reschedule_requested = true;
-        } else {
-            current.timeslice -= elapsed;
-        }
     }
 
     fn retire_current(&mut self) -> Option<ContextSwitch> {
@@ -202,6 +181,9 @@ impl Scheduler {
         }
 
         self.sleeping.retain(|&(_, sid)| sid != id);
+        if !self.dead_threads.contains(&id) {
+            self.dead_threads.push(id);
+        }
 
         self.switch_to_any()
     }
@@ -235,8 +217,10 @@ impl Scheduler {
         let previous_id = self.current;
 
         if next_id == previous_id {
-            self.requeue(next_id);
-
+            if let Some(thread) = self.threads.get(&next_id) {
+                let mut thread = thread.lock();
+                thread.begin_running();
+            }
             return None;
         }
 
@@ -244,14 +228,28 @@ impl Scheduler {
     }
 
     fn activate(&mut self, next_id: ThreadId, previous_id: ThreadId) -> Option<ContextSwitch> {
-        let (previous_slot, prev_pid) = {
+        // Reap dead threads whose context switch has finished (cannot reap previous_id or next_id).
+        let mut reaped = Vec::new();
+        self.dead_threads.retain(|&dead_id| {
+            if dead_id != previous_id && dead_id != next_id {
+                reaped.push(dead_id);
+                false
+            } else {
+                true
+            }
+        });
+        for dead_id in reaped {
+            self.threads.remove(&dead_id);
+        }
+
+        let (previous_slot, prev_pid, previous_fx) = {
             let previous = self.threads.get(&previous_id)?;
             let mut prev = previous.lock();
             prev.fs_base = x86_64::registers::model_specific::FsBase::read().as_u64();
-            (prev.rsp_slot(), prev.pid)
+            (prev.rsp_slot(), prev.pid, prev.fpu_state.data.as_mut_ptr())
         };
 
-        let (next_rsp, next_pid) = {
+        let (next_rsp, next_pid, next_fx) = {
             let next = self.threads.get(&next_id)?;
             let mut next = next.lock();
             next.begin_running();
@@ -259,7 +257,7 @@ impl Scheduler {
                 gdt::set_kernel_stack_top(stack_top as u64);
             }
             x86_64::registers::model_specific::FsBase::write(VirtAddr::new(next.fs_base));
-            (next.saved_rsp(), next.pid)
+            (next.saved_rsp(), next.pid, next.fpu_state.data.as_ptr())
         };
 
         self.current = next_id;
@@ -273,6 +271,8 @@ impl Scheduler {
         (next_rsp != 0).then_some(ContextSwitch {
             previous_slot,
             next_rsp,
+            previous_fx,
+            next_fx,
         })
     }
 
@@ -323,8 +323,12 @@ impl Scheduler {
 
         let mut thread = thread.lock();
 
-        if thread.state != ThreadState::Blocked {
-            return;
+        match thread.state {
+            ThreadState::Blocked => {}
+            ThreadState::Sleeping(_) => {
+                self.sleeping.retain(|&(_, sid)| sid != id);
+            }
+            _ => return,
         }
 
         thread.state = ThreadState::Ready;
@@ -370,6 +374,8 @@ impl Scheduler {
 struct ContextSwitch {
     pub previous_slot: *mut usize,
     pub next_rsp: usize,
+    pub previous_fx: *mut u8,
+    pub next_fx: *const u8,
 }
 
 static SCHEDULER: InterruptMutex<Scheduler> = InterruptMutex::new(Scheduler::new());
@@ -440,7 +446,10 @@ pub(crate) fn sleep(duration_ticks: u64) {
             x86_64::instructions::interrupts::disable();
             SCHEDULER.lock().wake_sleeping_threads();
         }
-        if let Some(current) = SCHEDULER.lock().threads.get(&SCHEDULER.lock().current) {
+        if let Some(current) = {
+            let sched = SCHEDULER.lock();
+            sched.threads.get(&sched.current).cloned()
+        } {
             let mut thread = current.lock();
             thread.state = ThreadState::Running;
             thread.timeslice = TIMESLICE_TICKS;
@@ -449,7 +458,15 @@ pub(crate) fn sleep(duration_ticks: u64) {
 }
 
 pub(crate) fn exit() -> ! {
-    let switch = SCHEDULER.lock().retire_current();
+    let mut switch = SCHEDULER.lock().retire_current();
+
+    while switch.is_none() {
+        x86_64::instructions::interrupts::enable_and_hlt();
+        x86_64::instructions::interrupts::disable();
+        let mut sched = SCHEDULER.lock();
+        sched.wake_sleeping_threads();
+        switch = sched.activate_next();
+    }
 
     apply(switch);
 
@@ -466,8 +483,10 @@ fn apply(switch: Option<ContextSwitch>) {
     if let Some(ContextSwitch {
         previous_slot,
         next_rsp,
+        previous_fx,
+        next_fx,
     }) = switch
     {
-        unsafe { switch_context(previous_slot, next_rsp) };
+        unsafe { switch_context(previous_slot, next_rsp, previous_fx, next_fx) };
     }
 }

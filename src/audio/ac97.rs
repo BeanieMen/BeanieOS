@@ -116,9 +116,16 @@ impl Ac97 {
     }
 
     pub(crate) fn write_samples(&mut self, data: &[u8]) -> usize {
-        self.pending.extend_from_slice(data);
         self.flush();
-        data.len()
+        const MAX_PENDING: usize = BUFFER_SIZE * 8;
+        if self.pending.len() >= MAX_PENDING {
+            return 0;
+        }
+        let space = MAX_PENDING - self.pending.len();
+        let to_take = data.len().min(space);
+        self.pending.extend_from_slice(&data[..to_take]);
+        self.flush();
+        to_take
     }
 
     fn flush(&mut self) {
