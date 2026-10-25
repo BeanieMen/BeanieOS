@@ -21,6 +21,7 @@ mod storage;
 mod syscall;
 mod task;
 mod tty;
+mod input;
 
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 

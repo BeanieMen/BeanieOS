@@ -41,7 +41,7 @@ pub(crate) fn init_idt(boot_info: &BootInformation<'_>) {
         pic::init(acpi_root_addr(boot_info));
     }
 
-    crate::arch::keyboard::init();
+    crate::arch::ps2::init();
 }
 
 pub(crate) fn timer_ticks() -> u64 {

@@ -1,4 +1,4 @@
-use super::super::consts::KEYBOARD_VECTOR;
+use super::super::consts::{KEYBOARD_VECTOR, MOUSE_VECTOR};
 use super::lapic;
 use super::madt;
 
@@ -96,6 +96,7 @@ pub(super) unsafe fn init() {
     }
 
     route(parsed.keyboard_gsi, KEYBOARD_VECTOR);
+    route(parsed.mouse_gsi, MOUSE_VECTOR);
 
-    crate::kinfo!("ioapic: keyboard gsi {}", parsed.keyboard_gsi);
+    crate::kinfo!("ioapic: keyboard gsi {}, mouse gsi {}", parsed.keyboard_gsi, parsed.mouse_gsi);
 }

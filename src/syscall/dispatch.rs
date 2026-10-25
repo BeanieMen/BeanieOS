@@ -561,13 +561,8 @@ fn sys_poll(fds: u64, nfds: u64, _timeout: u64) -> SyscallResult {
                 let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
                 if let Some(Ok(file)) = file {
                     let inode_id = file.inode.lock().id;
-                    if inode_id == 3 {
-                        let has_events = !crate::arch::keyboard::KBD_QUEUE.lock().is_empty();
-                        if has_events && (events & 1 != 0) {
-                            revents |= 1;
-                        }
-                    } else if inode_id == 4 {
-                        let has_events = !crate::arch::mouse::MOUSE_QUEUE.lock().is_empty();
+                    if inode_id == 6 {
+                        let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
                         if has_events && (events & 1 != 0) {
                             revents |= 1;
                         }
