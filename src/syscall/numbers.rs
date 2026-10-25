@@ -87,4 +87,6 @@ syscalls! {
      Openat = 257,
      Readlink = 80,
      Readlinkat = 267,
+     Madavise = 28,
+     Getcwd = 79
 }

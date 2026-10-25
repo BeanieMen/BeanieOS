@@ -92,6 +92,11 @@ pub(crate) fn dispatch(
         Syscall::Chmod | Syscall::Fchmod | Syscall::Chown | Syscall::Fchown => Ok(0),
         Syscall::Pipe => sys_pipe(args[0]),
         Syscall::Pipe2 => sys_pipe2(args[0], args[1]),
+        Syscall::Openat => sys_openat(args[0], args[1], args[2]),
+        Syscall::Readlink => sys_readlink(args[0], args[1], args[2]),
+        Syscall::Readlinkat => sys_readlinkat(args[0], args[1], args[2], args[3]),
+        Syscall::Getcwd => sys_getcwd(args[0], args[1]),
+        Syscall::Madavise => Ok(0),
     }
 }
 
@@ -102,6 +107,16 @@ struct Timespec {
     tv_nsec: i64,
 }
 
+fn sys_getcwd(buf_ptr: u64, size: u64) -> SyscallResult { 
+    let cwd = b"/\0";
+    if size < cwd.len() as u64 {
+        return Err(Errno::Range);
+    }
+
+    copy_to_user(buf_ptr,cwd).map_err(|_| Errno::Fault)?;
+    Ok(buf_ptr)
+}
+
 fn sys_openat(dirfd: u64, path: u64, flags: u64) -> SyscallResult {
     const AT_FDCWD: i64 = -100;
     if dirfd as i64 != AT_FDCWD {
@@ -110,11 +125,11 @@ fn sys_openat(dirfd: u64, path: u64, flags: u64) -> SyscallResult {
     sys_open(path, flags)
 }
 
-fn sys_readlink(path: u64, buf: u64, bufsiz: u64) -> SyscallResult {
+fn sys_readlink(_path: u64, _buf: u64, _bufsiz: u64) -> SyscallResult {
     Err(Errno::Invalid)
 }
 
-fn sys_readlinkat(dirfd: u64, path: u64, buf: u64, bufsiz: u64) -> SyscallResult {
+fn sys_readlinkat(_dirfd: u64, path: u64, buf: u64, bufsiz: u64) -> SyscallResult {
     sys_readlink(path, buf, bufsiz)
 }
 
