@@ -9,20 +9,20 @@ use core::panic::PanicInfo;
 
 use multiboot2::BootInformation;
 
-mod net;
 mod arch;
 mod audio;
 mod console;
 mod graphics;
 mod hal;
+mod input;
 mod logger;
 mod memory;
+mod net;
 mod paging;
 mod storage;
 mod syscall;
 mod task;
 mod tty;
-mod input;
 
 const MULTIBOOT2_MAGIC: u32 = 0x36d76289;
 
@@ -58,6 +58,17 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
 
     task::process::init();
     task::scheduler::init();
+
+    for dev in hal::hal().pci.find_network() {
+        if let Some((bar0, _size)) = dev.bar0_info() {
+            let va = paging::phys_to_direct(bar0);
+            let e1000 = net::e1000::E1000::init(x86_64::VirtAddr::new(va));
+            *net::e1000::E1000_DEVICE.lock() = Some(e1000);
+            net::stack::init_stack();
+            kinfo!("e1000 initialized at {:#x}", va);
+            break;
+        }
+    }
 
     mount_disk();
     memory::mmu::unmap_boot_identity();
