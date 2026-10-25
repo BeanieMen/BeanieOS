@@ -16,3 +16,5 @@ __pycache__/
 # Object files and doom build
 *.o
 userspace/doom/doomgeneric/build/
+
+users.db*
