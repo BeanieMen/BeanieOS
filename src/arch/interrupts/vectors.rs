@@ -5,7 +5,7 @@ use x86_64::instructions::port::Port;
 use x86_64::structures::idt::InterruptDescriptorTable;
 
 use super::consts::{
-    AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, MOUSE_VECTOR, SPURIOUS_VECTOR,
+    AHCI_VECTOR, KEYBOARD_VECTOR, LAPIC_TIMER_VECTOR, MOUSE_VECTOR, PIC_MOUSE_VECTOR, SPURIOUS_VECTOR,
 };
 use super::pic;
 
@@ -59,6 +59,8 @@ extern "x86-interrupt" fn ps2_interrupt_handler(
 ) {
     crate::arch::ps2::on_interrupt();
     unsafe {
+        Port::<u8>::new(0xA0).write(0x20);
+        Port::<u8>::new(0x20).write(0x20);
         pic::eoi();
     }
 }
@@ -66,6 +68,7 @@ extern "x86-interrupt" fn ps2_interrupt_handler(
 pub(crate) fn register_vectors(idt: &mut InterruptDescriptorTable) {
     idt[KEYBOARD_VECTOR].set_handler_fn(ps2_interrupt_handler);
     idt[MOUSE_VECTOR].set_handler_fn(ps2_interrupt_handler);
+    idt[PIC_MOUSE_VECTOR].set_handler_fn(ps2_interrupt_handler);
     idt[SPURIOUS_VECTOR].set_handler_fn(spurious_interrupt_handler);
     idt[AHCI_VECTOR].set_handler_fn(crate::storage::ahci::on_interrupt);
 

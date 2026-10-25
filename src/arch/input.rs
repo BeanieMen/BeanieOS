@@ -6,7 +6,7 @@ use crate::task::identity::ThreadId;
 static WAITERS: InterruptMutex<Vec<ThreadId>> = InterruptMutex::new(Vec::new());
 
 pub(crate) fn push_key(_key: char) {
-    wake_one();
+    wake_waiters();
 }
 
 pub(crate) fn add_waiter(id: ThreadId) {
@@ -15,6 +15,17 @@ pub(crate) fn add_waiter(id: ThreadId) {
 
 pub(crate) fn remove_waiter(id: ThreadId) {
     WAITERS.lock().retain(|waiter| *waiter != id);
+}
+
+pub(crate) fn wake_waiters() {
+    let waiters: Vec<ThreadId> = {
+        let mut list = WAITERS.lock();
+        list.drain(..).collect()
+    };
+
+    for id in waiters {
+        crate::task::scheduler::wake(id);
+    }
 }
 
 fn wake_one() {
