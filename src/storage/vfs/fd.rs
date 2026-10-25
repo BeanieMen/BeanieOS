@@ -133,6 +133,15 @@ impl FdTable {
             return Ok(self.alloc(event_file));
         }
 
+        if path == b"/dev/mouse" || path == b"dev/mouse"
+            || path == b"/dev/psaux" || path == b"dev/psaux"
+            || path == b"/dev/input/mice" || path == b"dev/input/mice"
+            || path == b"/dev/input/mouse0" || path == b"dev/input/mouse0"
+        {
+            let mouse_file = crate::input::mouse::create_mouse_file(flags);
+            return Ok(self.alloc(mouse_file));
+        }
+
         if path == b"/dev/tty1" || path == b"dev/tty1" || path == b"/dev/tty0" || path == b"dev/tty0" || path == b"/dev/tty" || path == b"dev/tty" || path == b"/dev/console" {
             let tty_file = crate::tty::vfs::create_tty_file(flags);
             return Ok(self.alloc(tty_file));

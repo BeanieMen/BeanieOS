@@ -2,6 +2,7 @@ pub(crate) const KEYBOARD_VECTOR: u8 = 33;
 pub(crate) const LAPIC_TIMER_VECTOR: u8 = 32;
 pub(crate) const AHCI_VECTOR: u8 = 34;
 pub(crate) const MOUSE_VECTOR: u8 = 35;
+pub(crate) const PIC_MOUSE_VECTOR: u8 = 44;
 
 pub(crate) const LAPIC_SVR_OFFSET: usize = 0xF0;
 pub(crate) const LAPIC_ID_OFFSET: usize = 0x20;

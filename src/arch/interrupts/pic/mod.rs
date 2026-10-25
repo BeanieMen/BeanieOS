@@ -51,12 +51,14 @@ fn mask_legacy_pic() {
 
     const KEYBOARD_IRQ: u8 = 1;
     const CASCADE_IRQ: u8 = 2;
+    const MOUSE_IRQ: u8 = 12 - 8;
 
     let master: u8 = !((1 << KEYBOARD_IRQ) | (1 << CASCADE_IRQ));
+    let slave: u8 = !(1 << MOUSE_IRQ);
 
     unsafe {
         Port::new(LEGACY_PIC0_MASK).write(master);
-        Port::new(LEGACY_PIC1_MASK).write(0xFFu8);
+        Port::new(LEGACY_PIC1_MASK).write(slave);
     }
 }
 

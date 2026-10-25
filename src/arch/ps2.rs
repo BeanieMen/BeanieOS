@@ -128,6 +128,11 @@ pub(crate) fn init() {
     let ack2 = send_mouse_command(MOUSE_ENABLE_REPORTING);
     crate::kinfo!("ps2: mouse acks {ack1:#04x}, {ack2:#04x}");
 
+    write_command(CMD_READ_CONFIG);
+    if wait_output_full() {
+        let _ = read_data();
+    }
+
     for _ in 0..1000 {
         if status() & STATUS_OUTPUT_FULL != 0 {
             read_data();
@@ -193,6 +198,8 @@ fn handle_mouse_byte(byte: u8) {
             crate::input::event::push_button(crate::input::event::BTN_RIGHT, right);
             crate::input::event::push_button(crate::input::event::BTN_MIDDLE, middle);
             crate::input::event::push_syn();
+
+            crate::input::mouse::push_packet(flags, raw_x, raw_y);
         }
         _ => mouse.phase = 0,
     }

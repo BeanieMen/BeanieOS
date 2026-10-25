@@ -446,16 +446,23 @@ fn sys_fstat(fd: u64, stat_buf: u64) -> SyscallResult {
         stat[24..28].copy_from_slice(&0o020666u32.to_le_bytes());
         stat[56..64].copy_from_slice(&1024u64.to_le_bytes());
     } else {
-        let (size, is_dir, ino) = process::with_current_fds(|fds| {
+        let (size, is_dir, is_dev, ino) = process::with_current_fds(|fds| {
             let file = fds.get(fd).ok()?;
             let inode = file.inode.lock();
             let is_dir = inode.file_type == crate::storage::vfs::inode::FileType::Directory;
-            Some((inode.size, is_dir, inode.id))
+            let is_dev = inode.file_type == crate::storage::vfs::inode::FileType::Device;
+            Some((inode.size, is_dir, is_dev, inode.id))
         })
         .flatten()
         .ok_or(Errno::BadFd)?;
 
-        let mode = if is_dir { 0o040755u32 } else { 0o100644u32 };
+        let mode = if is_dir {
+            0o040755u32
+        } else if is_dev {
+            0o020666u32
+        } else {
+            0o100644u32
+        };
         let blocks = size.div_ceil(512);
 
         stat[8..16].copy_from_slice(&ino.to_le_bytes());
@@ -652,12 +659,18 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
         _ => {}
     }
 
-    let is_vt2 = process::with_current_fds(|fds| {
-        fds.get(_fd).ok().map(|f| f.inode.lock().id == 7)
-    }).flatten().unwrap_or(false);
+    let (is_tty, is_vt2) = process::with_current_fds(|fds| {
+        fds.get(_fd).ok().map(|f| {
+            let id = f.inode.lock().id;
+            (id == 1 || id == 7, id == 7)
+        })
+    }).flatten().unwrap_or((false, false));
 
     match request {
         TCGETS => {
+            if !is_tty {
+                return Err(Errno::NotTty);
+            }
             let termios = if is_vt2 {
                 crate::tty::VT2_TTY.lock().termios
             } else {
@@ -675,6 +688,9 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
             Ok(0)
         }
         TCSETS | TCSETSW | TCSETSF => {
+            if !is_tty {
+                return Err(Errno::NotTty);
+            }
             let mut termios = Termios::default();
             let bytes = unsafe {
                 core::slice::from_raw_parts_mut(
@@ -693,6 +709,9 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
             Ok(0)
         }
         TIOCGWINSZ => {
+            if !is_tty {
+                return Err(Errno::NotTty);
+            }
             let (rows, cols) = {
                 let writer = crate::graphics::framebuffer::WRITER.lock();
                 (writer.rows() as u16, writer.cols() as u16)
@@ -983,6 +1002,13 @@ fn check_fd_ready(fd: u64, for_write: bool) -> bool {
             // /dev/input/event0
             return !for_write && !crate::input::event::EVENT_QUEUE.lock().is_empty();
         }
+        if inode_id == 8 {
+            // /dev/mouse, /dev/input/mice, /dev/psaux
+            if for_write {
+                return true;
+            }
+            return !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
+        }
         if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
             let s = sock.lock();
             match &s.state {
@@ -1144,6 +1170,9 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
                 return Err(Errno::Again);
             }
             if inode_id == 6 && crate::input::event::EVENT_QUEUE.lock().is_empty() {
+                return Err(Errno::Again);
+            }
+            if inode_id == 8 && crate::input::mouse::MOUSE_QUEUE.lock().is_empty() {
                 return Err(Errno::Again);
             }
             if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
