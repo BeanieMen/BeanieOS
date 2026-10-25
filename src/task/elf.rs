@@ -107,7 +107,7 @@ pub fn load_elf_at(
         if ph.p_type == 3 {
             let offset = ph.p_offset as usize;
             let filesz = ph.p_filesz as usize;
-            if offset + filesz > binary.len() {
+            if offset + filesz <= binary.len() {
                 let mut path = binary[offset..offset + filesz].to_vec();
                 if let Some(pos) = path.iter().position(|&b| b==0) {
                     path.truncate(pos);
@@ -125,7 +125,7 @@ pub fn load_elf_at(
         if phdr_vaddr == 0 {
             let ph_end = ph_table_offset as u64 + (ph_count * ph_size) as u64;
             if ph_end <= ph.p_offset + ph.p_filesz {
-                phdr_vaddr = ph.p_vaddr - ph.p_offset - ph.p_offset + ph_table_offset as u64;
+                phdr_vaddr = ph.p_vaddr + base_addr + ph_table_offset as u64 - ph.p_offset;
             }
         }
         if ph.p_memsz == 0 {

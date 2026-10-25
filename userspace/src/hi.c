@@ -1,9 +1,6 @@
-#include "syscall.h"
+#include <stdio.h>
 
 int main(void) {
-    const char msg[] = "hi\n";
-    sys_write(1, msg, sizeof(msg) - 1);
-    sys_exit(0);
-
+    printf("hello from user space (musl libc)\n");
     return 0;
 }

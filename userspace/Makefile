@@ -1,14 +1,11 @@
-CC := gcc
-CFLAGS := -Wall -Wextra -O2 -nostdlib -ffreestanding -fno-pie -no-pie \
-	-fno-stack-protector -Iinclude -m64
-LDFLAGS := -nostdlib -static -T linker.ld
+CC ?= musl-gcc
+CFLAGS := -Wall -Wextra -O2 -static -Iinclude -m64
+LDFLAGS := -static
 
 BUILD_DIR := bin
 
 C_SRCS := $(sort $(wildcard src/*.c))
 BINS := $(patsubst src/%.c,$(BUILD_DIR)/%,$(C_SRCS))
-
-ASM_SRC := src/crt0.s
 
 all: $(BINS) doom xfbdev
 
@@ -24,9 +21,9 @@ xfbdev:
 		cp tinyxserver/Xfbdev $(BUILD_DIR)/Xfbdev; \
 	fi
 
-$(BUILD_DIR)/%: src/%.c $(ASM_SRC) linker.ld include/syscall.h
+$(BUILD_DIR)/%: src/%.c
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(ASM_SRC) $< -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@
 
 clean:
 	rm -f $(BINS) $(BUILD_DIR)/doom $(BUILD_DIR)/Xfbdev
