@@ -58,19 +58,21 @@ def reserve_attempt(ip):
     db = sqlite3.connect(DB_PATH, isolation_level=None)
     try:
         db.execute("BEGIN IMMEDIATE")
-        db.execute("DELETE FROM attempts WHERE triead_at < datetime('now','-1 hour')")
+        db.execute("DELETE FROM attempts WHERE tried_at < datetime('now','-1 hour')")
         count = db.execute(
             "SELECT COUNT(*) FROM attempts WHERE ip = ? AND tried_at > datetime('now', '-10 minutes')",
-            (ip),
+            (ip,),
         ).fetchone()[0]
         if count < 5:
-            db.ececute("INSERT INTO attempts (ip) VALUES(?)",(ip,))
+            db.execute("INSERT INTO attempts (ip) VALUES(?)",(ip,))
         db.execute("COMMIT")
         return count < 5
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as e:
         if db.in_transaction:
             db.execute("ROLLBACK")
-        return False
+        if "locked" in str(e):
+            return False
+        raise
     finally:
         db.close()
 
@@ -167,13 +169,10 @@ password):
 
 @app.route("/account")
 def account():
-    user = current_user
+    user = current_user()
     if user is None:
         return redirect("/login")
-    return ("Logged in as user %s"
-    '<form method="post" action="/logout">'
-    '<input type="hidden" name="csrf" value="%s">'
-    '<button type="submit">Log out</button></form>') % (session["user_id"], csrf_token())
+    return render_template("account.html", user=user, csrf=csrf_token())
 
 @app.route("/logout", methods=["POST"])
 def logout():
@@ -199,7 +198,4 @@ def admin():
     rows = get_db().execute(
         "SELECT id, username, created_at FROM users ORDER BY id"
     ).fetchall()
-    out = "<h1>Users</h1>"
-    for r in rows:
-        out += "<p>user %s: %s(joined %s)</p>" % (r["id"],html.escape(r["username"]),r["created_at"])
-    return out
+    return render_template("admin.html", rows=rows)

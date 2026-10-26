@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - BeanieOS</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="nav-bar">
+        <a href="/" class="title"><h1>BeanieOS</h1></a>
+        <div class="nav-links">
+            <a href="/">Home</a>
+            <a href="/account">Account</a>
+            <a href="/docs/overview">Documentation</a>
+        </div>
+    </div>
+    <main>
+        <section class="intro">
+            <h3 class="bodered-heading">Users</h3>
+            {% for r in rows %}
+            <p class="margined-lines">user {{ r["id"] }}: {{ r["username"] }} (joined {{ r["created_at"] }})</p>
+            {% endfor %}
+        </section>
+    </main>
+</body>
+</html>
