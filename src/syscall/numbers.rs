@@ -68,6 +68,7 @@ syscalls! {
     Kill = 62,
     Uname = 63,
     Fcntl = 72,
+    Flock = 73,
     Fsync = 74,
     Fdatasync = 75,
     Truncate = 76,

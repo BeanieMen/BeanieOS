@@ -98,16 +98,58 @@ $(DISK): kernel userbins
 		mcopy -i $@@@$(KERNEL_OFFSET) "$$bin" "::bin/`basename "$$bin"`" || exit 1; \
 	done
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/lib
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/lib64
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/include
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/include/sys
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/include/bits
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/local
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/local/lib
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/local/lib/tcc
+	mmd -i $@@@$(KERNEL_OFFSET) ::usr/local/lib/tcc/include
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share/fonts
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share/fonts/X11
 	mmd -i $@@@$(KERNEL_OFFSET) ::usr/share/fonts/X11/misc
 	for f in userspace/fonts/*; do \
-		mcopy -i $@@@$(KERNEL_OFFSET) "$$f" "::usr/share/fonts/X11/misc/`basename "$$f"`" || exit 1; \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) "$$f" "::usr/share/fonts/X11/misc/`basename "$$f"`" || exit 1; \
 	done
+	if [ -f /usr/lib/musl/lib/libc.so ]; then \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) /usr/lib/musl/lib/libc.so ::lib/ld-musl-x86_64.so.1 || true; \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) /usr/lib/musl/lib/libc.so ::lib/libc.musl-x86_64.so.1 || true; \
+		for f in /usr/lib/musl/lib/crt*.o /usr/lib/musl/lib/libc.a; do \
+			mcopy -o -i $@@@$(KERNEL_OFFSET) "$$f" "::usr/lib/`basename "$$f"`" || true; \
+			mcopy -o -i $@@@$(KERNEL_OFFSET) "$$f" "::usr/lib64/`basename "$$f"`" || true; \
+			mcopy -o -i $@@@$(KERNEL_OFFSET) "$$f" "::lib/`basename "$$f"`" || true; \
+		done; \
+	fi
+	if [ -d /usr/lib/musl/include ]; then \
+		for h in /usr/lib/musl/include/*.h; do \
+			mcopy -o -i $@@@$(KERNEL_OFFSET) "$$h" "::usr/include/`basename "$$h"`" || true; \
+		done; \
+		for h in /usr/lib/musl/include/sys/*.h; do \
+			mcopy -o -i $@@@$(KERNEL_OFFSET) "$$h" "::usr/include/sys/`basename "$$h"`" || true; \
+		done; \
+		for h in /usr/lib/musl/include/bits/*.h; do \
+			mcopy -o -i $@@@$(KERNEL_OFFSET) "$$h" "::usr/include/bits/`basename "$$h"`" || true; \
+		done; \
+	fi
+	if [ -f /tmp/tinycc/tcc ]; then \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) /tmp/tinycc/tcc ::bin/tcc || true; \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) /tmp/tinycc/libtcc1.a ::usr/local/lib/tcc/libtcc1.a || true; \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) /tmp/tinycc/libtcc1.a ::usr/lib64/libtcc1.a || true; \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) /tmp/tinycc/libtcc1.a ::lib/libtcc1.a || true; \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) /tmp/tinycc/libtcc1.a ::usr/lib/libtcc1.a || true; \
+		for h in /tmp/tinycc/include/*; do \
+			mcopy -o -i $@@@$(KERNEL_OFFSET) "$$h" "::usr/local/lib/tcc/include/`basename "$$h"`" || true; \
+		done; \
+	fi
+	if [ -f userspace/hello.c ]; then \
+		mcopy -o -i $@@@$(KERNEL_OFFSET) userspace/hello.c ::hello.c || true; \
+	fi
 	mmd -i $@@@$(KERNEL_OFFSET) ::packages
 	for pkg in userspace/packages/*; do \
-		[ -f "$$pkg" ] && mcopy -i $@@@$(KERNEL_OFFSET) "$$pkg" "::packages/`basename "$$pkg"`" || true; \
+		[ -f "$$pkg" ] && mcopy -o -i $@@@$(KERNEL_OFFSET) "$$pkg" "::packages/`basename "$$pkg"`" || true; \
 	done
 
 
@@ -119,7 +161,7 @@ $(OVMF_VARS): $(OVMF_VARS_TEMPLATE)
 
 QEMU_DISPLAY ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "sdl" || echo "none")
 QEMU_KVM ?= $(shell test -w /dev/kvm && echo "-enable-kvm -cpu host")
-QEMU_AUDIO ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "-audiodev sdl,id=snd0 -device AC97,audiodev=snd0 -machine q35,pcspk-audiodev=snd0" || echo "-audiodev none,id=snd0 -device AC97,audiodev=snd0")
+QEMU_AUDIO ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "-audiodev sdl,id=snd0 -device AC97,audiodev=snd0 -machine q35,pcspk-audiodev=snd0" || echo "-audiodev none,id=snd0 -device AC97,audiodev=snd0 -machine q35")
 QEMU_NET ?= -netdev user,id=net0,hostfwd=tcp::10022-:22 -device e1000,netdev=net0
 
 run: $(DISK) $(OVMF_VARS)

@@ -84,6 +84,7 @@ pub(crate) fn dispatch(
         Syscall::Kill => sys_kill(args[0] as i64, args[1]),
         Syscall::Uname => sys_uname(args[0]),
         Syscall::Fcntl => sys_fcntl(args[0], args[1], args[2]),
+        Syscall::Flock => Ok(0),
         Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync => Ok(0),
         Syscall::Truncate => sys_truncate(args[0], args[1]),
         Syscall::Ftruncate => sys_ftruncate(args[0], args[1]),
@@ -921,10 +922,6 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
         return Err(Errno::Invalid);
     }
 
-    let mut file = process::with_current_fds(|fds| fds.get(fd).cloned())
-        .and_then(|r| r.ok())
-        .ok_or(Errno::BadFd)?;
-
     let mut total_written = 0;
     let mut staging = [0u8; 4096];
 
@@ -949,10 +946,11 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
 
             entry::copy_from_user(&mut staging[..chunk], curr_buf).map_err(|_| Errno::Fault)?;
 
-            let n = match file.write(&staging[..chunk]) {
-                Ok(n) => n,
-                Err("broken pipe") => return Err(Errno::Pipe),
-                Err(_) => return Err(Errno::Invalid),
+            let n = match process::with_current_fds(|fds| fds.write(fd, &staging[..chunk])) {
+                Some(Ok(n)) => n,
+                Some(Err("broken pipe")) => return Err(Errno::Pipe),
+                Some(Err(_)) => return Err(Errno::Invalid),
+                None => return Err(Errno::BadFd),
             };
             if n == 0 {
                 break;
@@ -1041,7 +1039,7 @@ fn sys_mun_map(addr: u64, len: u64) -> SyscallResult {
     Ok(0)
 }
 
-fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
+fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
     // Framebuffer ioctls (can be on any fd opened to /dev/fb0)
     match request {
         crate::graphics::fbdev::FBIOGET_VSCREENINFO
@@ -1153,7 +1151,7 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
     }
 
     let (is_tty, is_vt2) = process::with_current_fds(|fds| {
-        fds.get(_fd).ok().map(|f| {
+        fds.get(fd).ok().map(|f| {
             let id = f.inode.lock().id;
             (id == 1 || id == 7, id == 7)
         })
@@ -1179,6 +1177,29 @@ fn sys_ioctl(_fd: u64, request: u64, arg: u64) -> SyscallResult {
             };
             if entry::copy_to_user(arg, bytes).is_err() {
                 return Err(Errno::Fault);
+            }
+            Ok(0)
+        }
+        crate::tty::pty::TIOCGPTN => {
+            let inode_id = with_current_fds(|fds| fds.get(fd).ok().map(|f| f.inode.lock().id))
+                .flatten()
+                .ok_or(Errno::BadFd)?;
+            let ptn = inode_id as u32;
+            copy_to_user(arg, &ptn.to_ne_bytes()).map_err(|_| Errno::Fault)?;
+            Ok(0)
+        }
+        crate::tty::pty::TIOCSPTLCK => {
+            let inode_id = with_current_fds(|fds| fds.get(fd).ok().map(|f| f.inode.lock().id))
+                .flatten()
+                .ok_or(Errno::BadFd)?;
+            let mut unlock = 0i32;
+            copy_from_user(
+                unsafe { core::slice::from_raw_parts_mut(&mut unlock as *mut _ as *mut u8, 4) },
+                arg,
+            )
+            .map_err(|_| Errno::Fault)?;
+            if unlock == 0 {
+                crate::tty::pty::unlock_pty(inode_id as usize);
             }
             Ok(0)
         }

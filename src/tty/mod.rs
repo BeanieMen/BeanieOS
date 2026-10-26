@@ -2,6 +2,7 @@ use crate::arch::lock::InterruptMutex;
 use alloc::collections::VecDeque;
 
 pub mod vfs;
+pub mod pty;
 
 pub const TCGETS: u64 = 0x5401;
 pub const TCSETS: u64 = 0x5402;
