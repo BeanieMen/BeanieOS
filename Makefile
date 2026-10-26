@@ -161,7 +161,7 @@ $(OVMF_VARS): $(OVMF_VARS_TEMPLATE)
 
 QEMU_DISPLAY ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "sdl" || echo "none")
 QEMU_KVM ?= $(shell test -w /dev/kvm && echo "-enable-kvm -cpu host")
-QEMU_AUDIO ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "-audiodev sdl,id=snd0 -device AC97,audiodev=snd0 -machine q35,pcspk-audiodev=snd0" || echo "-audiodev none,id=snd0 -device AC97,audiodev=snd0")
+QEMU_AUDIO ?= $(shell [ -n "$$DISPLAY" ] || [ -n "$$WAYLAND_DISPLAY" ] && echo "-audiodev sdl,id=snd0 -device AC97,audiodev=snd0 -machine q35,pcspk-audiodev=snd0" || echo "-audiodev none,id=snd0 -device AC97,audiodev=snd0 -machine q35")
 QEMU_NET ?= -netdev user,id=net0,hostfwd=tcp::10022-:22 -device e1000,netdev=net0
 
 run: $(DISK) $(OVMF_VARS)

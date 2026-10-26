@@ -1,6 +1,8 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use alloc::collections::BTreeMap;
 use multiboot2::MemoryMapTag;
+use spin::mutex::Mutex;
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 use x86_64::registers::control::{Cr3, Cr3Flags};
@@ -9,10 +11,12 @@ use x86_64::structures::paging::{PageTableFlags, PhysFrame};
 use crate::arch::lock::InterruptMutex;
 use crate::memory::allocator::{alloc_frame, free_frame, init_frames, kernel_phys_range};
 use crate::memory::heap::{HEAP_SIZE, HEAP_START};
+use crate::paging::PTE_COW;
 use crate::paging::{
     DIRECT_MAP_P4_INDEX, ENTRIES_PER_TABLE, ENTRY_SIZE, HUGE_PAGE_SIZE, KERNEL_P4_INDEX, PAGE_SIZE,
     PTE_ADDR_MASK, PTE_HUGE, PTE_PRESENT, PTE_USER, PTE_WRITABLE, phys_to_direct,
 };
+static FRAME_REFS: Mutex<BTreeMap<u64, u32>> = Mutex::new(BTreeMap::new());
 
 pub(crate) const KERNEL_RW: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_KERNEL_RW);
@@ -21,6 +25,20 @@ pub(crate) const USER_RW: PageTableFlags =
 pub(crate) const USER_WC: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_USER_WC);
 
+pub(crate) fn inc_frame_ref(phys: u64) {
+    let mut refs = FRAME_REFS.lock();
+    *refs.entry(phys).or_insert(1) += 1;
+}
+
+pub(crate) fn dec_frame_ref(phys: u64) -> u32 {
+    let mut refs = FRAME_REFS.lock();
+    if let Some(count) = refs.get_mut(&phys) {
+        *count = count.saturating_sub(1);
+        *count
+    } else {
+        0
+    }
+}
 pub(crate) fn init_pat() {
     use x86_64::registers::model_specific::Msr;
     // Program IA32_PAT MSR (0x277):
@@ -308,7 +326,9 @@ fn release_tree(root: u64, level: u8) {
         let child = entry & PTE_ADDR_MASK;
 
         if level >= P1_LEVEL || entry & PTE_HUGE != 0 {
-            free_frame(child);
+            if dec_frame_ref(child) == 0 {
+                free_frame(child);
+            }
         } else {
             release_tree(child, level + 1);
         }
@@ -439,6 +459,7 @@ impl AddressSpace {
     pub(crate) fn clone_from_root(root: PhysFrame) -> Result<Self, MemoryError> {
         let new_space = Self::new_with_kernel()?;
         Self::clone_level(root.start_address().as_u64(), new_space.root_addr(), 0)?;
+        x86_64::instructions::tlb::flush_all();
         Ok(new_space)
     }
 
@@ -460,16 +481,18 @@ impl AddressSpace {
             let src_child = entry & PTE_ADDR_MASK;
 
             if level >= P1_LEVEL {
-                let dst_frame = alloc_frame().ok_or(MemoryError::OutOfFrames)?;
-                let dst_phys = dst_frame.start_address().as_u64();
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        phys_to_direct(src_child) as *const u8,
-                        phys_to_direct(dst_phys) as *mut u8,
-                        PAGE_SIZE as usize,
-                    );
-                    write_entry(dst_table, i, dst_phys | flags);
+                if flags & PTE_WRITABLE != 0 {
+                    let cow_flags = (flags & !PTE_WRITABLE) | PTE_COW;
+                    unsafe {
+                        write_entry(src_table, i, src_child | cow_flags);
+                        write_entry(dst_table, i, src_child | cow_flags);
+                    }
+                } else {
+                    unsafe {
+                        write_entry(dst_table, i, src_child | flags);
+                    }
                 }
+                inc_frame_ref(src_child);
             } else if entry & PTE_HUGE != 0 {
                 continue;
             } else {
@@ -670,4 +693,55 @@ impl<'a> MMU<'a> {
     pub(crate) fn heap_range(&self) -> (u64, u64) {
         (HEAP_START as u64, HEAP_START as u64 + HEAP_SIZE as u64)
     }
+}
+
+
+pub(crate) fn handle_cow(fault_addr: u64) -> Result<(), ()> {
+    let (root_frame, _) = Cr3::read();
+    let mut table_phys = root_frame.start_address().as_u64();
+
+    let indices = [
+        (fault_addr >> 39) & 0x1ff,
+        (fault_addr >> 30) & 0x1ff,
+        (fault_addr >> 21) & 0x1ff,
+        (fault_addr >> 12) & 0x1ff,
+    ];
+
+    for (level, &idx) in indices.iter().enumerate() {
+        let table_virt = phys_to_direct(table_phys);
+        let entry = unsafe { read_entry(table_virt, idx) };
+        if entry & PTE_PRESENT == 0 {
+            return Err(());
+        }
+        if level < 3 {
+            table_phys = entry & PTE_ADDR_MASK;
+        } else {
+            if entry & PTE_COW == 0 {
+                return Err(());
+            }
+            let old_phys = entry & PTE_ADDR_MASK;
+            let rem = dec_frame_ref(old_phys);
+            if rem <= 1 {
+                let new_entry = (entry & !PTE_COW) | PTE_WRITABLE;
+                unsafe {
+                    write_entry(table_virt, idx, new_entry);
+                }
+            } else {
+                let new_frame = alloc_frame().ok_or(())?;
+                let new_phys = new_frame.start_address().as_u64();
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        phys_to_direct(old_phys) as *const u8,
+                        phys_to_direct(new_phys) as *mut u8,
+                        PAGE_SIZE as usize,
+                    );
+                    let new_entry = (entry & !PTE_ADDR_MASK & !PTE_COW) | new_phys | PTE_WRITABLE;
+                    write_entry(table_virt, idx, new_entry);
+                }
+            }
+            x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(fault_addr));
+            return Ok(());
+        }
+    }
+    Err(())
 }

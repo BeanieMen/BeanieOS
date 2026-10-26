@@ -1151,7 +1151,7 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
     }
 
     let (is_tty, is_vt2) = process::with_current_fds(|fds| {
-        fds.get(_fd).ok().map(|f| {
+        fds.get(fd).ok().map(|f| {
             let id = f.inode.lock().id;
             (id == 1 || id == 7, id == 7)
         })

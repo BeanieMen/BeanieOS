@@ -178,8 +178,8 @@ impl FdTable {
             let ptmx_file = crate::tty::pty::create_ptmx_file(flags);
             return Ok(self.alloc(ptmx_file));
         }
-        if path.starts_with(b"/dev/pts") || path.starts_with(b"dev/pts") {
-            let s = if path.starts_with(b"/dev/pts") {
+        if path.starts_with(b"/dev/pts/") || path.starts_with(b"dev/pts/") {
+            let s = if path.starts_with(b"/dev/pts/") {
                 &path[9..]
             } else {
                 &path[8..]
@@ -189,7 +189,7 @@ impl FdTable {
                 if !c.is_ascii_digit() {
                     break;
                 }
-                id = id * 10(c - b'0') as usize;
+                id = id * 10 + (c - b'0') as usize;
             }
             let pts_file = crate::tty::pty::create_pts_file(id, flags)?;
             return Ok(self.alloc(pts_file));

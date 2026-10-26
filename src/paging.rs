@@ -29,6 +29,7 @@ pub const PTE_PRESENT: u64 = 1 << 0;
 pub const PTE_WRITABLE: u64 = 1 << 1;
 pub const PTE_USER: u64 = 1 << 2;
 pub const PTE_HUGE: u64 = 1 << 7;
+pub const PTE_COW: u64 = 1 << 9;
 
 pub const PTE_LEAF_MASK: u64 = PTE_PRESENT | PTE_WRITABLE;
 pub const PTE_ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
