@@ -23,3 +23,5 @@ userspace/tinyxserver/**/*.a
 
 
 users.db*
+
+.flaskenv

@@ -7,6 +7,7 @@ app = Flask(__name__)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("COOKIE_SECURE")=="1"
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
@@ -30,7 +31,11 @@ def init_db():
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'user',
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""")
+        )""")
+    db.execute("""CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip TEXT NOT NULL,
+    tried_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    db.execute("CREATE INDEX IF NOT EXISTS attempts_time ON attempts (tried_at)")
     db.commit()
     db.close()
 
@@ -49,12 +54,34 @@ def csrf_ok():
     except TypeError:
         return False
 
+def reserve_attempt(ip):
+    db = sqlite3.connect(DB_PATH, isolation_level=None)
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("DELETE FROM attempts WHERE triead_at < datetime('now','-1 hour')")
+        count = db.execute(
+            "SELECT COUNT(*) FROM attempts WHERE ip = ? AND tried_at > datetime('now', '-10 minutes')",
+            (ip),
+        ).fetchone()[0]
+        if count < 5:
+            db.ececute("INSERT INTO attempts (ip) VALUES(?)",(ip,))
+        db.execute("COMMIT")
+        return count < 5
+    except sqlite3.OperationalError:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        return False
+    finally:
+        db.close()
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     error = None
     if request.method == "POST":
         if not csrf_ok():
             error = "Something went wrong, please try again."
+        elif not reserve_attempt(request.remote_addr):
+            error = "Too many tries. Wait a few minutes."
         else:
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
@@ -117,6 +144,8 @@ def ihome():
     if request.method == "POST":
         if not csrf_ok():
             error = "Something went wrong, please try again."
+        elif not reserve_attempt(request.remote_addr):
+            error = "Too many tries. Wait a few minutes."
         else:
             username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
@@ -138,7 +167,8 @@ password):
 
 @app.route("/account")
 def account():
-    if "user_id" not in session:
+    user = current_user
+    if user is None:
         return redirect("/login")
     return ("Logged in as user %s"
     '<form method="post" action="/logout">'
@@ -151,3 +181,25 @@ def logout():
         return redirect("/login")
     session.clear()
     return redirect("/login")
+
+def current_user():
+    if "user_id" not in session:
+        return None
+    return get_db().execute(
+        "SELECT * FROM users WHERE id = ?", (session["user_id"],)
+    ).fetchone()
+
+@app.route("/admin")
+def admin():
+    user = current_user()
+    if user is None:
+        return redirect("/login")
+    if user["role"]!= "admin":
+        return "Admins only.", 403
+    rows = get_db().execute(
+        "SELECT id, username, created_at FROM users ORDER BY id"
+    ).fetchall()
+    out = "<h1>Users</h1>"
+    for r in rows:
+        out += "<p>user %s: %s(joined %s)</p>" % (r["id"],html.escape(r["username"]),r["created_at"])
+    return out
