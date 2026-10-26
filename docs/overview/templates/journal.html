@@ -9,6 +9,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Code:ital,wght,MONO@0,300..800,1;1,300..800,1&display=swap" rel="stylesheet">
+
     <style>
 
         body{
@@ -87,25 +91,26 @@
         }
 
         .nav-bar{
-            position: fixed;
-            top: 0;
-            left: 0;
-            z-index: 1000;
-
-            width: 100%;
-            height: 9vh;
+            min-height: 9vh;
+            height: auto;
             margin: 0 !important;
             background-color: rgb(44, 42, 42);
 
             display: flex;
             justify-content: space-between;
-            align-items: center;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 1rem;
 
-            padding: 8px 1.5vw;
+            padding: 0 7rem 0 1rem;
+            align-items: center;
             box-sizing: border-box;
 
+            font-family: "Google Sans Code", monospace !important;
+            font-optical-sizing: auto;
+            font-weight: 100;
+            font-style: normal;
+            font-variation-settings:
+                "MONO" 1;
         }
 
         .nav-bar .title{

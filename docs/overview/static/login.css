@@ -1,0 +1,121 @@
+
+/* Signup form */
+main form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    width: 100%;
+    max-width: 420px;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+main form label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+}
+
+main form input[type="text"],
+main form input[type="password"] {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 13px 14px;
+
+    font-family: inherit;
+    font-size: 15px;
+    color: #171717;
+
+    background: #fff;
+    border: 1px solid #d4d4d4;
+    border-radius: 8px;
+    outline: none;
+
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+main form input[type="text"]:focus,
+main form input[type="password"]:focus {
+    border-color: #171717;
+    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.08);
+}
+
+main form button {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 13px 16px;
+    margin-top: 4px;
+
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+
+    color: #fff;
+    background: #171717;
+    border: 1px solid #171717;
+    border-radius: 8px;
+
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+}
+
+main form button:hover {
+    background: #333;
+}
+
+main form button:active {
+    transform: scale(0.99);
+}
+
+main form button:focus-visible {
+    outline: 3px solid #a3a3a3;
+    outline-offset: 3px;
+}
+
+/* Tablet */
+@media (max-width: 1024px) {
+    main form {
+        max-width: 100%;
+    }
+}
+
+/* Mobile */
+@media (max-width: 600px) {
+    main form {
+        width: 100%;
+        max-width: 100%;
+        gap: 16px;
+    }
+
+    main form label {
+        font-size: 14px;
+    }
+
+    main form input[type="text"],
+    main form input[type="password"],
+    main form button {
+        padding: 12px;
+        font-size: 16px;
+    }
+}
+
+/* Small phones */
+@media (max-width: 360px) {
+    main form {
+        gap: 14px;
+    }
+
+    main form input[type="text"],
+    main form input[type="password"],
+    main form button {
+        padding: 11px;
+    }
+}

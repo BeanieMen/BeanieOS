@@ -5,18 +5,327 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Signup- BeanieOS</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='signup.css') }}">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Code:ital,wght,MONO@0,300..800,1;1,300..800,1&display=swap" rel="stylesheet">
+
+    <style>
+
+        body{
+            margin: 0;
+            padding: 0;
+
+            font-family: "Public Sans", sans-serif;
+            font-optical-sizing: auto;
+            font-weight: 200;
+            font-style: normal;
+        }
+
+        main{
+            margin-top: 9vh;
+            margin-left: 280px;
+            margin-right: 50px;
+            padding: 25px 50px 60px 60px;
+            min-width: 0;
+            box-sizing: border-box;
+        }
+
+        h1{
+            margin-bottom: 30px;
+        }
+
+        .sidebar{
+            position: fixed;
+            left: 0;
+            top: 9vh;
+
+            width: 240px;
+            height: calc(100vh - 9vh);
+            overflow-y: auto;
+
+            background: white;
+            padding: 30px 10px 0 20px;
+            box-sizing: border-box;
+
+            border-right: 1px dashed #333;
+        }
+
+        .sidebar nav{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .sidebar a{
+            color: black;
+            text-decoration: none;
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .sidebar a:hover{
+            background: rgb(238, 237, 237);
+        }
+
+        p {
+            line-height: 1.6;
+        }
+
+        li {
+            line-height: 1.8;
+        }
+
+        mark{
+            background-color: rgb(223, 222, 222);
+            font-weight: 500;
+            padding: 1px 4px;
+            border-radius: 6px;
+        }
+
+        main a{
+            color: black;
+        }
+
+        .nav-bar{
+            min-height: 9vh;
+            height: auto;
+            margin: 0 !important;
+            background-color: rgb(44, 42, 42);
+
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 1rem;
+
+            padding: 0 7rem 0 1rem;
+            align-items: center;
+            box-sizing: border-box;
+
+            font-family: "Google Sans Code", monospace !important;
+            font-optical-sizing: auto;
+            font-weight: 100;
+            font-style: normal;
+            font-variation-settings:
+                "MONO" 1;
+        }
+
+        .nav-bar .title{
+            display: flex;
+            gap: 1px;
+            text-decoration: none;
+            color: white;
+            align-items: center;
+        }
+
+        .nav-bar h1{
+            font-size: clamp(1.1rem, 2vw, 1.8rem);
+            margin: 0;
+        }
+
+        .nav-bar img{
+            height: clamp(30px, 3.2vw, 48px);
+            width: auto;
+        }
+
+        .nav-links{
+            display: flex;
+            align-items: center;
+            gap: clamp(12px, 4vw, 60px);
+            flex-wrap: wrap;
+        }
+
+        .github-link, .login-link, .docs-link{
+            color: rgba(255, 255, 255, 0.782);
+            text-decoration: none;
+            font-size: clamp(13px, 1.2vw, 17px);
+        }
+
+        .github-link:hover, .login-link:hover, .docs-link:hover{
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        .signup-link{
+            font-size: large;
+            color: white;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        main::selection {
+            background-color: rgb(249, 249, 9);
+        }
+
+        main::-moz-selection {
+            background-color: rgb(249, 249, 9);
+        }
+
+        .nav-bar::selection{
+            background-color: rgb(218, 6, 6);
+        }
+
+        .nav-bar::-moz-selection {
+            background-color: rgb(218, 6, 6);
+        }
+
+        .sidebar::selection {
+            background-color: rgb(158, 249, 0);
+        }
+
+        .sidebar::-moz-selection {
+            background-color: rgb(158, 249, 0);
+        }
+
+
+        main img{
+            max-width: 100%;
+            height: auto;
+        }
+
+        main p,
+        main li {
+            overflow-wrap: anywhere;
+        }
+
+        main mark { 
+            overflow-wrap: anywhere;
+        }
+        
+        /* Tablets */
+        @media (max-width : 1024px) {
+            main {
+                margin-left: 240px;
+                margin-right: 20px;
+                padding: 25px 20px 40px;
+            }
+
+            .sidebar {
+                width: 220px;
+                padding-left: 12px;
+                padding-right: 8px
+            }
+
+            .sidebar a{
+                padding: 10px 6px;
+            }
+
+            .nav-links{
+                gap: 20px;
+            }
+        }
+
+        /* Phones */
+        @media (max-width: 600px) {
+            .nav-bar {
+                padding: 8px 12px;
+                gap: 8px;
+            }
+
+            .nav-bar .title{
+                gap: 5px;
+            }
+
+            .nav-bar h1 {
+                font-size: 1.2rem;
+            }
+
+            .nav-bar img {
+                height: 30px;
+            }
+
+            .nav-links {
+                gap: 12px;
+            }
+
+            .github-link,
+            .docs-link {
+                font-size: 12px;
+            }
+
+            .sidebar {
+                position: static;
+                width: 100%;
+                height: auto;
+                max-height: none;
+                overflow: visible;
+
+                padding: 12px 16px;
+                border-right: none;
+                border-bottom: 1px dashed #333;
+                margin-top: 9vh;
+
+            }
+
+            .sidebar h2 {
+                font-size: 1.2rem;
+                margin: 8px 0 12px;
+            }
+
+            .sidebar nav {
+                gap: 4px;
+            }
+
+            .sidebar a {
+                padding: 10px 8px;
+            }
+
+            main {
+                margin: 0;
+                padding: 20px 16px 40px;
+                width: 100%;
+            }
+
+            main h1 {
+                font-size: 1.7rem;
+            }
+
+            main h2 {
+                font-size: 1.3rem;
+            }
+
+            main p,
+            main li {
+                font-size: 14px;
+                line-height: 1.7;
+            }
+
+        }
+
+    </style>
+
 </head>
 
 <body>
 
-    <h1>Sign up</h1>
-    {% if error %}<p>{{ error }}</p>{% endif %}
-    <form method="post">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <label>Username <input type="text" name="username" required></label>
-        <label>Password <input type="password" name="password" required></label>
-        <button type="submit">Sign up</button>
-    </form>
+    <div class="nav-bar">
+        <a href="/" class="title">
+            <img src="//cdn.hackclub.com/01a0c122-53c9-71db-bda3-b87120c72955/Untitled%20design%20(79).png" alt="" id="logo">
+            <h1>BeanieOS</h1>
+        </a>
+        <div class="nav-links">
+            <a href="/login" class="login-link">Login</a>
+            <a href="/register" class="signup-link">Signup</a>
+            <a href="/docs/overview" class="docs-link">Documentation</a>
+            <a href="https://github.com/beaniemen/BeanieOS" class="github-link">Github</a>
+        </div>
+    </div>
+
+    <main>
+        <h1>Sign up</h1>
+        {% if error %}<p>{{ error }}</p>{% endif %}
+        <form method="post">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label>Username <input type="text" name="username" required></label>
+            <label>Password <input type="password" name="password" required></label>
+            <button type="submit">Sign up</button>
+        </form>
+    </main>
     
 </body>
 </html>
