@@ -1,4 +1,4 @@
-import os, sqlite3, secrets
+import os, sqlite3, secrets, html
 from flask import Flask, render_template, request, redirect, session, g
 from werkzeug.security import generate_password_hash, check_password_hash
 
