@@ -291,9 +291,25 @@ impl Writer {
 
         if let Some(ref mut bb) = self.backbuffer {
             unsafe {
-                core::ptr::copy(bb.as_ptr().add(shift), bb.as_mut_ptr(), text_bytes - shift);
-                core::ptr::write_bytes(bb.as_mut_ptr().add(text_bytes - shift), 0, shift);
-                core::ptr::copy_nonoverlapping(bb.as_ptr(), fb.addr, text_bytes);
+                let moved = text_bytes - shift;
+                let mut off = 0usize;
+                // Scroll upward in ascending order, reading each old byte before
+                // its source can be overwritten. Publish the same value to both
+                // backbuffer and screen, avoiding a second backbuffer read pass.
+                while off + 8 <= moved {
+                    let value = (bb.as_ptr().add(shift + off) as *const u64).read_unaligned();
+                    (bb.as_mut_ptr().add(off) as *mut u64).write_unaligned(value);
+                    (fb.addr.add(off) as *mut u64).write_unaligned(value);
+                    off += 8;
+                }
+                while off < moved {
+                    let value = bb[shift + off];
+                    bb[off] = value;
+                    fb.addr.add(off).write(value);
+                    off += 1;
+                }
+                core::ptr::write_bytes(bb.as_mut_ptr().add(moved), 0, shift);
+                core::ptr::write_bytes(fb.addr.add(moved), 0, shift);
             }
         } else {
             unsafe {
