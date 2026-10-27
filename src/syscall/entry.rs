@@ -164,10 +164,7 @@ pub extern "C" fn syscall_c(frame: *mut SyscallFrame) {
     frame.regs.rax = result;
 
     if number != crate::syscall::numbers::Syscall::RtSigreturn as u64 {
-        let thread = crate::task::identity::current_thread();
-        if !thread.is_null() && unsafe { (*thread).has_pending_signals.load(core::sync::atomic::Ordering::Acquire) } {
-            handle_pending_signals(frame);
-        }
+        handle_pending_signals(frame);
     }
 
     if crate::task::scheduler::is_reschedule_requested() {
@@ -176,17 +173,16 @@ pub extern "C" fn syscall_c(frame: *mut SyscallFrame) {
 }
 
 fn handle_pending_signals(frame: &mut SyscallFrame) {
-    let Some(proc) = crate::task::process::current() else {
+    if !crate::task::signal::current_has_deliverable() {
+        return;
+    }
+    let Some(state) = crate::task::signal::current_state() else {
         return;
     };
-    let mut p = proc.lock();
+    let mut p = state.lock();
 
     let active = p.pending_signals & !p.blocked_signals;
     if active == 0 {
-        let thread = crate::task::identity::current_thread();
-        if !thread.is_null() {
-            unsafe { (*thread).has_pending_signals.store(false, core::sync::atomic::Ordering::Relaxed); }
-        }
         return;
     }
 
@@ -202,7 +198,7 @@ fn handle_pending_signals(frame: &mut SyscallFrame) {
             match sig {
                 17 /* SIGCHLD */ | 18 /* SIGCONT */ | 23 /* SIGURG */ | 28 /* SIGWINCH */ => {}
                 _ => {
-                    let pid = p.pid;
+                    let pid = crate::task::identity::current_pid();
                     drop(p);
                     crate::task::process::exit(pid, 128 + sig as i32);
                     crate::task::scheduler::exit();

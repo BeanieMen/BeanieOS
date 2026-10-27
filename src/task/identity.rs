@@ -5,7 +5,7 @@ use x86_64::registers::model_specific::GsBase;
 
 use crate::task::thread::Thread;
 
-pub(crate) const STACK_SIZE: usize = 4 * crate::paging::PAGE_SIZE as usize;
+pub(crate) const STACK_SIZE: usize = 16 * crate::paging::PAGE_SIZE as usize;
 pub(crate) const TIMESLICE_TICKS: u64 = 10;
 
 #[inline]

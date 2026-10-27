@@ -1,4 +1,4 @@
-use core::{arch::naked_asm, cell::UnsafeCell, sync::atomic::AtomicBool};
+use core::{arch::naked_asm, cell::UnsafeCell};
 
 use alloc::{boxed::Box, string::String};
 
@@ -49,6 +49,7 @@ impl FxsaveArea {
 pub(crate) struct Thread {
     pub id: ThreadId,
     pub pid: ProcessId,
+    pub signals: alloc::sync::Arc<crate::task::signal::SignalState>,
     #[allow(dead_code)]
     pub name: String,
     pub state: ThreadState,
@@ -58,7 +59,6 @@ pub(crate) struct Thread {
     pub fs_base: u64,
     pub timeslice: u64,
     pub fpu_state: Box<FxsaveArea>,
-    pub has_pending_signals: AtomicBool,
     rsp: UnsafeCell<usize>,
 }
 
@@ -67,6 +67,8 @@ impl Thread {
         Thread {
             id: ThreadId::MAIN,
             pid: ProcessId::KERNEL,
+            signals: crate::task::process::signal_state_of(ProcessId::KERNEL)
+                .expect("boot process exists before scheduler init"),
             name: String::from("main"),
             state: ThreadState::Running,
             priority: Priority::Normal,
@@ -75,7 +77,6 @@ impl Thread {
             fs_base: 0,
             timeslice: TIMESLICE_TICKS,
             fpu_state: Box::new(FxsaveArea::default_state()),
-            has_pending_signals: AtomicBool::new(false),
         }
     }
 
@@ -93,6 +94,8 @@ impl Thread {
         Thread {
             id: ThreadId::new(),
             pid,
+            signals: crate::task::process::signal_state_of(pid)
+                .expect("process exists before thread construction"),
             name: String::from(name),
             state: ThreadState::Ready,
             priority,
@@ -101,7 +104,6 @@ impl Thread {
             fs_base: 0,
             timeslice: TIMESLICE_TICKS,
             fpu_state: Box::new(FxsaveArea::default_state()),
-            has_pending_signals: AtomicBool::new(false),
         }
     }
 
@@ -153,6 +155,8 @@ impl Thread {
         Thread {
             id: ThreadId::new(),
             pid,
+            signals: crate::task::process::signal_state_of(pid)
+                .expect("process exists before thread construction"),
             name: String::from(name),
             state: ThreadState::Ready,
             priority,
@@ -161,7 +165,6 @@ impl Thread {
             fs_base: x86_64::registers::model_specific::FsBase::read().as_u64(),
             timeslice: TIMESLICE_TICKS,
             fpu_state,
-            has_pending_signals: AtomicBool::new(false),
         }
     }
 

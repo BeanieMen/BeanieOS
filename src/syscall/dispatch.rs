@@ -2205,8 +2205,8 @@ fn sys_rt_sigaction(sig: u64, act_ptr: u64, oldact_ptr: u64, sigsetsize: u64) ->
         return Err(Errno::Invalid);
     }
 
-    let proc = process::current().ok_or(Errno::Fault)?;
-    let mut p = proc.lock();
+    let state = crate::task::signal::current_state().ok_or(Errno::Fault)?;
+    let mut p = state.lock();
     let idx = (sig - 1) as usize;
 
     if oldact_ptr != 0 {
@@ -2240,8 +2240,8 @@ fn sys_rt_sigprocmask(how: u64, set_ptr: u64, oldset_ptr: u64, sigsetsize: u64) 
         return Err(Errno::Invalid);
     }
 
-    let proc = process::current().ok_or(Errno::Fault)?;
-    let mut p = proc.lock();
+    let state = crate::task::signal::current_state().ok_or(Errno::Fault)?;
+    let mut p = state.lock();
 
     if oldset_ptr != 0 {
         let old = p.blocked_signals;
@@ -2295,9 +2295,9 @@ fn sys_rt_sigreturn(frame: &mut entry::SyscallFrame) -> SyscallResult {
     frame.cs = u64::from(crate::arch::gdt::user_code_selector().0) | 0x3;
     frame.ss = u64::from(crate::arch::gdt::user_data_selector().0) | 0x3;
 
-    if let Some(proc) = process::current() {
+    if let Some(state) = crate::task::signal::current_state() {
         const UNBLOCKABLE: u64 = (1u64 << (9 - 1)) | (1u64 << (19 - 1));
-        proc.lock().blocked_signals = ctx.mask & !UNBLOCKABLE;
+        state.lock().blocked_signals = ctx.mask & !UNBLOCKABLE;
     }
 
     Ok(frame.regs.rax)

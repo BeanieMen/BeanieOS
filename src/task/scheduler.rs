@@ -506,12 +506,6 @@ pub(crate) fn account_tick() {
     SCHEDULER.lock().account_tick();
 }
 
-pub(crate) fn mark_thread_signal(id: ThreadId) {
-    if let Some(thread) = SCHEDULER.lock().threads.get(&id) {
-        thread.lock().has_pending_signals.store(true, Ordering::Release);
-    }
-}
-
 fn apply(switch: Option<ContextSwitch>) {
     if let Some(ContextSwitch {
         previous_slot,

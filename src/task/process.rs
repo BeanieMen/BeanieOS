@@ -5,7 +5,6 @@ use x86_64::structures::paging::PhysFrame;
 use crate::{
     arch::lock::InterruptMutex, memory::{allocator::alloc_frame, mmu}, paging::phys_to_direct, storage::vfs::fd::FdTable, task::{
         identity::{self, ProcessId, ThreadId},
-        signal::SigAction,
     },
 };
 
@@ -19,9 +18,7 @@ pub(crate) struct Process {
     pub pid: ProcessId,
     pub ppid: Option<ProcessId>,
     pub pgid: ProcessId,
-    pub pending_signals: u64,
-    pub blocked_signals: u64,
-    pub sigactions: [SigAction; 64],
+    pub signals: Arc<crate::task::signal::SignalState>,
     pub name: String,
     pub status: ProcessStatus,
     pub cwd: String,
@@ -52,9 +49,7 @@ impl Process {
             pid: ProcessId::KERNEL,
             ppid: None,
             pgid: ProcessId::KERNEL,
-            pending_signals: 0,
-            blocked_signals: 0,
-            sigactions: [SigAction::default(); 64],
+            signals: Arc::new(crate::task::signal::SignalState::new()),
             name: String::from("kernel"),
             status: ProcessStatus::Running,
             cwd: String::from("/"),
@@ -74,9 +69,7 @@ impl Process {
             pid,
             ppid,
             pgid: ppid.unwrap_or(pid),
-            pending_signals: 0,
-            blocked_signals: 0,
-            sigactions: [SigAction::default(); 64],
+            signals: Arc::new(crate::task::signal::SignalState::new()),
             name: String::from(name),
             status: ProcessStatus::Running,
             cwd: String::from(cwd),
@@ -149,6 +142,7 @@ impl ProcessManager {
             parent_sigactions,
         ) = {
             let p = parent.lock();
+            let signals = p.signals.lock();
             (
                 p.name.clone(),
                 p.cwd.clone(),
@@ -157,8 +151,8 @@ impl ProcessManager {
                 p.heap_break,
                 p.mmap_next,
                 p.pgid,
-                p.blocked_signals,
-                p.sigactions,
+                signals.blocked_signals,
+                signals.sigactions,
             )
         };
 
@@ -172,8 +166,11 @@ impl ProcessManager {
         child.heap_break = parent_heap_break;
         child.mmap_next = parent_mmap_next;
         child.pgid = parent_pgid;
-        child.blocked_signals = parent_blocked_signals;
-        child.sigactions = parent_sigactions;
+        {
+            let mut signals = child.signals.lock();
+            signals.blocked_signals = parent_blocked_signals;
+            signals.sigactions = parent_sigactions;
+        }
         let child_pid = child.pid;
         self.processes
             .insert(child_pid, Arc::new(InterruptMutex::new(child)));
@@ -489,8 +486,9 @@ pub(crate) fn attach_space(pid: ProcessId, space: PhysFrame) {
         guard.heap_start = DEFAULT_HEAP_BASE;
         guard.heap_break = DEFAULT_HEAP_BASE;
         guard.mmap_next = DEFAULT_MMAP_BASE;
-        guard.sigactions = [crate::task::signal::SigAction::default(); 64];
-        guard.pending_signals = 0;
+        let mut signals = guard.signals.lock();
+        signals.sigactions = [crate::task::signal::SigAction::default(); 64];
+        signals.pending_signals = 0;
     }
 }
 pub(crate) fn mmap(pid: ProcessId, addr: u64, len: u64, prot: u64, flags: u64) -> Result<u64, ()> {
@@ -540,10 +538,12 @@ pub(crate) fn send_signal(pid: ProcessId, sig: usize) -> bool {
         return true;
     }
     if sig <= 64 {
-        let mut p = proc.lock();
-        p.pending_signals |= 1u64 << (sig - 1);
+        let p = proc.lock();
+        {
+            let mut signals = p.signals.lock();
+            signals.pending_signals |= 1u64 << (sig - 1);
+        }
         for &thread_id in &p.threads {
-            crate::task::scheduler::mark_thread_signal(thread_id);
             crate::task::scheduler::wake(thread_id);
         }
     }
@@ -554,14 +554,16 @@ pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) -> bool {
     let manager = PROCESS_MANAGER.lock();
     let mut found = false;
     for proc in manager.processes.values() {
-        let mut p = proc.lock();
+        let p = proc.lock();
         if p.pgid == pgid || p.pid == pgid {
             found = true;
             if sig > 0 && sig <= 64 {
-                p.pending_signals |= 1u64 << (sig - 1);
+                {
+                    let mut signals = p.signals.lock();
+                    signals.pending_signals |= 1u64 << (sig - 1);
+                }
                 for &thread_id in &p.threads {
-                    crate::task::scheduler::mark_thread_signal(thread_id);
-                    crate::task::scheduler::wake(thread_id);
+                            crate::task::scheduler::wake(thread_id);
                 }
             }
         }
@@ -570,21 +572,11 @@ pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) -> bool {
 }
 
 pub(crate) fn has_pending_signals() -> bool {
-    let thread = identity::current_thread();
-    if thread.is_null() {
-        return false;
-    }
-    if !unsafe { (*thread).has_pending_signals.load(core::sync::atomic::Ordering::Acquire) } {
-        return false;
-    }
-    if let Some(proc) = current() {
-        let p = proc.lock();
-        let has = (p.pending_signals & !p.blocked_signals) != 0;
-        if !has {
-            unsafe { (*thread).has_pending_signals.store(false, core::sync::atomic::Ordering::Relaxed); }
-        }
-        has
-    } else {
-        false
-    }
+    crate::task::signal::current_has_deliverable()
+}
+
+pub(crate) fn signal_state_of(pid: ProcessId) -> Option<Arc<crate::task::signal::SignalState>> {
+    let process = PROCESS_MANAGER.lock().get(pid)?;
+    let state = Arc::clone(&process.lock().signals);
+    Some(state)
 }
