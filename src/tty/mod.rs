@@ -128,16 +128,19 @@ impl Tty {
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
-        let mut read = 0;
-        while read < buf.len() {
-            if let Some(b) = self.queue.pop_front() {
-                buf[read] = b;
-                read += 1;
-            } else {
-                break;
-            }
+        let to_read = buf.len().min(self.queue.len());
+        if to_read == 0 {
+            return 0;
         }
-        read
+        let (first, second) = self.queue.as_slices();
+        let first_len = to_read.min(first.len());
+        buf[..first_len].copy_from_slice(&first[..first_len]);
+        let second_len = to_read - first_len;
+        if second_len > 0 {
+            buf[first_len..to_read].copy_from_slice(&second[..second_len]);
+        }
+        self.queue.drain(..to_read);
+        to_read
     }
 
     pub fn write(&mut self, buf: &[u8]) -> usize {

@@ -142,10 +142,12 @@ impl File {
         Ok(written)
     }
 
+    #[inline(always)]
     pub(crate) fn readable(&self) -> bool {
         self.flags.read || self.flags.append
     }
 
+    #[inline(always)]
     pub fn writable(&self) -> bool {
         self.flags.write || self.flags.append || self.flags.truncate
     }
@@ -159,16 +161,15 @@ impl File {
             return crate::net::vfs::read_socket(sock, buf);
         }
 
-        let (inode, is_dev) = {
+        let (read, is_dev) = {
             let inode = self.inode.lock();
             if inode.file_type != FileType::Regular && inode.file_type != FileType::Device {
                 return Err("not a regular or device file");
             }
             let is_dev = inode.file_type == FileType::Device;
-            (inode.clone(), is_dev)
+            let read = inode.file_ops.read(&inode, self.offset, buf)?;
+            (read, is_dev)
         };
-
-        let read = inode.file_ops.read(&inode, self.offset, buf)?;
 
         if !is_dev {
             self.offset += read as u64;
@@ -186,23 +187,18 @@ impl File {
             return crate::net::vfs::write_socket(sock, buf);
         }
 
-        let offset = if self.flags.append {
-            self.inode.lock().size
-        } else {
-            self.offset
-        };
-
-        let (inode, is_dev) = {
-            let inode = self.inode.lock();
-            let is_dev = inode.file_type == FileType::Device;
-            (inode.clone(), is_dev)
-        };
+        let mut inode = self.inode.lock();
+        if inode.file_type != FileType::Regular && inode.file_type != FileType::Device {
+            return Err("not a regular or device file");
+        }
+        let is_dev = inode.file_type == FileType::Device;
+        let offset = if self.flags.append { inode.size } else { self.offset };
 
         let written = if is_dev {
-            let mut inode_copy = inode;
+            let mut inode_copy = inode.clone();
+            drop(inode);
             inode_copy.file_ops.write(&mut inode_copy, offset, buf)?
         } else {
-            let mut inode = self.inode.lock();
             let w = inode.file_ops.write(&mut inode, offset, buf)?;
             drop(inode);
             w
@@ -215,16 +211,19 @@ impl File {
         Ok(written)
     }
 
+    #[inline(always)]
     pub(crate) fn seek(&mut self, offset: u64) -> Result<u64, &'static str> {
         self.offset = offset;
 
         Ok(self.offset)
     }
 
+    #[inline(always)]
     pub(crate) fn tell(&self) -> u64 {
         self.offset
     }
 
+    #[inline(always)]
     pub(crate) fn size(&self) -> u64 {
         self.inode.lock().size
     }

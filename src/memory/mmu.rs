@@ -2,7 +2,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use alloc::collections::BTreeMap;
 use multiboot2::MemoryMapTag;
-use spin::mutex::Mutex;
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 use x86_64::registers::control::{Cr3, Cr3Flags};
@@ -16,7 +15,7 @@ use crate::paging::{
     DIRECT_MAP_P4_INDEX, ENTRIES_PER_TABLE, ENTRY_SIZE, HUGE_PAGE_SIZE, KERNEL_P4_INDEX, PAGE_SIZE,
     PTE_ADDR_MASK, PTE_HUGE, PTE_PRESENT, PTE_USER, PTE_WRITABLE, phys_to_direct,
 };
-static FRAME_REFS: Mutex<BTreeMap<u64, u32>> = Mutex::new(BTreeMap::new());
+static FRAME_REFS: InterruptMutex<BTreeMap<u64, u32>> = InterruptMutex::new(BTreeMap::new());
 
 pub(crate) const KERNEL_RW: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_KERNEL_RW);
@@ -83,19 +82,17 @@ impl core::fmt::Display for MemoryError {
     }
 }
 
+#[inline(always)]
 fn index(virt: u64, level: usize) -> u64 {
-    match level {
-        0 => (virt >> 39) & 0x1ff,
-        1 => (virt >> 30) & 0x1ff,
-        2 => (virt >> 21) & 0x1ff,
-        _ => (virt >> 12) & 0x1ff,
-    }
+    (virt >> (39 - level * 9)) & 0x1ff
 }
 
+#[inline(always)]
 unsafe fn read_entry(table: u64, index: u64) -> u64 {
     unsafe { core::ptr::read_volatile((table + index * ENTRY_SIZE) as *const u64) }
 }
 
+#[inline(always)]
 unsafe fn write_entry(table: u64, index: u64, value: u64) {
     unsafe { core::ptr::write_volatile((table + index * ENTRY_SIZE) as *mut u64, value) }
 }
@@ -468,9 +465,9 @@ pub(crate) fn unmap_boot_identity() {
 impl AddressSpace {
     pub(crate) fn clone_from_root(root: PhysFrame) -> Result<Self, MemoryError> {
         let new_space = Self::new_with_kernel()?;
-        Self::clone_level(root.start_address().as_u64(), new_space.root_addr(), 0)?;
+        let res = Self::clone_level(root.start_address().as_u64(), new_space.root_addr(), 0);
         x86_64::instructions::tlb::flush_all();
-        Ok(new_space)
+        res.map(|_| new_space)
     }
 
     fn clone_level(src_root: u64, dst_root: u64, level: u8) -> Result<(), MemoryError> {
@@ -569,13 +566,13 @@ impl AddressSpace {
         if leaf & PTE_PRESENT != 0 {
             let phys = leaf & PTE_ADDR_MASK;
             unsafe { write_entry(table, leaf_idx, 0) };
+            let (current_cr3, _) = Cr3::read();
+            if self.root == current_cr3 {
+                x86_64::instructions::tlb::flush(VirtAddr::new(virt));
+            }
             if dec_frame_ref(phys) == 0 {
                 crate::memory::allocator::free_frame(phys);
             }
-        }
-        let (current_cr3, _) = Cr3::read();
-        if self.root == current_cr3 {
-            x86_64::instructions::tlb::flush(VirtAddr::new(virt));
         }
         Ok(())
     }
@@ -643,18 +640,26 @@ impl AddressSpace {
             frames[level + 1] = entry & PTE_ADDR_MASK;
             depth = level + 1;
         }
+        let mut freed_frames = [0u64; 3];
+        let mut freed_count = 0;
         while depth > 0 {
             let table = phys_to_direct(frames[depth]);
             if (0..ENTRIES_PER_TABLE).any(|idx| unsafe { read_entry(table, idx) } & PTE_PRESENT != 0) { break; }
             unsafe { write_entry(phys_to_direct(frames[depth-1]), slots[depth-1], 0); }
-            // Invalidate all non-global paging-structure caches BEFORE this
-            // table frame is returned to the allocator and can be reused.
-            // Inactive roots are flushed by switch_cr3 before user execution.
-            if self.root == current_cr3() { x86_64::instructions::tlb::flush_all(); }
-            free_frame(frames[depth]);
+            freed_frames[freed_count] = frames[depth];
+            freed_count += 1;
             depth -= 1;
         }
-        if self.root == current_cr3() { x86_64::instructions::tlb::flush(VirtAddr::new(virt)); }
+        if freed_count > 0 {
+            // Invalidate all non-global paging-structure caches BEFORE table
+            // frames are returned to the allocator and can be reused.
+            if self.root == current_cr3() { x86_64::instructions::tlb::flush_all(); }
+            for frame in &freed_frames[..freed_count] {
+                free_frame(*frame);
+            }
+        } else if self.root == current_cr3() {
+            x86_64::instructions::tlb::flush(VirtAddr::new(virt));
+        }
     }
 
     pub(crate) fn map_fresh(
@@ -676,6 +681,10 @@ impl AddressSpace {
 
     pub(crate) fn translate(&self, virt: u64) -> PhysFrame {
         translate_in(self.root_addr(), virt)
+    }
+
+    pub(crate) fn try_translate(&self, virt: u64, require_write: bool) -> Result<PhysFrame, ()> {
+        try_translate_in(self.root_addr(), virt, require_write)
     }
 
     pub(crate) fn activate(&self) {
@@ -785,6 +794,21 @@ impl<'a> MMU<'a> {
 }
 
 
+// SAFETY: caller guarantees src and dst are valid, aligned 4KiB page buffers.
+#[inline(always)]
+pub unsafe fn copy_frame(src: *const u64, dst: *mut u64) {
+    unsafe {
+        core::arch::asm!(
+            "cld",
+            "rep movsq",
+            inout("rsi") src => _,
+            inout("rdi") dst => _,
+            inout("rcx") 512usize => _,
+            options(nostack),
+        );
+    }
+}
+
 pub(crate) fn handle_cow(fault_addr: u64) -> Result<(), ()> {
     let (root_frame, _) = Cr3::read();
     let mut table_phys = root_frame.start_address().as_u64();
@@ -803,6 +827,9 @@ pub(crate) fn handle_cow(fault_addr: u64) -> Result<(), ()> {
             return Err(());
         }
         if level < 3 {
+            if entry & PTE_HUGE != 0 {
+                return Err(());
+            }
             table_phys = entry & PTE_ADDR_MASK;
         } else {
             if entry & PTE_COW == 0 {
@@ -822,10 +849,9 @@ pub(crate) fn handle_cow(fault_addr: u64) -> Result<(), ()> {
                 };
                 let new_phys = new_frame.start_address().as_u64();
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        phys_to_direct(old_phys) as *const u8,
-                        phys_to_direct(new_phys) as *mut u8,
-                        PAGE_SIZE as usize,
+                    copy_frame(
+                        phys_to_direct(old_phys) as *const u64,
+                        phys_to_direct(new_phys) as *mut u64,
                     );
                     let new_entry = (entry & !PTE_ADDR_MASK & !PTE_COW) | new_phys | PTE_WRITABLE;
                     write_entry(table_virt, idx, new_entry);

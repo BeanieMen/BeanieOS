@@ -94,18 +94,22 @@ pub(crate) const ATA_READ_DMA_EXT: u8 = 0x25;
 pub(crate) const ATA_WRITE_DMA_EXT: u8 = 0x35;
 pub(crate) const FIS_H2D_REGISTER: u8 = 0x27;
 
+#[inline(always)]
 pub(crate) fn reg(base: usize, offset: usize) -> u32 {
     unsafe { read_volatile((base + offset) as *const u32) }
 }
 
+#[inline(always)]
 pub(crate) fn set_reg(base: usize, offset: usize, value: u32) {
     unsafe { write_volatile((base + offset) as *mut u32, value) }
 }
 
+#[inline(always)]
 pub(crate) fn set_bits(base: usize, offset: usize, bits: u32) {
     set_reg(base, offset, reg(base, offset) | bits);
 }
 
+#[inline(always)]
 pub(crate) fn write_u32(buffer: *mut u8, offset: usize, value: u32) {
     unsafe { write_volatile(buffer.add(offset) as *mut u32, value) }
 }

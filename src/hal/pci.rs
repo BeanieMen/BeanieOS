@@ -2,9 +2,12 @@ use alloc::vec::Vec;
 
 use pci_types::{Bar, CommandRegister, ConfigRegionAccess, EndpointHeader, PciAddress, PciHeader};
 use x86_64::instructions::port::Port;
+use crate::arch::lock::InterruptMutex;
 
 const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
+
+static PCI_LOCK: InterruptMutex<()> = InterruptMutex::new(());
 
 const MAX_ROUTES: usize = 32;
 
@@ -12,6 +15,7 @@ struct PciConfig;
 
 impl ConfigRegionAccess for PciConfig {
     unsafe fn read(&self, address: PciAddress, offset: u16) -> u32 {
+        let _guard = PCI_LOCK.lock();
         let mut address_port = Port::<u32>::new(CONFIG_ADDRESS);
         let mut data_port = Port::<u32>::new(CONFIG_DATA);
 
@@ -22,6 +26,7 @@ impl ConfigRegionAccess for PciConfig {
     }
 
     unsafe fn write(&self, address: PciAddress, offset: u16, value: u32) {
+        let _guard = PCI_LOCK.lock();
         let mut address_port = Port::<u32>::new(CONFIG_ADDRESS);
         let mut data_port = Port::<u32>::new(CONFIG_DATA);
 

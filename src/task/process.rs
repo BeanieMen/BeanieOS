@@ -167,7 +167,7 @@ impl ProcessManager {
             Some(parent_pid),
             &parent_cwd,
         );
-        child.fds = parent_fds.clone();
+        child.fds = parent_fds;
         child.heap_start = parent_heap_start;
         child.heap_break = parent_heap_break;
         child.mmap_next = parent_mmap_next;
@@ -358,12 +358,12 @@ impl ProcessManager {
         let ppid = process.ppid;
         drop(process);
 
-        if let Some(ppid) = ppid {
-            if let Some(parent) = self.processes.get(&ppid) {
-                let parent_threads = parent.lock().threads.clone();
-                for tid in parent_threads {
-                    crate::task::scheduler::wake(tid);
-                }
+        if let Some(ppid) = ppid
+            && let Some(parent) = self.processes.get(&ppid)
+        {
+            let parent_threads = parent.lock().threads.clone();
+            for tid in parent_threads {
+                crate::task::scheduler::wake(tid);
             }
         }
 
@@ -543,6 +543,7 @@ pub(crate) fn send_signal(pid: ProcessId, sig: usize) -> bool {
         let mut p = proc.lock();
         p.pending_signals |= 1u64 << (sig - 1);
         for &thread_id in &p.threads {
+            crate::task::scheduler::mark_thread_signal(thread_id);
             crate::task::scheduler::wake(thread_id);
         }
     }
@@ -559,6 +560,7 @@ pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) -> bool {
             if sig > 0 && sig <= 64 {
                 p.pending_signals |= 1u64 << (sig - 1);
                 for &thread_id in &p.threads {
+                    crate::task::scheduler::mark_thread_signal(thread_id);
                     crate::task::scheduler::wake(thread_id);
                 }
             }
@@ -568,9 +570,20 @@ pub(crate) fn send_signal_pgrp(pgid: ProcessId, sig: usize) -> bool {
 }
 
 pub(crate) fn has_pending_signals() -> bool {
+    let thread = identity::current_thread();
+    if thread.is_null() {
+        return false;
+    }
+    if !unsafe { (*thread).has_pending_signals.load(core::sync::atomic::Ordering::Acquire) } {
+        return false;
+    }
     if let Some(proc) = current() {
         let p = proc.lock();
-        (p.pending_signals & !p.blocked_signals) != 0
+        let has = (p.pending_signals & !p.blocked_signals) != 0;
+        if !has {
+            unsafe { (*thread).has_pending_signals.store(false, core::sync::atomic::Ordering::Relaxed); }
+        }
+        has
     } else {
         false
     }

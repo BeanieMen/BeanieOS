@@ -21,6 +21,7 @@ required-features = ["kernel"]
 
 [features]
 kernel = []
+trace_syscalls = []
 
 [dependencies]
 spin = { version = "0.10", default-features = false, features = [

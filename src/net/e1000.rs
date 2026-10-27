@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use spin::Mutex;
+use crate::arch::lock::InterruptMutex;
 use x86_64::VirtAddr;
 
 use crate::memory::allocator::alloc_frame;
@@ -60,12 +60,14 @@ pub struct E1000 {
     tx_cur: AtomicUsize,
     rx_buffers: Vec<u64>,
     tx_buffers: Vec<u64>,
+    rx_desc_virt: u64,
+    tx_desc_virt: u64,
 }
 
 unsafe impl Send for E1000 {}
 unsafe impl Sync for E1000 {}
 
-pub static E1000_DEVICE: Mutex<Option<E1000>> = Mutex::new(None);
+pub static E1000_DEVICE: InterruptMutex<Option<E1000>> = InterruptMutex::new(None);
 
 impl E1000 {
     unsafe fn write_reg(&self, reg: usize, val: u32) {
@@ -90,6 +92,8 @@ impl E1000 {
             tx_cur: AtomicUsize::new(0),
             rx_buffers: Vec::with_capacity(NUM_RX_DESC),
             tx_buffers: Vec::with_capacity(NUM_TX_DESC),
+            rx_desc_virt: 0,
+            tx_desc_virt: 0,
         };
 
         unsafe {
@@ -108,14 +112,15 @@ impl E1000 {
 
             let rx_desc_frame = alloc_frame().expect("e1000 rx desc frame").start_address().as_u64();
             let rx_desc_virt = phys_to_direct(rx_desc_frame);
+            dev.rx_desc_virt = rx_desc_virt;
             let rx_descs =
                 core::slice::from_raw_parts_mut(rx_desc_virt as *mut RxDesc, NUM_RX_DESC);
 
-            for i in 0..NUM_RX_DESC {
+            for desc in rx_descs.iter_mut() {
                 let buf_frame = alloc_frame().expect("e1000 rx buf frame").start_address().as_u64();
                 dev.rx_buffers.push(buf_frame);
-                rx_descs[i].addr = buf_frame;
-                rx_descs[i].status = 0;
+                desc.addr = buf_frame;
+                desc.status = 0;
             }
 
             dev.write_reg(REG_RDBAL, rx_desc_frame as u32);
@@ -133,6 +138,7 @@ impl E1000 {
 
             let tx_desc_frame = alloc_frame().expect("e1000 tx desc frame").start_address().as_u64();
             let tx_desc_virt = phys_to_direct(tx_desc_frame);
+            dev.tx_desc_virt = tx_desc_virt;
             let _tx_descs =
                 core::slice::from_raw_parts_mut(tx_desc_virt as *mut TxDesc, NUM_TX_DESC);
 
@@ -160,13 +166,7 @@ impl E1000 {
 
     pub fn receive(&self) -> Option<Vec<u8>> {
         let cur = self.rx_cur.load(Ordering::Relaxed);
-        let rx_desc_frame = unsafe {
-            let low = self.read_reg(REG_RDBAL) as u64;
-            let high = self.read_reg(REG_RDBAH) as u64;
-            (high << 32) | low
-        };
-        let rx_desc_virt = phys_to_direct(rx_desc_frame);
-        let desc = unsafe { &mut *(rx_desc_virt as *mut RxDesc).add(cur) };
+        let desc = unsafe { &mut *(self.rx_desc_virt as *mut RxDesc).add(cur) };
 
         if desc.status & 1 == 0 {
             return None;
@@ -192,13 +192,11 @@ impl E1000 {
         }
 
         let cur = self.tx_cur.load(Ordering::Relaxed);
-        let tx_desc_frame = unsafe {
-            let low = self.read_reg(REG_TDBAL) as u64;
-            let high = self.read_reg(REG_TDBAH) as u64;
-            (high << 32) | low
-        };
-        let tx_desc_virt = phys_to_direct(tx_desc_frame);
-        let desc = unsafe { &mut *(tx_desc_virt as *mut TxDesc).add(cur) };
+        let desc = unsafe { &mut *(self.tx_desc_virt as *mut TxDesc).add(cur) };
+
+        if desc.cmd != 0 && desc.status & 1 == 0 {
+            return false;
+        }
 
         let buf_virt = phys_to_direct(self.tx_buffers[cur]);
         unsafe {

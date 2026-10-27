@@ -6,6 +6,8 @@ use super::file::{File, OpenFlags};
 use super::inode::{FileType, Inode};
 use super::mount::{FileSystem, MountTable};
 
+pub const MAX_FDS: usize = 1024;
+
 #[derive(Clone)]
 pub(crate) struct FdTable {
     slots: Vec<Option<File>>,
@@ -42,6 +44,9 @@ impl FdTable {
     }
 
     pub(crate) fn alloc_at_least(&mut self, file: File, min_fd: usize) -> u64 {
+        if min_fd >= MAX_FDS {
+            return u64::MAX;
+        }
         while self.slots.len() <= min_fd {
             self.slots.push(None);
         }
@@ -66,6 +71,9 @@ impl FdTable {
         if oldfd == newfd {
             return Ok(newfd);
         }
+        if newfd >= MAX_FDS as u64 {
+            return Err("bad file descriptor");
+        }
         let target = newfd as usize;
         while self.slots.len() <= target {
             self.slots.push(None);
@@ -74,6 +82,7 @@ impl FdTable {
         Ok(newfd)
     }
 
+    #[inline(always)]
     pub(crate) fn get(&self, fd: u64) -> Result<&File, &'static str> {
         self.slots
             .get(fd as usize)
@@ -81,6 +90,7 @@ impl FdTable {
             .ok_or("bad file descriptor")
     }
 
+    #[inline(always)]
     pub(crate) fn get_mut(&mut self, fd: u64) -> Result<&mut File, &'static str> {
         self.slots
             .get_mut(fd as usize)
@@ -131,68 +141,70 @@ impl FdTable {
     }
 
     pub(crate) fn open(&mut self, path: &[u8], flags: OpenFlags) -> Result<u64, &'static str> {
-        if path == b"/dev/fb0" || path == b"dev/fb0" {
-            let fb_file = crate::graphics::vfs::create_fb_file(flags);
-            return Ok(self.alloc(fb_file));
-        }
-
-        if path == b"/dev/dsp" || path == b"dev/dsp" {
-            let dsp_file = crate::audio::vfs::create_dsp_file(flags);
-            return Ok(self.alloc(dsp_file));
-        }
-
-        if path == b"/dev/input/event0" || path == b"dev/input/event0" || path == b"/dev/event0" {
-            let event_file = crate::input::event::create_event_file(flags);
-            return Ok(self.alloc(event_file));
-        }
-
-        if path == b"/dev/mouse"
-            || path == b"dev/mouse"
-            || path == b"/dev/psaux"
-            || path == b"dev/psaux"
-            || path == b"/dev/input/mice"
-            || path == b"dev/input/mice"
-            || path == b"/dev/input/mouse0"
-            || path == b"dev/input/mouse0"
-        {
-            let mouse_file = crate::input::mouse::create_mouse_file(flags);
-            return Ok(self.alloc(mouse_file));
-        }
-
-        if path == b"/dev/tty1"
-            || path == b"dev/tty1"
-            || path == b"/dev/tty0"
-            || path == b"dev/tty0"
-            || path == b"/dev/tty"
-            || path == b"dev/tty"
-            || path == b"/dev/console"
-        {
-            let tty_file = crate::tty::vfs::create_tty_file(flags);
-            return Ok(self.alloc(tty_file));
-        }
-        if path == b"/dev/ptmx" || path == b"dev/ptmx" {
-            let ptmx_file = crate::tty::pty::create_ptmx_file(flags);
-            return Ok(self.alloc(ptmx_file));
-        }
-        if path.starts_with(b"/dev/pts/") || path.starts_with(b"dev/pts/") {
-            let s = if path.starts_with(b"/dev/pts/") {
-                &path[9..]
-            } else {
-                &path[8..]
-            };
-            let mut id = 0usize;
-            for &c in s {
-                if !c.is_ascii_digit() {
-                    break;
-                }
-                id = id * 10 + (c - b'0') as usize;
+        if path.starts_with(b"/dev/") || path.starts_with(b"dev/") {
+            if path == b"/dev/fb0" || path == b"dev/fb0" {
+                let fb_file = crate::graphics::vfs::create_fb_file(flags);
+                return Ok(self.alloc(fb_file));
             }
-            let pts_file = crate::tty::pty::create_pts_file(id, flags)?;
-            return Ok(self.alloc(pts_file));
-        }
-        if path.starts_with(b"/dev/tty") || path.starts_with(b"dev/tty") {
-            let vt2_file = crate::tty::vfs::create_vt2_file(flags);
-            return Ok(self.alloc(vt2_file));
+
+            if path == b"/dev/dsp" || path == b"dev/dsp" {
+                let dsp_file = crate::audio::vfs::create_dsp_file(flags);
+                return Ok(self.alloc(dsp_file));
+            }
+
+            if path == b"/dev/input/event0" || path == b"dev/input/event0" || path == b"/dev/event0" {
+                let event_file = crate::input::event::create_event_file(flags);
+                return Ok(self.alloc(event_file));
+            }
+
+            if path == b"/dev/mouse"
+                || path == b"dev/mouse"
+                || path == b"/dev/psaux"
+                || path == b"dev/psaux"
+                || path == b"/dev/input/mice"
+                || path == b"dev/input/mice"
+                || path == b"/dev/input/mouse0"
+                || path == b"dev/input/mouse0"
+            {
+                let mouse_file = crate::input::mouse::create_mouse_file(flags);
+                return Ok(self.alloc(mouse_file));
+            }
+
+            if path == b"/dev/tty1"
+                || path == b"dev/tty1"
+                || path == b"/dev/tty0"
+                || path == b"dev/tty0"
+                || path == b"/dev/tty"
+                || path == b"dev/tty"
+                || path == b"/dev/console"
+            {
+                let tty_file = crate::tty::vfs::create_tty_file(flags);
+                return Ok(self.alloc(tty_file));
+            }
+            if path == b"/dev/ptmx" || path == b"dev/ptmx" {
+                let ptmx_file = crate::tty::pty::create_ptmx_file(flags);
+                return Ok(self.alloc(ptmx_file));
+            }
+            if path.starts_with(b"/dev/pts/") || path.starts_with(b"dev/pts/") {
+                let s = if path.starts_with(b"/dev/pts/") {
+                    &path[9..]
+                } else {
+                    &path[8..]
+                };
+                let mut id = 0usize;
+                for &c in s {
+                    if !c.is_ascii_digit() {
+                        break;
+                    }
+                    id = id * 10 + (c - b'0') as usize;
+                }
+                let pts_file = crate::tty::pty::create_pts_file(id, flags)?;
+                return Ok(self.alloc(pts_file));
+            }
+            if path.starts_with(b"/dev/tty") || path.starts_with(b"dev/tty") {
+                let vt2_file = crate::tty::vfs::create_vt2_file(flags);
+                return Ok(self.alloc(vt2_file));
+            }
         }
 
         let resolved = match self.mounts.resolve(path) {
@@ -203,7 +215,7 @@ impl FdTable {
                 dentry
             }
             Err(_) if flags.create => {
-                let _ = self.touch(path)?;
+                self.touch(path)?;
                 self.mounts.resolve(path)?
             }
             Err(e) => return Err(e),

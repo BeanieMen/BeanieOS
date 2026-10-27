@@ -22,7 +22,10 @@ fn window(offset: u64) -> u64 {
     crate::paging::phys_to_direct(madt::get().ioapic_address as u64 + offset)
 }
 
+static IOAPIC_LOCK: crate::arch::lock::InterruptMutex<()> = crate::arch::lock::InterruptMutex::new(());
+
 unsafe fn ioapic_write(reg: u32, value: u32) {
+    let _guard = IOAPIC_LOCK.lock();
     unsafe {
         core::ptr::write_volatile(window(IOAPIC_INDEX_OFFSET) as *mut u32, reg);
         core::ptr::write_volatile(window(IOAPIC_WINDOW_OFFSET) as *mut u32, value);
@@ -30,6 +33,7 @@ unsafe fn ioapic_write(reg: u32, value: u32) {
 }
 
 unsafe fn ioapic_read(reg: u32) -> u32 {
+    let _guard = IOAPIC_LOCK.lock();
     unsafe {
         core::ptr::write_volatile(window(IOAPIC_INDEX_OFFSET) as *mut u32, reg);
         core::ptr::read_volatile(window(IOAPIC_WINDOW_OFFSET) as *const u32)

@@ -123,6 +123,9 @@ pub unsafe extern "C" fn memmove(
 // SAFETY: caller guarantees both ranges readable for `count` bytes. Signed
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, count: usize) -> i32 {
+    if count == 0 {
+        return 0;
+    }
     let (a, b) = unsafe {
         (
             core::slice::from_raw_parts(a as *const u8, count),

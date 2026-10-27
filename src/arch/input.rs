@@ -30,11 +30,3 @@ pub(crate) fn wake_waiters() {
         crate::task::scheduler::wake(id);
     }
 }
-
-fn wake_one() {
-    let waiter = { WAITERS.lock().pop() };
-
-    if let Some(id) = waiter {
-        crate::task::scheduler::wake(id);
-    }
-}

@@ -455,7 +455,11 @@ fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> SyscallResult {
         0 => {
             // F_DUPFD
             let min_fd = arg as usize;
-            with_current_fds(|fds| fds.alloc_at_least(f.clone(), min_fd)).ok_or(Errno::BadFd)
+            let new_fd = with_current_fds(|fds| fds.alloc_at_least(f.clone(), min_fd)).ok_or(Errno::BadFd)?;
+            if new_fd == u64::MAX {
+                return Err(Errno::Invalid);
+            }
+            Ok(new_fd)
         }
         1 => Ok(0), // F_GETFD
         2 => Ok(0), // F_SETFD
@@ -498,12 +502,12 @@ fn sys_uname(buf_ptr: u64) -> SyscallResult {
         slice[..len].copy_from_slice(&s[..len]);
     };
 
-    fill(&mut uts[0..65], b"Linux"); // sysname
-    fill(&mut uts[65..130], b"beanieos"); // nodename
-    fill(&mut uts[130..195], b"6.1.0-beanieos"); // release
-    fill(&mut uts[195..260], b"#1 SMP PREEMPT"); // version
-    fill(&mut uts[260..325], b"x86_64"); // machine
-    fill(&mut uts[325..390], b"local"); // domainname
+    fill(&mut uts[0..65], b"Linux");
+    fill(&mut uts[65..130], b"beanieos");
+    fill(&mut uts[130..195], b"6.1.0-beanieos");
+    fill(&mut uts[195..260], b"#1 SMP PREEMPT");
+    fill(&mut uts[260..325], b"x86_64");
+    fill(&mut uts[325..390], b"local");
 
     copy_to_user(buf_ptr, &uts).map_err(|_| Errno::Fault)?;
     Ok(0)
@@ -854,8 +858,10 @@ fn sys_readv(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
         let mut iov_buf = [0u8; 16];
         entry::copy_from_user(&mut iov_buf, slot).map_err(|_| Errno::Fault)?;
 
-        let base = u64::from_le_bytes(iov_buf[0..8].try_into().unwrap());
-        let len = u64::from_le_bytes(iov_buf[8..16].try_into().unwrap());
+        let Ok(base_bytes) = iov_buf[0..8].try_into() else { return Err(Errno::Fault); };
+        let Ok(len_bytes) = iov_buf[8..16].try_into() else { return Err(Errno::Fault); };
+        let base = u64::from_le_bytes(base_bytes);
+        let len = u64::from_le_bytes(len_bytes);
         if len == 0 {
             continue;
         }
@@ -930,8 +936,10 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
         let mut iov_buf = [0u8; 16];
         entry::copy_from_user(&mut iov_buf, slot).map_err(|_| Errno::Fault)?;
 
-        let base = u64::from_le_bytes(iov_buf[0..8].try_into().unwrap());
-        let len = u64::from_le_bytes(iov_buf[8..16].try_into().unwrap());
+        let Ok(base_bytes) = iov_buf[0..8].try_into() else { return Err(Errno::Fault); };
+        let Ok(len_bytes) = iov_buf[8..16].try_into() else { return Err(Errno::Fault); };
+        let base = u64::from_le_bytes(base_bytes);
+        let len = u64::from_le_bytes(len_bytes);
 
         if len == 0 {
             continue;
@@ -942,7 +950,7 @@ fn sys_writev(fd: u64, iov_ptr: u64, iovcnt: u64) -> SyscallResult {
 
         while written_for_iov < target {
             let chunk = core::cmp::min(target - written_for_iov, 4096);
-            let curr_buf = base + written_for_iov as u64;
+            let curr_buf = base.checked_add(written_for_iov as u64).ok_or(Errno::Fault)?;
 
             entry::copy_from_user(&mut staging[..chunk], curr_buf).map_err(|_| Errno::Fault)?;
 
@@ -1138,7 +1146,7 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             entry::copy_to_user(arg, bytes).map_err(|_| Errno::Fault)?;
             return Ok(0);
         }
-        0x5605 | 0x5606 | 0x5607 | 0x5608 => return Ok(0), // VT_RELDISP, VT_ACTIVATE, VT_WAITACTIVE, VT_DISALLOCATE
+        0x5605..=0x5608 => return Ok(0), // VT_RELDISP, VT_ACTIVATE, VT_WAITACTIVE, VT_DISALLOCATE
         0x4B3A | 0x4B3B | 0x4B44 | 0x4B45 | 0x4B32 | 0x4B30 => return Ok(0), // KDSETMODE, KDGETMODE, KDGKBMODE, KDSKBMODE, KDSETLED, KDMKTONE
         0x4B46 => return Err(Errno::Invalid),                                // KDGKBENT
         0x8912 => {
@@ -1150,14 +1158,18 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
         _ => {}
     }
 
-    let (is_tty, is_vt2) = process::with_current_fds(|fds| {
+    let (is_tty, is_vt2, is_pty) = process::with_current_fds(|fds| {
         fds.get(fd).ok().map(|f| {
-            let id = f.inode.lock().id;
-            (id == 1 || id == 7, id == 7)
+            let inode = f.inode.lock();
+            let id = inode.id;
+            let ops = inode.file_ops;
+            let is_pty = core::ptr::addr_eq(ops, &crate::tty::pty::PTY_SLAVE_OPS as *const _ as *const _)
+                || core::ptr::addr_eq(ops, &crate::tty::pty::PTY_MASTER_OPS as *const _ as *const _);
+            (id == 1 || id == 7 || is_pty, id == 7, is_pty)
         })
     })
     .flatten()
-    .unwrap_or((false, false));
+    .unwrap_or((false, false, false));
 
     match request {
         TCGETS => {
@@ -1166,6 +1178,8 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             }
             let termios = if is_vt2 {
                 crate::tty::VT2_TTY.lock().termios
+            } else if is_pty {
+                Termios::default()
             } else {
                 GLOBAL_TTY.lock().termios
             };
@@ -1219,6 +1233,8 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             }
             if is_vt2 {
                 crate::tty::VT2_TTY.lock().termios = termios;
+            } else if is_pty {
+                // PTY termios accepted
             } else {
                 GLOBAL_TTY.lock().termios = termios;
             }
@@ -1250,11 +1266,15 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             Ok(0)
         }
         crate::tty::TIOCGPGRP => {
-            let pgid = GLOBAL_TTY
-                .lock()
-                .foreground_pgrp
-                .map(|p| p.as_u64() as i32)
-                .unwrap_or(0);
+            let pgid = if is_pty {
+                crate::task::identity::current_pid().as_u64() as i32
+            } else {
+                GLOBAL_TTY
+                    .lock()
+                    .foreground_pgrp
+                    .map(|p| p.as_u64() as i32)
+                    .unwrap_or(0)
+            };
             entry::copy_to_user(arg, &pgid.to_le_bytes()).map_err(|_| Errno::Fault)?;
             Ok(0)
         }
@@ -1262,7 +1282,9 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             let mut pgid_bytes = [0u8; 4];
             entry::copy_from_user(&mut pgid_bytes, arg).map_err(|_| Errno::Fault)?;
             let pgid = i32::from_le_bytes(pgid_bytes);
-            GLOBAL_TTY.lock().foreground_pgrp = Some(crate::task::identity::ProcessId(pgid as u64));
+            if !is_pty {
+                GLOBAL_TTY.lock().foreground_pgrp = Some(crate::task::identity::ProcessId(pgid as u64));
+            }
             Ok(0)
         }
         _ => Err(Errno::Invalid),
@@ -1311,7 +1333,7 @@ fn sys_wait4(pid: i64, wstatus: u64, options: u64, _rusage: u64) -> SyscallResul
     match child {
         Some((child_pid, code)) => {
             if wstatus != 0 {
-                let status = if code >= 128 && code < 256 {
+                let status = if (128..256).contains(&code) {
                     (code - 128) & 0x7f
                 } else {
                     (code & 0xff) << 8
@@ -1473,50 +1495,68 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
     if nfds > 1024 {
         return Err(Errno::Invalid);
     }
-    // Cache only this syscall's process identity, not its FD entries.
-    // Each slot is still cloned under the same short process lock.
+    let span = nfds.checked_mul(8).ok_or(Errno::Fault)?;
+    crate::memory::mmu::check_user_range(fds, span, false).map_err(|_| Errno::Fault)?;
+    crate::memory::mmu::check_user_range(fds.checked_add(6).ok_or(Errno::Fault)?, span - 6, true).map_err(|_| Errno::Fault)?;
     let current_process = process::current();
     loop {
-        // Validate the complete descriptor span once per scan. No scheduler call
-        // occurs before all revents stores complete; repeat after every sleep.
-        // Preserve field-only writes so fd/events are never copied back.
-        let span = nfds.checked_mul(8).ok_or(Errno::Fault)?;
-        crate::memory::mmu::check_user_range(fds, span, false).map_err(|_| Errno::Fault)?;
-        crate::memory::mmu::check_user_range(fds.checked_add(6).ok_or(Errno::Fault)?, span - 6, true).map_err(|_| Errno::Fault)?;
         let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
         let mut ready = 0u64;
+        let proc_guard = current_process.as_ref().map(|p| p.lock());
 
         for i in 0..nfds {
             let slot = fds.checked_add(i * 8).ok_or(Errno::Fault)?;
             // Range above is mapped user memory, including cross-page slots.
             let pfd_buf = unsafe { core::ptr::read_unaligned(slot as *const [u8; 8]) };
 
-            let fd = i32::from_le_bytes(pfd_buf[0..4].try_into().unwrap());
-            let events = i16::from_le_bytes(pfd_buf[4..6].try_into().unwrap());
+            let Ok(fd_bytes) = pfd_buf[0..4].try_into() else { return Err(Errno::Fault); };
+            let Ok(ev_bytes) = pfd_buf[4..6].try_into() else { return Err(Errno::Fault); };
+            let fd = i32::from_le_bytes(fd_bytes);
+            let events = i16::from_le_bytes(ev_bytes);
             let mut revents = 0i16;
 
             if fd >= 0 {
-                if fd == 0 || fd == 1 || fd == 2 {
-                    if tty_has_input && (events & 1 != 0) {
-                        revents |= 1; // POLLIN
-                    }
-                    if events & 4 != 0 {
-                        revents |= 4; // POLLOUT
-                    }
-                } else {
-                    let file = current_process.as_ref().map(|p| p.lock().fds.get(fd as u64).cloned());
-                    if let Some(Ok(file)) = file {
-                        if let Some(sock) = &file.unix_socket {
-                            revents = unix_poll_ready(sock, events);
-                        } else {
+                let file = proc_guard.as_ref().and_then(|p| p.fds.get(fd as u64).ok());
+                if let Some(file) = file {
+                    if let Some(sock) = &file.unix_socket {
+                        revents = unix_poll_ready(sock, events);
+                    } else {
                         let (file_ops, inode_id) = {
                             let inode = file.inode.lock();
                             (inode.file_ops, inode.id)
                         };
-                        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS)
-                            || inode_id == 8
+                        if core::ptr::addr_eq(file_ops, &crate::tty::vfs::TTY_FILE_OPS) || inode_id == 1 {
+                            if tty_has_input && (events & 1 != 0) {
+                                revents |= 1;
+                            }
+                            if events & 4 != 0 {
+                                revents |= 4;
+                            }
+                        } else if core::ptr::addr_eq(file_ops, &crate::tty::vfs::VT2_FILE_OPS) || inode_id == 7 {
+                            let vt2_has_input = !crate::tty::VT2_TTY.lock().queue.is_empty();
+                            if vt2_has_input && (events & 1 != 0) {
+                                revents |= 1;
+                            }
+                            if events & 4 != 0 {
+                                revents |= 4;
+                            }
+                        } else if core::ptr::addr_eq(file_ops, &crate::tty::pty::PTY_MASTER_OPS as *const _ as *const _) {
+                            if (events & 1 != 0) && crate::tty::pty::is_master_readable(inode_id as usize) {
+                                revents |= 1;
+                            }
+                            if (events & 4 != 0) && crate::tty::pty::is_master_writable(inode_id as usize) {
+                                revents |= 4;
+                            }
+                        } else if core::ptr::addr_eq(file_ops, &crate::tty::pty::PTY_SLAVE_OPS as *const _ as *const _) {
+                            if (events & 1 != 0) && crate::tty::pty::is_slave_readable(inode_id as usize) {
+                                revents |= 1;
+                            }
+                            if (events & 4 != 0) && crate::tty::pty::is_slave_writable(inode_id as usize) {
+                                revents |= 4;
+                            }
+                        } else if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS)
+                            || inode_id == 6
                         {
-                            // /dev/input/event0
                             let has_events = !crate::input::event::EVENT_QUEUE.lock().is_empty();
                             if has_events && (events & 1 != 0) {
                                 revents |= 1;
@@ -1531,10 +1571,9 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
                         } else {
                             revents |= events & 5;
                         }
-                        }
-                    } else {
-                        revents |= 0x20;
                     }
+                } else {
+                    revents |= 0x20;
                 }
             }
 
@@ -1544,6 +1583,7 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
 
             unsafe { core::ptr::write_unaligned((slot + 6) as *mut [u8; 2], revents.to_le_bytes()) };
         }
+        drop(proc_guard);
 
         if ready > 0 || timeout_ms == 0 {
             return Ok(ready);
@@ -1563,10 +1603,10 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
 }
 
 fn check_fd_ready(
-    file: Option<Result<crate::storage::vfs::file::File, &'static str>>,
+    file: Option<&crate::storage::vfs::file::File>,
     for_write: bool,
 ) -> bool {
-    if let Some(Ok(file)) = file {
+    if let Some(file) = file {
         if let Some(sock) = &file.unix_socket {
             let s = sock.lock();
             return match &s.state {
@@ -1582,29 +1622,39 @@ fn check_fd_ready(
             (inode.file_ops, inode.id, inode.file_type)
         };
         if core::ptr::addr_eq(file_ops, &crate::tty::vfs::TTY_FILE_OPS) || inode_id == 1 {
-            // TTY (Console / Shell)
             if for_write {
                 return true;
             }
             return !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
         }
         if core::ptr::addr_eq(file_ops, &crate::tty::vfs::VT2_FILE_OPS) || inode_id == 7 {
-            // VT2 (X11 Virtual Console)
             if for_write {
                 return true;
             }
             return !crate::tty::VT2_TTY.lock().queue.is_empty();
         }
-        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 8 {
-            // /dev/input/event0
+        if core::ptr::addr_eq(file_ops, &crate::input::event::EVENT_FILE_OPS) || inode_id == 6 {
             return !for_write && !crate::input::event::EVENT_QUEUE.lock().is_empty();
         }
         if core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8 {
-            // /dev/mouse, /dev/input/mice, /dev/psaux
             if for_write {
                 return true;
             }
             return !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
+        }
+        if core::ptr::addr_eq(file_ops, &crate::tty::pty::PTY_MASTER_OPS as *const _ as *const _) {
+            return if for_write {
+                crate::tty::pty::is_master_writable(inode_id as usize)
+            } else {
+                crate::tty::pty::is_master_readable(inode_id as usize)
+            };
+        }
+        if core::ptr::addr_eq(file_ops, &crate::tty::pty::PTY_SLAVE_OPS as *const _ as *const _) {
+            return if for_write {
+                crate::tty::pty::is_slave_writable(inode_id as usize)
+            } else {
+                crate::tty::pty::is_slave_readable(inode_id as usize)
+            };
         }
         if file_type == crate::storage::vfs::inode::FileType::Device {
             return for_write;
@@ -1624,7 +1674,7 @@ fn sys_select(
     if nfds > 1024 {
         return Err(Errno::Invalid);
     }
-    let num_words = (nfds as usize + 63) / 64;
+    let num_words = (nfds as usize).div_ceil(64);
 
     let mut in_read = [0u64; 16];
     let mut in_write = [0u64; 16];
@@ -1644,8 +1694,10 @@ fn sys_select(
     let deadline = if timeout != 0 {
         let mut tv_bytes = [0u8; 16];
         if entry::copy_from_user(&mut tv_bytes, timeout).is_ok() {
-            let sec = i64::from_le_bytes(tv_bytes[0..8].try_into().unwrap());
-            let sub = i64::from_le_bytes(tv_bytes[8..16].try_into().unwrap());
+            let Ok(sec_bytes) = tv_bytes[0..8].try_into() else { return Err(Errno::Fault); };
+            let Ok(sub_bytes) = tv_bytes[8..16].try_into() else { return Err(Errno::Fault); };
+            let sec = i64::from_le_bytes(sec_bytes);
+            let sub = i64::from_le_bytes(sub_bytes);
             if sec < 0 || sub < 0 {
                 return Err(Errno::Invalid);
             }
@@ -1672,24 +1724,27 @@ fn sys_select(
         let mut out_write = [0u64; 16];
         let mut count = 0u64;
 
+        let proc_guard = current_process.as_ref().map(|p| p.lock());
         for fd in 0..nfds {
             let w = (fd / 64) as usize;
             let bit = 1u64 << (fd % 64);
 
-            if readfds != 0 && (in_read[w] & bit != 0) {
-                if check_fd_ready(current_process.as_ref().map(|p| p.lock().fds.get(fd).cloned()), false) {
+            let need_read = readfds != 0 && (in_read[w] & bit != 0);
+            let need_write = writefds != 0 && (in_write[w] & bit != 0);
+
+            if need_read || need_write {
+                let file = proc_guard.as_ref().and_then(|p| p.fds.get(fd).ok());
+                if need_read && check_fd_ready(file, false) {
                     out_read[w] |= bit;
                     count += 1;
                 }
-            }
-
-            if writefds != 0 && (in_write[w] & bit != 0) {
-                if check_fd_ready(current_process.as_ref().map(|p| p.lock().fds.get(fd).cloned()), true) {
+                if need_write && check_fd_ready(file, true) {
                     out_write[w] |= bit;
                     count += 1;
                 }
             }
         }
+        drop(proc_guard);
 
         if count > 0 {
             if readfds != 0 && num_words > 0 {
@@ -1707,9 +1762,10 @@ fn sys_select(
             return Ok(count);
         }
 
-        if let Some(dl) = deadline {
-            if crate::arch::interrupts::vectors::ticks() >= dl {
-                if readfds != 0 && num_words > 0 {
+        if let Some(dl) = deadline
+            && crate::arch::interrupts::vectors::ticks() >= dl
+        {
+            if readfds != 0 && num_words > 0 {
                     let bytes = unsafe {
                         core::slice::from_raw_parts(out_read.as_ptr() as *const u8, num_words * 8)
                     };
@@ -1722,7 +1778,6 @@ fn sys_select(
                     entry::copy_to_user(writefds, bytes).map_err(|_| Errno::Fault)?;
                 }
                 return Ok(0);
-            }
         }
 
         if crate::task::process::has_pending_signals() {
@@ -1779,7 +1834,10 @@ fn read_staged(fd: u64, buf: u64, len: u64, staging: &mut [u8]) -> SyscallResult
                 return Err(Errno::Again);
             }
             if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
-                if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
+                let sock_opt = file.unix_socket.as_ref().cloned().or_else(|| {
+                    crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
+                });
+                if let Some(sock) = sock_opt {
                     let s = sock.lock();
                     match &s.state {
                         crate::net::unix::SocketState::Connected {
@@ -1938,14 +1996,14 @@ fn sys_close(fd: u64) -> SyscallResult {
                     s.state = crate::net::unix::SocketState::Closed;
                     peer
                 };
-                if let Some(peer_arc) = peer_opt {
-                    if !alloc::sync::Arc::ptr_eq(&sock, &peer_arc) {
-                        let mut p = peer_arc.lock();
-                        if let crate::net::unix::SocketState::Connected { peer_closed, .. } =
-                            &mut p.state
-                        {
-                            *peer_closed = true;
-                        }
+                if let Some(peer_arc) = peer_opt
+                    && !alloc::sync::Arc::ptr_eq(&sock, &peer_arc)
+                {
+                    let mut p = peer_arc.lock();
+                    if let crate::net::unix::SocketState::Connected { peer_closed, .. } =
+                        &mut p.state
+                    {
+                        *peer_closed = true;
                     }
                 }
             }

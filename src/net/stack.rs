@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use spin::Mutex;
+use crate::arch::lock::InterruptMutex;
 
 use smoltcp::iface::{Config, Interface, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -64,7 +64,7 @@ pub struct NetState {
     pub sockets: SocketSet<'static>,
 }
 
-pub static NET_STATE: Mutex<Option<NetState>> = Mutex::new(None);
+pub static NET_STATE: InterruptMutex<Option<NetState>> = InterruptMutex::new(None);
 
 pub fn init_stack() {
     let mac = {
@@ -97,7 +97,9 @@ pub fn init_stack() {
 }
 
 pub fn poll() {
-    let mut guard = NET_STATE.lock();
+    let Some(mut guard) = NET_STATE.try_lock() else {
+        return;
+    };
     let Some(state) = guard.as_mut() else {
         return;
     };

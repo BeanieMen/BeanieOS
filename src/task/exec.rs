@@ -229,7 +229,7 @@ fn write_user(space: &AddressSpace, addr: u64, bytes: &[u8]) -> Result<(), &'sta
     while done < bytes.len() {
         let at = addr + done as u64;
 
-        let frame = space.translate(at);
+        let frame = space.try_translate(at, true).map_err(|_| "unmapped user address")?;
 
         let base = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
         let offset = (at % PAGE_SIZE) as usize;

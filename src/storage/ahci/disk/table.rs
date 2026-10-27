@@ -15,9 +15,12 @@ impl Disk {
             return out;
         }
 
-        let table = u64::from_le_bytes(header[72..80].try_into().unwrap());
-        let count = u32::from_le_bytes(header[80..84].try_into().unwrap()) as usize;
-        let size = u32::from_le_bytes(header[84..88].try_into().unwrap()) as usize;
+        let Ok(table_bytes) = header[72..80].try_into() else { return out; };
+        let Ok(count_bytes) = header[80..84].try_into() else { return out; };
+        let Ok(size_bytes) = header[84..88].try_into() else { return out; };
+        let table = u64::from_le_bytes(table_bytes);
+        let count = u32::from_le_bytes(count_bytes) as usize;
+        let size = u32::from_le_bytes(size_bytes) as usize;
 
         if size < 128 || count == 0 || count > 256 {
             kwarn!("disk {} has an implausible GPT", self.port);
@@ -52,8 +55,10 @@ impl Disk {
                 continue;
             }
 
-            let first = u64::from_le_bytes(entry[32..40].try_into().unwrap());
-            let last = u64::from_le_bytes(entry[40..48].try_into().unwrap());
+            let Ok(first_bytes) = entry[32..40].try_into() else { continue; };
+            let Ok(last_bytes) = entry[40..48].try_into() else { continue; };
+            let first = u64::from_le_bytes(first_bytes);
+            let last = u64::from_le_bytes(last_bytes);
 
             if first == 0 || last < first {
                 continue;

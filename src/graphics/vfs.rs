@@ -82,7 +82,7 @@ pub static FB_FILE_OPS: FbFileOps = FbFileOps;
 
 pub fn create_fb_file(flags: OpenFlags) -> File {
     let inode = Inode {
-        id: 2, // distinc id for fb0
+        id: 2,
         file_type: FileType::Device,
         inode_ops: &FB_INODE_OPS,
         file_ops: &FB_FILE_OPS,

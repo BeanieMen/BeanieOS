@@ -157,12 +157,17 @@ pub extern "C" fn syscall_c(frame: *mut SyscallFrame) {
 
     let result = super::error::encode(dispatch(number, args, frame));
 
-    crate::kdebug!("syscall {number} -> {result:#x}");
+    if cfg!(feature = "trace_syscalls") {
+        crate::kdebug!("syscall {number} -> {result:#x}");
+    }
 
     frame.regs.rax = result;
 
     if number != crate::syscall::numbers::Syscall::RtSigreturn as u64 {
-        handle_pending_signals(frame);
+        let thread = crate::task::identity::current_thread();
+        if !thread.is_null() && unsafe { (*thread).has_pending_signals.load(core::sync::atomic::Ordering::Acquire) } {
+            handle_pending_signals(frame);
+        }
     }
 
     if crate::task::scheduler::is_reschedule_requested() {
@@ -178,6 +183,10 @@ fn handle_pending_signals(frame: &mut SyscallFrame) {
 
     let active = p.pending_signals & !p.blocked_signals;
     if active == 0 {
+        let thread = crate::task::identity::current_thread();
+        if !thread.is_null() {
+            unsafe { (*thread).has_pending_signals.store(false, core::sync::atomic::Ordering::Relaxed); }
+        }
         return;
     }
 

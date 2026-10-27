@@ -66,7 +66,7 @@ pub fn load_elf_at(
         return Err("ELF file too small for header");
     }
 
-    let header = unsafe { &*(binary.as_ptr() as *const ElfHeader) };
+    let header = unsafe { core::ptr::read_unaligned(binary.as_ptr() as *const ElfHeader) };
     if header.ident[0..4] != ELF_MAGIC {
         return Err("invalid ELF magic");
     }
@@ -103,7 +103,7 @@ pub fn load_elf_at(
         if ph_offset + ph_size > binary.len() {
             return Err("program header out of bounds");
         }
-        let ph = unsafe { &*(binary.as_ptr().add(ph_offset) as *const Elf64ProgramHeader) };
+        let ph = unsafe { core::ptr::read_unaligned(binary.as_ptr().add(ph_offset) as *const Elf64ProgramHeader) };
         if ph.p_type == 3 {
             let offset = ph.p_offset as usize;
             let filesz = ph.p_filesz as usize;
@@ -139,6 +139,10 @@ pub fn load_elf_at(
 
         let start_vaddr = ph.p_vaddr + base_addr;
         let mem_size = ph.p_memsz;
+        let end_vaddr = start_vaddr.checked_add(mem_size).ok_or("program segment address overflow")?;
+        if end_vaddr > crate::memory::mmu::USER_END {
+            return Err("program segment exceeds userland address space");
+        }
         let file_size = ph.p_filesz;
         let file_offset = ph.p_offset as usize;
 
@@ -149,6 +153,7 @@ pub fn load_elf_at(
         let end_page = align_down(start_vaddr + mem_size.saturating_sub(1), 4096);
 
         let mut curr_page = start_page;
+        let file_end = start_vaddr + file_size;
 
         while curr_page <= end_page {
             let frame = alloc_frame().ok_or("out of frames")?;
@@ -157,34 +162,36 @@ pub fn load_elf_at(
                 .map_err(|_| "failed to map page")?;
 
             let direct_ptr = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
-            unsafe {
-                core::ptr::write_bytes(direct_ptr, 0, 4096);
-            }
-            curr_page += 4096;
-        }
+            let page_end = curr_page + 4096;
 
-        if file_size > 0 {
-            let src = &binary[file_offset..file_offset + file_size as usize];
-            let mut bytes_copied = 0usize;
+            if curr_page < file_end && page_end > start_vaddr {
+                let copy_start_vaddr = curr_page.max(start_vaddr);
+                let copy_end_vaddr = page_end.min(file_end);
+                let copy_len = (copy_end_vaddr - copy_start_vaddr) as usize;
 
-            while bytes_copied < file_size as usize {
-                let curr_vaddr = start_vaddr + bytes_copied as u64;
-                let page_offset = (curr_vaddr % 4096) as usize;
-                let chunk_len =
-                    core::cmp::min(4096 - page_offset, file_size as usize - bytes_copied);
-
-                let frame = space.translate(curr_vaddr);
-                let dest = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
+                let page_offset = (copy_start_vaddr - curr_page) as usize;
+                let file_data_offset = (copy_start_vaddr - start_vaddr) as usize;
 
                 unsafe {
+                    if page_offset > 0 {
+                        core::ptr::write_bytes(direct_ptr, 0, page_offset);
+                    }
                     core::ptr::copy_nonoverlapping(
-                        src.as_ptr().add(bytes_copied),
-                        dest.add(page_offset),
-                        chunk_len,
+                        binary.as_ptr().add(file_offset + file_data_offset),
+                        direct_ptr.add(page_offset),
+                        copy_len,
                     );
+                    let tail_offset = page_offset + copy_len;
+                    if tail_offset < 4096 {
+                        core::ptr::write_bytes(direct_ptr.add(tail_offset), 0, 4096 - tail_offset);
+                    }
                 }
-                bytes_copied += chunk_len;
+            } else {
+                unsafe {
+                    core::ptr::write_bytes(direct_ptr, 0, 4096);
+                }
             }
+            curr_page += 4096;
         }
     }
 

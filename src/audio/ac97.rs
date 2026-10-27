@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 use x86_64::instructions::port::Port;
 
@@ -43,8 +42,6 @@ pub struct Ac97 {
 unsafe impl Send for Ac97 {}
 unsafe impl Sync for Ac97 {}
 
-static INITIALIZED: AtomicBool = AtomicBool::new(false);
-
 impl Ac97 {
     pub fn init(device: &Device) -> Option<Self> {
         device.enable_io_bus_master();
@@ -59,7 +56,7 @@ impl Ac97 {
 
         // Allocate physical frames for ring buffers (4096 bytes each = 1024 16-bit stereo samples)
         let mut buf_virt = [core::ptr::null_mut(); NUM_BUFFERS];
-        for i in 0..NUM_BUFFERS {
+        for (i, slot) in buf_virt.iter_mut().enumerate() {
             let frame = crate::memory::allocator::alloc_frame()?;
             let phys = frame.start_address().as_u64() as u32;
             let virt = crate::paging::phys_to_direct(phys as u64) as *mut u8;
@@ -71,38 +68,28 @@ impl Ac97 {
                     flags: 0,
                 });
             }
-            buf_virt[i] = virt;
+            *slot = virt;
         }
 
-        // Reset Codec
         unsafe {
             Port::<u16>::new(nambar + AC97_RESET).write(1);
-            // Master Volume: 0 dB (unmuted)
             Port::<u16>::new(nambar + AC97_MASTER_VOL).write(0x0000);
-            // PCM Out Volume: 0 dB (unmuted)
             Port::<u16>::new(nambar + AC97_PCM_OUT_VOL).write(0x0000);
-            // Enable Variable Rate Audio (VRA)
             let mut ext_status = Port::<u16>::new(nambar + AC97_EXT_AUDIO_STATUS);
             let val = ext_status.read();
             ext_status.write(val | 1);
-            // Set Sample Rate to 44.1 kHz
             Port::<u16>::new(nambar + AC97_PCM_FRONT_DAC_RATE).write(44100);
 
-            // Reset DMA PCM-out channel
             let mut cr = Port::<u8>::new(nabmbar + AC97_PCM_OUT_CR);
             cr.write(CR_RESET);
             while (cr.read() & CR_RESET) != 0 {}
 
-            // Set BDL Physical Address
             Port::<u32>::new(nabmbar + AC97_PCM_OUT_BDBAR).write(bdl_phys);
-            // Initialize LVI to the last buffer so it plays silence on startup and halts cleanly
             Port::<u8>::new(nabmbar + AC97_PCM_OUT_LVI).write((NUM_BUFFERS - 1) as u8);
-            // Start DMA playback (plays initial silence and halts at NUM_BUFFERS - 1)
             cr.write(CR_RUN);
         }
 
         kinfo!("ac97: DMA audio playback initialized (44.1kHz 16-bit stereo)");
-        INITIALIZED.store(true, Ordering::Relaxed);
 
         Some(Self {
             nambar,

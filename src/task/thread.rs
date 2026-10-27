@@ -1,4 +1,4 @@
-use core::{arch::naked_asm, cell::UnsafeCell};
+use core::{arch::naked_asm, cell::UnsafeCell, sync::atomic::AtomicBool};
 
 use alloc::{boxed::Box, string::String};
 
@@ -58,6 +58,7 @@ pub(crate) struct Thread {
     pub fs_base: u64,
     pub timeslice: u64,
     pub fpu_state: Box<FxsaveArea>,
+    pub has_pending_signals: AtomicBool,
     rsp: UnsafeCell<usize>,
 }
 
@@ -74,6 +75,7 @@ impl Thread {
             fs_base: 0,
             timeslice: TIMESLICE_TICKS,
             fpu_state: Box::new(FxsaveArea::default_state()),
+            has_pending_signals: AtomicBool::new(false),
         }
     }
 
@@ -99,6 +101,7 @@ impl Thread {
             fs_base: 0,
             timeslice: TIMESLICE_TICKS,
             fpu_state: Box::new(FxsaveArea::default_state()),
+            has_pending_signals: AtomicBool::new(false),
         }
     }
 
@@ -158,6 +161,7 @@ impl Thread {
             fs_base: x86_64::registers::model_specific::FsBase::read().as_u64(),
             timeslice: TIMESLICE_TICKS,
             fpu_state,
+            has_pending_signals: AtomicBool::new(false),
         }
     }
 

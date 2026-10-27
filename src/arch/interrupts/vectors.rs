@@ -27,21 +27,19 @@ pub(crate) fn keys() -> u64 {
 
 #[unsafe(no_mangle)]
 extern "C" fn timer_interrupt_rust(cs: u64) {
-    let tick = TICKS.fetch_add(1, Ordering::Relaxed);
-    if tick.is_multiple_of(8) {
-        unsafe {
-            let mut lsr = Port::<u8>::new(0x3fd);
-            while lsr.read() & 1 != 0 {
-                let mut data = Port::<u8>::new(0x3f8);
-                let byte = data.read();
-                let ch = match byte {
-                    b'\r' => b'\n',
-                    0x7f | 0x08 => 0x08,
-                    b => b,
-                };
-                crate::tty::push_byte(ch);
-                KEYS.fetch_add(1, Ordering::Relaxed);
-            }
+    let _tick = TICKS.fetch_add(1, Ordering::Relaxed);
+    unsafe {
+        let mut lsr = Port::<u8>::new(0x3fd);
+        while lsr.read() & 1 != 0 {
+            let mut data = Port::<u8>::new(0x3f8);
+            let byte = data.read();
+            let ch = match byte {
+                b'\r' => b'\n',
+                0x7f | 0x08 => 0x08,
+                b => b,
+            };
+            crate::tty::push_byte(ch);
+            KEYS.fetch_add(1, Ordering::Relaxed);
         }
     }
     crate::net::stack::poll();

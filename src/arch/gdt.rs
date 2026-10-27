@@ -5,7 +5,20 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable};
 use x86_64::structures::tss::TaskStateSegment;
 pub(crate) const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 
-static TSS: Once<TaskStateSegment> = Once::new();
+#[repr(transparent)]
+struct SyncUnsafeCell<T>(core::cell::UnsafeCell<T>);
+unsafe impl<T> Sync for SyncUnsafeCell<T> {}
+
+impl<T> SyncUnsafeCell<T> {
+    const fn new(val: T) -> Self {
+        Self(core::cell::UnsafeCell::new(val))
+    }
+    fn get(&self) -> *mut T {
+        self.0.get()
+    }
+}
+
+static TSS: Once<SyncUnsafeCell<TaskStateSegment>> = Once::new();
 #[repr(C)]
 pub(crate) struct CpuScratch {
     pub kernel_stack_top: u64,
@@ -18,7 +31,7 @@ pub(crate) static mut CPU_SCRATCH: CpuScratch = CpuScratch {
     user_rsp: 0,
 };
 
-fn tss() -> &'static TaskStateSegment {
+fn tss_cell() -> &'static SyncUnsafeCell<TaskStateSegment> {
     TSS.call_once(|| {
         let mut tss = TaskStateSegment::new();
 
@@ -36,18 +49,16 @@ fn tss() -> &'static TaskStateSegment {
             let stack_start = VirtAddr::from_ptr(&raw const KERNEL_STACK);
             stack_start + STACK_SIZE as u64
         };
-        tss
+        SyncUnsafeCell::new(tss)
     })
 }
 
 pub(crate) fn set_kernel_stack_top(stack_top: u64) {
+    // SAFETY: Updates the per-CPU scratch and TSS privilege stack 0 for ring transitions.
     unsafe {
         CPU_SCRATCH.kernel_stack_top = stack_top;
+        (*tss_cell().get()).privilege_stack_table[0] = VirtAddr::new(stack_top);
     }
-    unsafe {
-        (*(tss() as *const _ as *mut TaskStateSegment)).privilege_stack_table[0] =
-            VirtAddr::new(stack_top)
-    };
 }
 
 static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
@@ -60,7 +71,7 @@ fn gdt() -> &'static (GlobalDescriptorTable, Selectors) {
         gdt.append(Descriptor::user_data_segment());
         let user_data_selector = gdt.append(Descriptor::user_data_segment());
         let user_code_selector = gdt.append(Descriptor::user_code_segment());
-        let tss_selector = gdt.append(Descriptor::tss_segment(tss()));
+        let tss_selector = gdt.append(Descriptor::tss_segment(unsafe { &*tss_cell().get() }));
 
         debug_assert_eq!(code_selector.0, 0x08);
         debug_assert_eq!(kernel_data_selector.0, 0x10);
@@ -106,7 +117,7 @@ pub(crate) fn kernel_data_selector() -> SegmentSelector {
 }
 
 pub(crate) fn tss_addr() -> u64 {
-    tss() as *const TaskStateSegment as u64
+    tss_cell().get() as u64
 }
 
 pub(crate) fn gdt_addr() -> u64 {

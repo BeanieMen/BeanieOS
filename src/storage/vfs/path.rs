@@ -4,7 +4,7 @@ use spin::Mutex;
 
 use super::{dentry::Dentry, inode::Inode};
 
-type CacheEntry = (Vec<u8>, Arc<Mutex<Dentry>>);
+type CacheEntry = (usize, Vec<u8>, Arc<Mutex<Dentry>>);
 static RESOLVE_CACHE: Mutex<Vec<CacheEntry>> = Mutex::new(Vec::new());
 
 pub(crate) fn invalidate_resolve_cache() {
@@ -33,11 +33,12 @@ impl Path {
             return Err("relative path");
         }
 
+        let root_key = Arc::as_ptr(&root) as usize;
         if let Some(dentry) = RESOLVE_CACHE
             .lock()
             .iter()
-            .find(|(p, _)| p.as_slice() == path)
-            .map(|(_, d)| d.clone())
+            .find(|(r, p, _)| *r == root_key && p.as_slice() == path)
+            .map(|(_, _, d)| d.clone())
         {
             return Ok(Self::new(dentry));
         }
@@ -91,7 +92,7 @@ impl Path {
             if cache.len() >= 32 {
                 cache.remove(0);
             }
-            cache.push((path.to_vec(), current.clone()));
+            cache.push((root_key, path.to_vec(), current.clone()));
         }
 
         Ok(Self::new(current))

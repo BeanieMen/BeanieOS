@@ -219,16 +219,16 @@ impl Writer {
             let mut x = 0usize;
             while x < FONT_WIDTH as usize {
                 if bits & (0x80 >> x) != 0 {
-                    unsafe { (base.add(x * bpp) as *mut u32).write(fg) };
+                    unsafe { (base.add(x * bpp) as *mut u32).write_unaligned(fg) };
                     if let Some(bb) = bb_base {
-                        unsafe { (bb.add(x * bpp) as *mut u32).write(fg) };
+                        unsafe { (bb.add(x * bpp) as *mut u32).write_unaligned(fg) };
                     }
                     x += 1;
                 } else {
                     while x < FONT_WIDTH as usize && bits & (0x80 >> x) == 0 {
-                        unsafe { (base.add(x * bpp) as *mut u32).write(bg) };
+                        unsafe { (base.add(x * bpp) as *mut u32).write_unaligned(bg) };
                         if let Some(bb) = bb_base {
-                            unsafe { (bb.add(x * bpp) as *mut u32).write(bg) };
+                            unsafe { (bb.add(x * bpp) as *mut u32).write_unaligned(bg) };
                         }
                         x += 1;
                     }
@@ -524,7 +524,7 @@ impl Writer {
             for dy in 0..h {
                 let off = (y + dy) as usize * fb.pitch as usize + x as usize * bpp;
                 for dx in 0..w {
-                    unsafe { (fb.addr.add(off + dx as usize * 4) as *mut u32).write(color) }
+                    unsafe { (fb.addr.add(off + dx as usize * 4) as *mut u32).write_unaligned(color) }
                 }
             }
         } else {

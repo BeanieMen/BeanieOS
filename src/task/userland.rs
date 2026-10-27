@@ -31,19 +31,23 @@ const USER: PageTableFlags = crate::memory::mmu::USER_RW;
 
 #[unsafe(naked)]
 pub unsafe extern "C" fn enter_userland(rip: u64, rsp: u64, rflags: u64, ss: u64, cs: u64) -> ! {
+    // SAFETY: Construct the 5-quadword iretq frame (SS, RSP, RFLAGS, CS, RIP) on the
+    // supervisor stack and execute iretq to drop to Ring 3 and switch to user RSP.
     naked_asm!(
-        "mov rsp, rsi",
-        "sub rsp, 40",
-        "mov [rsp], rdi",
-        "mov [rsp + 8], r8",
-        "mov [rsp + 16], rdx",
-        "mov [rsp + 24], rsi",
-        "mov [rsp + 32], rcx",
+        "push rcx", // SS
+        "push rsi", // RSP
+        "push rdx", // RFLAGS
+        "push r8",  // CS
+        "push rdi", // RIP
         "iretq",
     )
 }
 
 pub(crate) fn build() -> Option<AddressSpace> {
+    if USER_CODE.len() > PAGE_SIZE as usize {
+        return None;
+    }
+
     let mut space = AddressSpace::new_with_kernel().ok()?;
 
     let code = alloc_frame()?;

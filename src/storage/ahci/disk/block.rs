@@ -8,12 +8,18 @@ pub(crate) trait BlockDevice: Sync + Send + 'static {
 }
 
 impl BlockDevice for Disk {
-    fn sector_count(&self)->u64{self.sectors()}
+    fn sector_count(&self) -> u64 { self.sectors() }
     fn read_block(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
-        self.read_at(lba * 512, buf)
+        let at = lba
+            .checked_mul(self.block_size as u64)
+            .ok_or("sector offset overflows")?;
+        self.read_at(at, buf)
     }
     fn write_block(&mut self, lba: u64, buf: &[u8]) -> Result<(), &'static str> {
-        self.write_at(lba * 512, buf)
+        let at = lba
+            .checked_mul(self.block_size as u64)
+            .ok_or("sector offset overflows")?;
+        self.write_at(at, buf)
     }
     fn sector_size(&self) -> usize {
         self.block_size

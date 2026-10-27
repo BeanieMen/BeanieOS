@@ -45,24 +45,29 @@ const _: () = assert!(DIRECT_MAP_P4_INDEX == 510);
 const _: () = assert!(DIRECT_MAP_TABLES == 4);
 const _: () = assert!(DIRECT_MAP_SIZE == DIRECT_MAP_TABLES * P2_HUGE_SPAN);
 
+#[inline(always)]
 pub const fn in_image(virt: u64) -> bool {
     virt >= KERNEL_VIRTUAL_BASE && virt - KERNEL_VIRTUAL_BASE < IMAGE_SIZE
 }
 
+#[inline(always)]
 pub const fn kernel_to_phys(virt: u64) -> u64 {
     assert!(in_image(virt), "not a linked kernel address");
     virt - KERNEL_VIRTUAL_BASE
 }
 
+#[inline(always)]
 pub const fn in_direct_map(virt: u64) -> bool {
     virt >= DIRECT_MAP_BASE && virt - DIRECT_MAP_BASE < DIRECT_MAP_SIZE
 }
 
+#[inline(always)]
 pub const fn direct_to_phys(virt: u64) -> u64 {
     assert!(in_direct_map(virt), "not a direct-mapped address");
     virt - DIRECT_MAP_BASE
 }
 
+#[inline(always)]
 pub const fn phys_to_direct(phys: u64) -> u64 {
     assert!(
         phys < DIRECT_MAP_SIZE,
@@ -70,10 +75,13 @@ pub const fn phys_to_direct(phys: u64) -> u64 {
     );
     phys + DIRECT_MAP_BASE
 }
+
+#[inline(always)]
 pub const fn align_up(addr: u64) -> u64 {
     (addr + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
 }
 
+#[inline(always)]
 pub const fn align_down(addr: u64) -> u64 {
     addr & !(PAGE_SIZE - 1)
 }

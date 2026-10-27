@@ -20,26 +20,32 @@ impl Partition {
         &self.disk
     }
 
+    #[inline(always)]
     pub(crate) fn first_lba(&self) -> u64 {
         self.first
     }
 
+    #[inline(always)]
     pub(crate) fn sectors(&self) -> u64 {
         self.sectors
     }
 
+    #[inline(always)]
     pub(crate) fn byte_offset(&self) -> u64 {
         self.first * self.disk.sector_size()
     }
 
+    #[inline(always)]
     pub(crate) fn byte_len(&self) -> u64 {
         self.sectors * self.disk.sector_size()
     }
 
+    #[inline(always)]
     pub(crate) fn sector_size(&self) -> u64 {
         self.disk.sector_size()
     }
 
+    #[inline(always)]
     pub(crate) fn contains(&self, offset: u64, len: u64) -> bool {
         offset
             .checked_add(len)

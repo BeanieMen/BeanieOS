@@ -48,7 +48,7 @@ impl InodeOperations for PtyInodeOps {
 
 static PTY_INODE_OPS: PtyInodeOps = PtyInodeOps;
 
-struct PtyMasterOps;
+pub struct PtyMasterOps;
 
 impl FileOperations for PtyMasterOps {
     fn read(&self, inode: &Inode, _offset: u64, buf: &mut [u8]) -> Result<usize, &'static str> {
@@ -66,12 +66,16 @@ impl FileOperations for PtyMasterOps {
         loop {
             let mut g = chan.lock();
             if !g.out_buf.is_empty() {
-                let mut n = 0;
-                while n < buf.len() && !g.out_buf.is_empty() {
-                    buf[n] = g.out_buf.pop_front().unwrap();
-                    n += 1;
+                let to_read = buf.len().min(g.out_buf.len());
+                let (first, second) = g.out_buf.as_slices();
+                let first_len = to_read.min(first.len());
+                buf[..first_len].copy_from_slice(&first[..first_len]);
+                let second_len = to_read - first_len;
+                if second_len > 0 {
+                    buf[first_len..to_read].copy_from_slice(&second[..second_len]);
                 }
-                return Ok(n);
+                g.out_buf.drain(..to_read);
+                return Ok(to_read);
             }
             drop(g);
             if crate::task::process::has_pending_signals() {
@@ -88,11 +92,11 @@ impl FileOperations for PtyMasterOps {
             return Err("bad pty");
         };
         let mut g = chan.lock();
-        for &b in buf {
-            if g.in_buf.len() < 4096 {
-                g.in_buf.push_back(b);
-            }
-        }
+        let to_write = buf.len().min(4096usize.saturating_sub(g.in_buf.len()));
+        g.in_buf.extend(buf[..to_write].iter().copied());
+        drop(g);
+        drop(channels);
+        crate::arch::input::wake_waiters();
         Ok(buf.len())
     }
 
@@ -101,9 +105,9 @@ impl FileOperations for PtyMasterOps {
     }
 }
 
-static PTY_MASTER_OPS: PtyMasterOps = PtyMasterOps;
+pub static PTY_MASTER_OPS: PtyMasterOps = PtyMasterOps;
 
-struct PtySlaveOps;
+pub struct PtySlaveOps;
 
 impl FileOperations for PtySlaveOps {
     fn read(&self, inode: &Inode, _offset: u64, buf: &mut [u8]) -> Result<usize, &'static str> {
@@ -121,12 +125,16 @@ impl FileOperations for PtySlaveOps {
         loop {
             let mut g = chan.lock();
             if !g.in_buf.is_empty() {
-                let mut n = 0;
-                while n < buf.len() && !g.in_buf.is_empty() {
-                    buf[n] = g.in_buf.pop_front().unwrap();
-                    n += 1;
+                let to_read = buf.len().min(g.in_buf.len());
+                let (first, second) = g.in_buf.as_slices();
+                let first_len = to_read.min(first.len());
+                buf[..first_len].copy_from_slice(&first[..first_len]);
+                let second_len = to_read - first_len;
+                if second_len > 0 {
+                    buf[first_len..to_read].copy_from_slice(&second[..second_len]);
                 }
-                return Ok(n);
+                g.in_buf.drain(..to_read);
+                return Ok(to_read);
             }
             drop(g);
             if crate::task::process::has_pending_signals() {
@@ -143,11 +151,11 @@ impl FileOperations for PtySlaveOps {
             return Err("bad pty");
         };
         let mut g = chan.lock();
-        for &b in buf {
-            if g.out_buf.len() < 4096 {
-                g.out_buf.push_back(b);
-            }
-        }
+        let to_write = buf.len().min(4096usize.saturating_sub(g.out_buf.len()));
+        g.out_buf.extend(buf[..to_write].iter().copied());
+        drop(g);
+        drop(channels);
+        crate::arch::input::wake_waiters();
         Ok(buf.len())
     }
 
@@ -156,7 +164,43 @@ impl FileOperations for PtySlaveOps {
     }
 }
 
-static PTY_SLAVE_OPS: PtySlaveOps = PtySlaveOps;
+pub static PTY_SLAVE_OPS: PtySlaveOps = PtySlaveOps;
+
+pub fn is_master_readable(id: usize) -> bool {
+    let channels = PTY_CHANNELS.lock();
+    channels
+        .get(id)
+        .and_then(|c| c.as_ref())
+        .map(|c| !c.lock().out_buf.is_empty())
+        .unwrap_or(false)
+}
+
+pub fn is_master_writable(id: usize) -> bool {
+    let channels = PTY_CHANNELS.lock();
+    channels
+        .get(id)
+        .and_then(|c| c.as_ref())
+        .map(|c| c.lock().in_buf.len() < 4096)
+        .unwrap_or(false)
+}
+
+pub fn is_slave_readable(id: usize) -> bool {
+    let channels = PTY_CHANNELS.lock();
+    channels
+        .get(id)
+        .and_then(|c| c.as_ref())
+        .map(|c| !c.lock().in_buf.is_empty())
+        .unwrap_or(false)
+}
+
+pub fn is_slave_writable(id: usize) -> bool {
+    let channels = PTY_CHANNELS.lock();
+    channels
+        .get(id)
+        .and_then(|c| c.as_ref())
+        .map(|c| c.lock().out_buf.len() < 4096)
+        .unwrap_or(false)
+}
 
 pub fn create_ptmx_file(flags: OpenFlags) -> File {
     let mut channels = PTY_CHANNELS.lock();

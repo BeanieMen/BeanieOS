@@ -122,6 +122,12 @@ impl FramePool {
             .any(|a| a.overlaps(area))
     }
 
+    fn find_avoided(&self, area: &Area) -> Option<&Area> {
+        self.avoid[..self.avoid_len]
+            .iter()
+            .find(|a| a.overlaps(area))
+    }
+
     fn blocked_page(&self, addr: u64) -> bool {
         self.blocked(&Area::new(
             Self::page_floor(addr),
@@ -154,6 +160,9 @@ impl FramePool {
             self.issued[self.free_word] |= 1u64 << bit;
             self.live += 1;
             self.reused += 1;
+            if self.free[self.free_word] == 0 {
+                self.free_word = (self.free_word + 1) % BITMAP_WORDS;
+            }
 
             return Some(addr);
         }
@@ -166,12 +175,13 @@ impl FramePool {
             let area = self.areas[self.area_idx];
 
             if self.next + PAGE_SIZE <= area.end {
-                let addr = self.next;
-                self.next += PAGE_SIZE;
-
-                if self.blocked_page(addr) {
+                let candidate = Area::new(self.next, self.next + PAGE_SIZE);
+                if let Some(avoided) = self.find_avoided(&candidate) {
+                    self.next = (avoided.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
                     continue;
                 }
+                let addr = self.next;
+                self.next += PAGE_SIZE;
 
                 let page = (addr / PAGE_SIZE) as usize;
                 self.issued[page / 64] |= 1u64 << (page % 64);
@@ -215,19 +225,24 @@ impl FramePool {
             while cursor.checked_add(span).is_some_and(|end| end <= area.end) {
                 let run = Area::new(cursor, cursor + span);
 
-                let on_free_list = (cursor / PAGE_SIZE..(cursor + span) / PAGE_SIZE)
+                let occupied = (cursor / PAGE_SIZE..(cursor + span) / PAGE_SIZE)
                     .any(|page| {
                         let page = page as usize;
                         let mask = 1u64 << (page % 64);
-                        self.free[page / 64] & mask != 0 || self.issued[page / 64] & mask != 0
+                        self.issued[page / 64] & mask != 0
                     });
 
-                if !self.blocked(&run) && !on_free_list {
+                if !self.blocked(&run) && !occupied {
                     self.area_idx = index;
-                    self.next = cursor + span;
+                    self.next = self.next.max(cursor + span);
                     for page in cursor / PAGE_SIZE..(cursor + span) / PAGE_SIZE {
                         let page = page as usize;
-                        self.issued[page / 64] |= 1u64 << (page % 64);
+                        let mask = 1u64 << (page % 64);
+                        if self.free[page / 64] & mask != 0 {
+                            self.free[page / 64] &= !mask;
+                            self.free_len = self.free_len.saturating_sub(1);
+                        }
+                        self.issued[page / 64] |= mask;
                     }
                     self.live += frames;
 

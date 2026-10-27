@@ -98,14 +98,11 @@ extern "x86-interrupt" fn page_fault_handler(
     error_code: PageFaultErrorCode,
 ) {
     use x86_64::registers::control::Cr2;
-    if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION)
-        && error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE)
+    if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION | PageFaultErrorCode::CAUSED_BY_WRITE)
+        && let Ok(addr) = Cr2::read()
+        && crate::memory::mmu::handle_cow(addr.as_u64()).is_ok()
     {
-        if let Ok(addr) = Cr2::read() {
-            if crate::memory::mmu::handle_cow(addr.as_u64()).is_ok() {
-                return;
-            }
-        }
+        return;
     }
     crate::kerror!("EXCEPTION: PAGE FAULT");
     crate::kerror!("Accessed Address: {:?}", Cr2::read());

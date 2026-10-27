@@ -17,35 +17,45 @@ struct Mount {
     #[allow(dead_code)]
     fs: Arc<dyn FileSystem>,
     mountpoint: Option<Arc<Mutex<Dentry>>>,
+    prefix: Option<Vec<u8>>,
+    prefix_len: usize,
 }
 
 impl Mount {
     fn new(fs: Arc<dyn FileSystem>, mountpoint: Option<Arc<Mutex<Dentry>>>) -> Self {
         let root = fs.root();
+        let (prefix, prefix_len) = match &mountpoint {
+            None => (None, 0),
+            Some(dentry) => {
+                let bytes = dentry.lock().name.as_bytes().to_vec();
+                let len = bytes.len() + 1;
+                (Some(bytes), len)
+            }
+        };
 
         Self {
             root,
             fs,
             mountpoint,
+            prefix,
+            prefix_len,
         }
     }
 
+    #[inline(always)]
     fn prefix_len(&self) -> usize {
-        match &self.mountpoint {
-            None => 0,
-            Some(dentry) => dentry.lock().name.len() + 1,
-        }
+        self.prefix_len
     }
 
+    #[inline(always)]
     fn matches(&self, path: &[u8]) -> bool {
-        match &self.mountpoint {
+        match &self.prefix {
             None => true,
-            Some(dentry) => {
-                let name = dentry.lock().name.clone();
-
-                path.len() > name.len()
-                    && path.starts_with(name.as_bytes())
-                    && path[name.len()] == b'/'
+            Some(name) => {
+                path == name.as_slice()
+                    || (path.len() > name.len()
+                        && path.starts_with(name)
+                        && path[name.len()] == b'/')
             }
         }
     }
@@ -89,7 +99,18 @@ impl MountTable {
             .max_by_key(|mount| mount.prefix_len())
             .ok_or("no filesystem mounted")?;
 
-        Path::resolve(mount.root.clone(), path)
+        let sub_path = if mount.prefix_len() == 0 {
+            path
+        } else {
+            let rem = &path[mount.prefix_len()..];
+            if rem.is_empty() {
+                b"/"
+            } else {
+                rem
+            }
+        };
+
+        Path::resolve(mount.root.clone(), sub_path)
     }
 
     #[allow(dead_code)]

@@ -30,25 +30,14 @@ impl Disk {
             0x40 | ((lba >> 24) & 0x0f) as u8
         };
 
-        let fis: [u8; 16] = [
-            FIS_H2D_REGISTER,
-            0x80,
-            command,
-            0,
-            lba as u8,
-            (lba >> 8) as u8,
-            (lba >> 16) as u8,
-            device,
-            (lba >> 24) as u8,
-            (lba >> 32) as u8,
-            (lba >> 40) as u8,
-            0,
-            (count & 0xff) as u8,
-            (count >> 8) as u8,
-            0,
-            0,
-        ];
-        copy_volatile(table, &fis);
+        let f0 = (FIS_H2D_REGISTER as u32) | (0x80 << 8) | ((command as u32) << 16);
+        let f1 = (lba as u32 & 0x00ff_ffff) | ((device as u32) << 24);
+        let f2 = (lba >> 24) as u32 & 0x00ff_ffff;
+        let f3 = count as u32;
+        write_u32(table, 0, f0);
+        write_u32(table, 4, f1);
+        write_u32(table, 8, f2);
+        write_u32(table, 12, f3);
 
         write_u32(table, PRDT_LENGTH_OFFSET, PRD_SIZE);
         write_u32(table, CMD_TABLE_BASE_OFFSET, ctba as u32);

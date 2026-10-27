@@ -1,3 +1,4 @@
+use core::sync::atomic::{AtomicBool, Ordering};
 use alloc::{collections::BTreeMap, collections::VecDeque, sync::Arc, vec::Vec};
 use x86_64::VirtAddr;
 
@@ -10,6 +11,8 @@ use crate::task::{
 };
 
 const NUM_PRIORITIES: usize = 4;
+
+static RESCHEDULE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 struct Scheduler {
     threads: BTreeMap<ThreadId, Arc<InterruptMutex<Thread>>>,
@@ -155,11 +158,13 @@ impl Scheduler {
 
         if expired {
             self.reschedule_requested = true;
+            RESCHEDULE_REQUESTED.store(true, Ordering::Relaxed);
         }
     }
 
     fn yield_to(&mut self) -> Option<ContextSwitch> {
         let forced = core::mem::take(&mut self.reschedule_requested);
+        RESCHEDULE_REQUESTED.store(false, Ordering::Relaxed);
 
         if forced {
             return self.switch_to_any();
@@ -228,18 +233,16 @@ impl Scheduler {
     }
 
     fn activate(&mut self, next_id: ThreadId, previous_id: ThreadId) -> Option<ContextSwitch> {
-        // Reap dead threads whose context switch has finished (cannot reap previous_id or next_id).
-        let mut reaped = Vec::new();
-        self.dead_threads.retain(|&dead_id| {
+        // Reap dead threads whose context switch has finished without allocating heap memory.
+        let mut i = 0;
+        while i < self.dead_threads.len() {
+            let dead_id = self.dead_threads[i];
             if dead_id != previous_id && dead_id != next_id {
-                reaped.push(dead_id);
-                false
+                self.dead_threads.swap_remove(i);
+                self.threads.remove(&dead_id);
             } else {
-                true
+                i += 1;
             }
-        });
-        for dead_id in reaped {
-            self.threads.remove(&dead_id);
         }
 
         let (previous_slot, prev_pid, previous_fx) = {
@@ -278,11 +281,16 @@ impl Scheduler {
 
     fn wake_sleeping_threads(&mut self) {
         let now = self.ticks();
-        while let Some(&(deadline, id)) = self.sleeping.first() {
-            if now < deadline {
-                break;
-            }
-            self.sleeping.remove(0);
+        let count = self
+            .sleeping
+            .iter()
+            .take_while(|&&(deadline, _)| deadline <= now)
+            .count();
+        if count == 0 {
+            return;
+        }
+
+        for (_, id) in self.sleeping.drain(0..count) {
             if let Some(thread) = self.threads.get(&id) {
                 let mut thread = thread.lock();
                 if let ThreadState::Sleeping(_) = thread.state {
@@ -294,9 +302,12 @@ impl Scheduler {
     }
 
     fn take_next_ready(&mut self) -> Option<ThreadId> {
-        self.ready_queues
-            .iter_mut()
-            .find_map(|queue| queue.pop_front())
+        for queue in &mut self.ready_queues {
+            if let Some(id) = queue.pop_front() {
+                return Some(id);
+            }
+        }
+        None
     }
 
     fn block_current(&mut self) -> Option<ContextSwitch> {
@@ -398,7 +409,7 @@ pub(crate) fn add_forked_thread(thread: Thread) -> ThreadId {
 }
 
 pub(crate) fn is_reschedule_requested() -> bool {
-    SCHEDULER.lock().reschedule_requested
+    RESCHEDULE_REQUESTED.load(Ordering::Relaxed)
 }
 
 pub(crate) fn yield_now() {
@@ -493,6 +504,12 @@ pub(crate) fn exit() -> ! {
 
 pub(crate) fn account_tick() {
     SCHEDULER.lock().account_tick();
+}
+
+pub(crate) fn mark_thread_signal(id: ThreadId) {
+    if let Some(thread) = SCHEDULER.lock().threads.get(&id) {
+        thread.lock().has_pending_signals.store(true, Ordering::Release);
+    }
 }
 
 fn apply(switch: Option<ContextSwitch>) {

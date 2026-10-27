@@ -41,6 +41,28 @@ impl<T> InterruptMutex<T> {
             restore,
         }
     }
+
+    pub(crate) fn try_lock(&self) -> Option<InterruptGuard<'_, T>> {
+        let restore = interrupts::are_enabled();
+        interrupts::disable();
+
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            Some(InterruptGuard {
+                data: unsafe { &mut *self.data.get() },
+                locked: &self.locked,
+                restore,
+            })
+        } else {
+            if restore {
+                interrupts::enable();
+            }
+            None
+        }
+    }
 }
 
 pub(crate) struct InterruptGuard<'a, T> {

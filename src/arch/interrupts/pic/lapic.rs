@@ -108,6 +108,9 @@ fn calibrate() -> Option<u32> {
     let counts = u32::MAX.wrapping_sub(read32(LAPIC_TIMER_CURRENT_OFFSET)) as u64;
 
     let window_ns = elapsed * 1_000_000_000 / PIT_HZ;
+    if window_ns == 0 {
+        return None;
+    }
     let per_ms = counts * 1_000_000 / window_ns;
 
     if per_ms == 0 || per_ms > u32::MAX as u64 {
