@@ -107,19 +107,15 @@ impl FdTable {
         file.seek(target as u64)
     }
 
+    // Detach under one fd-table lock; run socket cleanup after releasing it.
+    pub(crate) fn take(&mut self, fd: u64) -> Result<File, &'static str> {
+        self.slots.get_mut(fd as usize)
+            .and_then(Option::take)
+            .ok_or("bad file descriptor")
+    }
+
     pub(crate) fn close(&mut self, fd: u64) -> Result<(), &'static str> {
-        let slot = self
-            .slots
-            .get_mut(fd as usize)
-            .ok_or("bad file descriptor")?;
-
-        if slot.is_none() {
-            return Err("bad file descriptor");
-        }
-
-        *slot = None;
-
-        Ok(())
+        self.take(fd).map(drop)
     }
 
     pub(crate) fn read(&mut self, fd: u64, buf: &mut [u8]) -> Result<usize, &'static str> {

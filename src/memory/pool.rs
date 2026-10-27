@@ -1,9 +1,10 @@
-use crate::paging::PAGE_SIZE;
+use crate::paging::{PAGE_SIZE, DIRECT_MAP_SIZE};
 
 pub const MAX_AREAS: usize = 64;
 
 pub const MAX_AVOID: usize = 3 + MAX_AREAS;
-pub const MAX_FREE: usize = 16384; // 64 MiB of free frames
+const FRAME_COUNT: usize = (DIRECT_MAP_SIZE / PAGE_SIZE) as usize;
+const BITMAP_WORDS: usize = FRAME_COUNT.div_ceil(64);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Area {
@@ -37,7 +38,9 @@ pub struct FramePool {
     next: u64,
     avoid: [Area; MAX_AVOID],
     avoid_len: usize,
-    free: [u64; MAX_FREE],
+    free: [u64; BITMAP_WORDS],
+    free_word: usize,
+    issued: [u64; BITMAP_WORDS],
     free_len: usize,
     live: usize,
     reused: usize,
@@ -52,7 +55,9 @@ impl FramePool {
             next: 0,
             avoid: [Area::new(0, 0); MAX_AVOID],
             avoid_len: 0,
-            free: [0; MAX_FREE],
+            free: [0; BITMAP_WORDS],
+            free_word: 0,
+            issued: [0; BITMAP_WORDS],
             free_len: 0,
             live: 0,
             reused: 0,
@@ -65,6 +70,9 @@ impl FramePool {
         self.next = 0;
         self.avoid_len = 0;
         self.free_len = 0;
+        self.free.fill(0);
+        self.issued.fill(0);
+        self.free_word = 0;
         self.live = 0;
         self.reused = 0;
     }
@@ -73,7 +81,12 @@ impl FramePool {
         if self.area_len >= MAX_AREAS {
             return false;
         }
-        if area.end <= area.start {
+        // Bitmap indexes cover exactly the reachable direct-map window.
+        // Reject rather than silently accept areas that cannot be tracked.
+        if area.end <= area.start || area.end > DIRECT_MAP_SIZE {
+            return false;
+        }
+        if self.areas[..self.area_len].iter().any(|a| a.overlaps(&area)) {
             return false;
         }
 
@@ -130,9 +143,15 @@ impl FramePool {
 
     pub fn alloc(&mut self) -> Option<u64> {
         if self.free_len > 0 {
+            while self.free[self.free_word] == 0 {
+                self.free_word = (self.free_word + 1) % BITMAP_WORDS;
+            }
+            let bit = self.free[self.free_word].trailing_zeros() as usize;
+            self.free[self.free_word] &= !(1u64 << bit);
             self.free_len -= 1;
-            let addr = self.free[self.free_len];
+            let addr = ((self.free_word * 64 + bit) as u64) * PAGE_SIZE;
 
+            self.issued[self.free_word] |= 1u64 << bit;
             self.live += 1;
             self.reused += 1;
 
@@ -154,6 +173,8 @@ impl FramePool {
                     continue;
                 }
 
+                let page = (addr / PAGE_SIZE) as usize;
+                self.issued[page / 64] |= 1u64 << (page % 64);
                 self.live += 1;
 
                 return Some(addr);
@@ -174,7 +195,10 @@ impl FramePool {
             return None;
         }
 
-        let span = frames as u64 * PAGE_SIZE;
+        let span = (frames as u64).checked_mul(PAGE_SIZE)?;
+        if span > DIRECT_MAP_SIZE {
+            return None;
+        }
 
         let mut index = self.area_idx;
         let mut cursor = self.next;
@@ -186,18 +210,25 @@ impl FramePool {
                 cursor = area.start;
             }
 
-            cursor = Self::page_floor(cursor);
+            cursor = cursor.checked_add(PAGE_SIZE - 1)? & !(PAGE_SIZE - 1);
 
-            while cursor + span <= area.end {
+            while cursor.checked_add(span).is_some_and(|end| end <= area.end) {
                 let run = Area::new(cursor, cursor + span);
 
-                let on_free_list = self.free[..self.free_len]
-                    .iter()
-                    .any(|frame| run.contains(*frame));
+                let on_free_list = (cursor / PAGE_SIZE..(cursor + span) / PAGE_SIZE)
+                    .any(|page| {
+                        let page = page as usize;
+                        let mask = 1u64 << (page % 64);
+                        self.free[page / 64] & mask != 0 || self.issued[page / 64] & mask != 0
+                    });
 
                 if !self.blocked(&run) && !on_free_list {
                     self.area_idx = index;
                     self.next = cursor + span;
+                    for page in cursor / PAGE_SIZE..(cursor + span) / PAGE_SIZE {
+                        let page = page as usize;
+                        self.issued[page / 64] |= 1u64 << (page % 64);
+                    }
                     self.live += frames;
 
                     return Some(cursor);
@@ -229,11 +260,20 @@ impl FramePool {
             return false;
         }
 
-        if self.free_len >= MAX_FREE {
+        // Every reachable physical page has a bit, independent of heap space.
+        let page = (addr / PAGE_SIZE) as usize;
+        if page >= FRAME_COUNT || self.live == 0 {
             return false;
         }
-
-        self.free[self.free_len] = addr;
+        let mask = 1u64 << (page % 64);
+        if self.issued[page / 64] & mask == 0 {
+            return false;
+        }
+        self.issued[page / 64] &= !mask;
+        self.free[page / 64] |= mask;
+        if self.free_len == 0 {
+            self.free_word = page / 64;
+        }
         self.free_len += 1;
         self.live -= 1;
 

@@ -15,10 +15,13 @@ unsafe fn rep_movsb(dest: &mut *mut u8, src: &mut *const u8, count: usize) {
     unsafe {
         core::arch::asm!(
             "cld",
+            "rep movsq",
+            "mov rcx, {tail}",
             "rep movsb",
+            tail = in(reg) count % 8,
             inout("rdi") *dest,
             inout("rsi") *src,
-            inout("rcx") count => _,
+            inout("rcx") count / 8 => _,
             options(nostack),
         );
     }
@@ -44,13 +47,17 @@ unsafe fn rep_movsb_backwards(dest: &mut *mut u8, src: &mut *const u8, count: us
 
 #[inline(always)]
 unsafe fn rep_stosb(dest: &mut *mut u8, value: u8, count: usize) {
+    let repeated = u64::from(value) * 0x0101010101010101;
     unsafe {
         core::arch::asm!(
             "cld",
+            "rep stosq",
+            "mov rcx, {tail}",
             "rep stosb",
+            tail = in(reg) count % 8,
             inout("rdi") *dest,
-            in("rax") value as u64 as u32,
-            inout("rcx") count => _,
+            in("rax") repeated,
+            inout("rcx") count / 8 => _,
             options(nostack),
         );
     }

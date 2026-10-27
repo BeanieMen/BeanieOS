@@ -26,6 +26,7 @@ pub(crate) struct Regs {
     pub rdx: u64,
     pub rcx: u64,
     pub rax: u64,
+    pub rbx: u64,
 }
 
 #[repr(C)]
@@ -43,7 +44,7 @@ pub(crate) struct SyscallFrame {
 pub unsafe extern "C" fn fork_return_trampoline() -> ! {
     naked_asm!(
         "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
-        "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rax", "iretq",
+        "pop rbp", "pop rdi", "pop rsi", "pop rdx", "pop rcx", "pop rax", "pop rbx", "iretq",
     );
 }
 
@@ -62,6 +63,7 @@ pub unsafe extern "C" fn syscall_entry() -> ! {
         "push 0x2b",   // User CS (selector 5 | 3)
         "push rcx",    // User RIP (saved by CPU in rcx)
         // 3. Save GPRs to match SyscallFrame
+        "push rbx",
         "push rax",
         "push rcx",
         "push rdx",
@@ -78,10 +80,9 @@ pub unsafe extern "C" fn syscall_entry() -> ! {
         "push r15",
         "xor eax, eax", // Reset SS to 0 for Ring 0 to prevent #GP on nested interrupt iretq
         "mov ss, eax",
-        "sub rsp, 8", // Align stack to 16 bytes for System V ABI call
-        "lea rdi, [rsp + 8]",
+        // 15 saved GPRs + 5 iret words keep RSP 16-byte aligned.
+        "mov rdi, rsp",
         "call syscall_c",
-        "add rsp, 8",
         "pop r15",
         "pop r14",
         "pop r13",
@@ -96,6 +97,7 @@ pub unsafe extern "C" fn syscall_entry() -> ! {
         "pop rdx",
         "pop rcx",
         "pop rax",
+        "pop rbx",
         "iretq",
     );
 }
@@ -103,6 +105,7 @@ pub unsafe extern "C" fn syscall_entry() -> ! {
 #[unsafe(naked)]
 pub unsafe extern "C" fn stub() -> ! {
     naked_asm!(
+        "push rbx",
         "push rax",
         "push rcx",
         "push rdx",
@@ -117,10 +120,8 @@ pub unsafe extern "C" fn stub() -> ! {
         "push r13",
         "push r14",
         "push r15",
-        "sub rsp, 8",
-        "lea rdi, [rsp + 8]",
+        "mov rdi, rsp",
         "call syscall_c",
-        "add rsp, 8",
         "pop r15",
         "pop r14",
         "pop r13",
@@ -135,6 +136,7 @@ pub unsafe extern "C" fn stub() -> ! {
         "pop rdx",
         "pop rcx",
         "pop rax",
+        "pop rbx",
         "iretq",
     )
 }

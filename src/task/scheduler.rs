@@ -407,6 +407,22 @@ pub(crate) fn yield_now() {
     apply(switch);
 }
 
+// Boot/idle context only. Never call with a device/process/inode lock held.
+// Queue inspection and no-switch STI;HLT have no IRQ-enabled gap. When
+// switching, assembly saves IF=1 for the old idle context without enabling
+// interrupts between scheduler identity publication and stack application.
+pub(crate) fn idle_yield_or_wait() {
+    x86_64::instructions::interrupts::disable();
+    let switch = SCHEDULER.lock().yield_to();
+    if switch.is_some() {
+        if let Some(ContextSwitch { previous_slot, next_rsp, previous_fx, next_fx }) = switch {
+            unsafe { crate::task::thread::switch_context_idle(previous_slot, next_rsp, previous_fx, next_fx) };
+        }
+    } else {
+        x86_64::instructions::interrupts::enable_and_hlt();
+    }
+}
+
 pub(crate) fn yield_or_wait() {
     let switch = SCHEDULER.lock().yield_to();
     if let Some(s) = switch {

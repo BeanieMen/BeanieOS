@@ -199,41 +199,49 @@ impl ProcessManager {
         let mut space = mmu::AddressSpace::from_root(root);
 
         const MAP_FIXED: u64 = 0x10;
-        let target = if flags & MAP_FIXED != 0 && addr != 0 {
-            addr & !4095
-        } else {
-            let next = p.mmap_next;
-            p.mmap_next += (len + 4095) & !4095;
-            next
+        let fixed = flags & MAP_FIXED != 0 && addr != 0;
+        let span = match len.checked_add(4095) {
+            Some(n) => n & !4095,
+            None => { core::mem::forget(space); return Err(()); }
         };
-
-        let span = (len + 4095) & !4095;
-        if target == 0 || target.checked_add(span).is_none_or(|end| end > mmu::USER_END) {
+        let target = if fixed { addr & !4095 } else { p.mmap_next };
+        let Some(end) = target.checked_add(span).filter(|end| *end <= mmu::USER_END) else {
+            core::mem::forget(space); return Err(());
+        };
+        if target == 0 { core::mem::forget(space); return Err(()); }
+        let pages = span / 4096;
+        let mut mapped = 0u64;
+        let mut failed_at = None;
+        for i in 0..pages {
+            let virt = target + i * 4096;
+            let Some(frame) = alloc_frame() else { failed_at = Some(virt); break; };
+            let direct = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
+            unsafe { core::ptr::write_bytes(direct, 0, 4096); }
+            let result = if fixed { space.map(virt, frame, mmu::USER_RW) } else { space.map_fresh_page(virt, frame) };
+            if result.is_err() {
+                // map() writes its leaf only after walk() succeeds.
+                if !fixed { crate::memory::allocator::free_frame(frame.start_address().as_u64()); }
+                failed_at = Some(virt); break;
+            }
+            mapped += 1;
+        }
+        if let Some(virt) = failed_at {
+            if !fixed {
+                // Reverse order lets empty table subtrees be reclaimed safely.
+                space.prune_empty_user_path(virt);
+                for i in (0..mapped).rev() {
+                    let at = target + i * 4096;
+                    space.rollback_fresh_page(at);
+                    if at % (512 * 4096) == 0 || i == 0 { space.prune_empty_user_path(at); }
+                }
+            } else {
+                // Existing MAP_FIXED partial-replacement behavior is unchanged.
+            }
             core::mem::forget(space);
             return Err(());
         }
-
-        let pages = len.div_ceil(4096);
-        let mut failed = false;
-        for i in 0..pages {
-            let virt = target + i * 4096;
-            let Some(frame) = alloc_frame() else {
-                failed = true;
-                break;
-            };
-            let direct = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
-            unsafe {
-                core::ptr::write_bytes(direct, 0, 4096);
-            }
-            if space.map(virt, frame, mmu::USER_RW).is_err() {
-                failed = true;
-                break;
-            }
-        }
+        if !fixed { p.mmap_next = end; }
         core::mem::forget(space);
-        if failed {
-            return Err(());
-        }
         Ok(target)
     }
 

@@ -74,82 +74,12 @@ impl FileOperations for SocketFileOps {
             map.get(&inode.id).cloned().ok_or("socket not found")?
         };
 
-        loop {
-            let mut s = sock.lock();
-            match &mut s.state {
-                SocketState::Connected {
-                    peer: _,
-                    rx_buffer,
-                    peer_closed,
-                } => {
-                    if !rx_buffer.is_empty() {
-                        let to_read = core::cmp::min(buf.len(), rx_buffer.len());
-
-                        for i in 0..to_read {
-                            buf[i] = rx_buffer.pop_front().unwrap();
-                        }
-                        return Ok(to_read);
-                    }
-
-                    if *peer_closed {
-                        return Ok(0);
-                    }
-                }
-
-                SocketState::Closed => return Ok(0),
-                _ => return Err("socket not connected"),
-            }
-            drop(s);
-            if crate::task::process::has_pending_signals() {
-                return Err("interrupted");
-            }
-            yield_now();
-        }
+        read_socket(&sock, buf)
     }
 
-    fn write(
-        &self,
-        inode: &mut Inode,
-        _offset: u64,
-        buf: &[u8],
-    ) -> Result<usize, &'static str> {
-        let sock = {
-            let map = SOCKET_MAP.lock();
-            map.get(&inode.id).cloned().ok_or("socket not found")?
-        };
-        let peer_arc = {
-            let s = sock.lock();
-            match &s.state {
-                SocketState::Connected {
-                    peer, peer_closed, ..
-                } => {
-                    if *peer_closed {
-                        return Err("broken pipe");
-                    }
-                    peer.upgrade().ok_or("broken pipe")?
-                }
-                _ => return Err("socket not connected"),
-            }
-        };
-        let mut peer_sock = peer_arc.lock();
-        if let SocketState::Connected { rx_buffer, .. } = &mut peer_sock.state {
-            let mut pushed = 0;
-            for &b in buf {
-                if rx_buffer.len() < 65536 {
-                    rx_buffer.push_back(b);
-                    pushed += 1;
-                } else {
-                    break;
-                }
-            }
-            if pushed == 0 && !buf.is_empty() {
-                Err("would block")
-            } else {
-                Ok(pushed)
-            }
-        } else {
-            Err("broken pipe")
-        }
+    fn write(&self, inode: &mut Inode, _offset: u64, buf: &[u8]) -> Result<usize, &'static str> {
+        let sock = SOCKET_MAP.lock().get(&inode.id).cloned().ok_or("socket not found")?;
+        write_socket(&sock, buf)
     }
 
     fn readdir(
@@ -174,7 +104,7 @@ pub static SOCKET_FILE_OPS: SocketFileOps = SocketFileOps;
 pub fn create_socket_file(sock: Arc<Mutex<UnixSocket>>) -> File {
     let id = NEXT_SOCKET_ID.fetch_add(1, Relaxed);
 
-    SOCKET_MAP.lock().insert(id, sock);
+    SOCKET_MAP.lock().insert(id, sock.clone());
 
     let inode = Inode {
         id,
@@ -188,7 +118,9 @@ pub fn create_socket_file(sock: Arc<Mutex<UnixSocket>>) -> File {
         dir_name: [0u8; 11],
     };
 
-    File::new(Arc::new(Mutex::new(inode)), OpenFlags::RDWR)
+    let mut file = File::new(Arc::new(Mutex::new(inode)), OpenFlags::RDWR);
+    file.unix_socket = Some(sock);
+    file
 }
 
 pub fn create_connected_pair() -> (Arc<Mutex<UnixSocket>>, Arc<Mutex<UnixSocket>>) {
@@ -205,4 +137,70 @@ pub fn create_connected_pair() -> (Arc<Mutex<UnixSocket>>, Arc<Mutex<UnixSocket>
         peer_closed: false,
     };
     (a, b)
+}
+
+// Shared by inode operations and the attached open-file identity. Keeping one
+// implementation preserves blocking, signal, capacity and short-count behavior.
+pub(crate) fn read_socket(sock: &Arc<Mutex<UnixSocket>>, buf: &mut [u8]) -> Result<usize, &'static str> {
+        loop {
+            let mut s = sock.lock();
+            match &mut s.state {
+                SocketState::Connected {
+                    peer: _,
+                    rx_buffer,
+                    peer_closed,
+                } => {
+                    if !rx_buffer.is_empty() {
+                        let to_read = core::cmp::min(buf.len(), rx_buffer.len());
+
+                        let (first, second) = rx_buffer.as_slices();
+                        let first_len = to_read.min(first.len());
+                        buf[..first_len].copy_from_slice(&first[..first_len]);
+                        buf[first_len..to_read].copy_from_slice(&second[..to_read - first_len]);
+                        rx_buffer.drain(..to_read);
+                        return Ok(to_read);
+                    }
+
+                    if *peer_closed {
+                        return Ok(0);
+                    }
+                }
+
+                SocketState::Closed => return Ok(0),
+                _ => return Err("socket not connected"),
+            }
+            drop(s);
+            if crate::task::process::has_pending_signals() {
+                return Err("interrupted");
+            }
+            yield_now();
+        }
+}
+pub(crate) fn write_socket(sock: &Arc<Mutex<UnixSocket>>, buf: &[u8]) -> Result<usize, &'static str> {
+        let peer_arc = {
+            let s = sock.lock();
+            match &s.state {
+                SocketState::Connected {
+                    peer, peer_closed, ..
+                } => {
+                    if *peer_closed {
+                        return Err("broken pipe");
+                    }
+                    peer.upgrade().ok_or("broken pipe")?
+                }
+                _ => return Err("socket not connected"),
+            }
+        };
+        let mut peer_sock = peer_arc.lock();
+        if let SocketState::Connected { rx_buffer, .. } = &mut peer_sock.state {
+            let pushed = buf.len().min(65536 - rx_buffer.len());
+            rx_buffer.extend(&buf[..pushed]);
+            if pushed == 0 && !buf.is_empty() {
+                Err("would block")
+            } else {
+                Ok(pushed)
+            }
+        } else {
+            Err("broken pipe")
+        }
 }

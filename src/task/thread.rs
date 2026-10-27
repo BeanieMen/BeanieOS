@@ -243,3 +243,43 @@ pub unsafe extern "C" fn switch_context(
         "ret",
     );
 }
+
+// Boot/idle-only variant: save an enabled return IF, keeping live IRQs masked
+// until the next thread stack and saved flags are restored.
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn switch_context_idle(
+    old_rsp: *mut usize,
+    new_rsp: usize,
+    old_fx: *mut u8,
+    new_fx: *const u8,
+) {
+    naked_asm!(
+        "pushfq",
+        "or qword ptr [rsp], 0x200",
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push rbx",
+        "push rbp",
+        "test rdx, rdx",
+        "jz 1f",
+        "fxsave64 [rdx]",
+        "1:",
+        "mov [rdi], rsp",
+        "mov rsp, rsi",
+        "test rcx, rcx",
+        "jz 2f",
+        "fxrstor64 [rcx]",
+        "2:",
+        "pop rbp",
+        "pop rbx",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+        "popfq",
+        "ret",
+    );
+}

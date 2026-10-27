@@ -4,9 +4,11 @@ pub(crate) trait BlockDevice: Sync + Send + 'static {
     fn read_block(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str>;
     fn write_block(&mut self, lba: u64, buf: &[u8]) -> Result<(), &'static str>;
     fn sector_size(&self) -> usize;
+    fn sector_count(&self) -> u64;
 }
 
 impl BlockDevice for Disk {
+    fn sector_count(&self)->u64{self.sectors()}
     fn read_block(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
         self.read_at(lba * 512, buf)
     }
@@ -19,6 +21,7 @@ impl BlockDevice for Disk {
 }
 
 impl BlockDevice for super::partition::Partition {
+    fn sector_count(&self)->u64{self.sectors()}
     fn read_block(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), &'static str> {
         let at = lba
             .checked_mul(self.sector_size())

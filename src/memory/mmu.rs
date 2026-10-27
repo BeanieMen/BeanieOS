@@ -30,13 +30,23 @@ pub(crate) fn inc_frame_ref(phys: u64) {
     *refs.entry(phys).or_insert(1) += 1;
 }
 
+/// Drops one mapping of `phys` and returns how many mappings remain.
+/// Only frames shared by 2+ mappings have an entry; an absent entry means a
+/// single owner, so the return is 0. An entry that falls to 1 is removed so
+/// stale counts cannot leak into a later reuse of the same frame.
 pub(crate) fn dec_frame_ref(phys: u64) -> u32 {
     let mut refs = FRAME_REFS.lock();
-    if let Some(count) = refs.get_mut(&phys) {
-        *count = count.saturating_sub(1);
-        *count
-    } else {
-        0
+    match refs.get_mut(&phys) {
+        Some(count) => {
+            let left = count.saturating_sub(1);
+            if left <= 1 {
+                refs.remove(&phys);
+            } else {
+                *count = left;
+            }
+            left
+        }
+        None => 0,
     }
 }
 pub(crate) fn init_pat() {
@@ -559,13 +569,92 @@ impl AddressSpace {
         if leaf & PTE_PRESENT != 0 {
             let phys = leaf & PTE_ADDR_MASK;
             unsafe { write_entry(table, leaf_idx, 0) };
-            crate::memory::allocator::free_frame(phys);
+            if dec_frame_ref(phys) == 0 {
+                crate::memory::allocator::free_frame(phys);
+            }
         }
         let (current_cr3, _) = Cr3::read();
         if self.root == current_cr3 {
             x86_64::instructions::tlb::flush(VirtAddr::new(virt));
         }
         Ok(())
+    }
+
+    // Fresh mappings reject present leaves and huge mappings, rather than
+    // replacing aliases or splitting huge mappings. Failure never publishes
+    // target; empty intermediate nodes may exist and are pruned by rollback.
+    pub(crate) fn map_fresh_page(&mut self, virt: u64, target: PhysFrame) -> Result<(), MemoryError> {
+        if virt >= USER_END { return Err(MemoryError::AddressOutOfRange); }
+        let mut frame = self.root_addr();
+        for level in 0..P1_LEVEL as usize {
+            let table = phys_to_direct(frame);
+            let idx = index(virt, level);
+            let entry = unsafe { read_entry(table, idx) };
+            if entry & PTE_HUGE != 0 { return Err(MemoryError::AddressOutOfRange); }
+            frame = if entry & PTE_PRESENT == 0 {
+                let child = new_table()?;
+                unsafe { write_entry(table, idx, child | PTE_PRESENT | PTE_WRITABLE | PTE_USER); }
+                child
+            } else { entry & PTE_ADDR_MASK };
+        }
+        let table = phys_to_direct(frame);
+        let leaf = index(virt, P1_LEVEL as usize);
+        if unsafe { read_entry(table, leaf) } & PTE_PRESENT != 0 { return Err(MemoryError::AddressOutOfRange); }
+        unsafe { write_entry(table, leaf, target.start_address().as_u64() | USER_RW.bits()); }
+        if self.root == current_cr3() { x86_64::instructions::tlb::flush(VirtAddr::new(virt)); }
+        Ok(())
+    }
+
+    // This path is used only for the newly allocated prefix of a failed mmap.
+    // Invalidate the leaf BEFORE its physical frame can be reused.
+    pub(crate) fn rollback_fresh_page(&mut self, virt: u64) {
+        let mut frame = self.root_addr();
+        for level in 0..P1_LEVEL as usize {
+            let entry = unsafe { read_entry(phys_to_direct(frame), index(virt, level)) };
+            if entry & PTE_PRESENT == 0 || entry & PTE_HUGE != 0 { return; }
+            frame = entry & PTE_ADDR_MASK;
+        }
+        let table = phys_to_direct(frame);
+        let idx = index(virt, P1_LEVEL as usize);
+        let entry = unsafe { read_entry(table, idx) };
+        if entry & PTE_PRESENT != 0 {
+            unsafe { write_entry(table, idx, 0); }
+            if self.root == current_cr3() { x86_64::instructions::tlb::flush(VirtAddr::new(virt)); }
+            let phys = entry & PTE_ADDR_MASK;
+            if dec_frame_ref(phys) == 0 { free_frame(phys); }
+        }
+    }
+
+    // Reclaim only empty user-owned page-table nodes. Leaves and huge mappings
+    // are never freed here. Caller owns the address-space mutation lock.
+    pub(crate) fn prune_empty_user_path(&mut self, virt: u64) {
+        if virt >= USER_END { return; }
+        let mut frames = [0u64; 4];
+        let mut slots = [0u64; 3];
+        frames[0] = self.root_addr();
+        let mut depth = 0;
+        for level in 0..3 {
+            let idx = index(virt, level);
+            if level == 0 && is_shared_slot(idx) { return; }
+            let table = phys_to_direct(frames[level]);
+            let entry = unsafe { read_entry(table, idx) };
+            if entry & PTE_PRESENT == 0 || entry & PTE_HUGE != 0 { break; }
+            slots[level] = idx;
+            frames[level + 1] = entry & PTE_ADDR_MASK;
+            depth = level + 1;
+        }
+        while depth > 0 {
+            let table = phys_to_direct(frames[depth]);
+            if (0..ENTRIES_PER_TABLE).any(|idx| unsafe { read_entry(table, idx) } & PTE_PRESENT != 0) { break; }
+            unsafe { write_entry(phys_to_direct(frames[depth-1]), slots[depth-1], 0); }
+            // Invalidate all non-global paging-structure caches BEFORE this
+            // table frame is returned to the allocator and can be reused.
+            // Inactive roots are flushed by switch_cr3 before user execution.
+            if self.root == current_cr3() { x86_64::instructions::tlb::flush_all(); }
+            free_frame(frames[depth]);
+            depth -= 1;
+        }
+        if self.root == current_cr3() { x86_64::instructions::tlb::flush(VirtAddr::new(virt)); }
     }
 
     pub(crate) fn map_fresh(
@@ -721,13 +810,16 @@ pub(crate) fn handle_cow(fault_addr: u64) -> Result<(), ()> {
             }
             let old_phys = entry & PTE_ADDR_MASK;
             let rem = dec_frame_ref(old_phys);
-            if rem <= 1 {
+            if rem == 0 {
                 let new_entry = (entry & !PTE_COW) | PTE_WRITABLE;
                 unsafe {
                     write_entry(table_virt, idx, new_entry);
                 }
             } else {
-                let new_frame = alloc_frame().ok_or(())?;
+                let Some(new_frame) = alloc_frame() else {
+                    inc_frame_ref(old_phys);
+                    return Err(());
+                };
                 let new_phys = new_frame.start_address().as_u64();
                 unsafe {
                     core::ptr::copy_nonoverlapping(

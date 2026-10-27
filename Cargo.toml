@@ -11,7 +11,7 @@ panic = "abort"
 panic = "abort"
 lto = "fat"
 codegen-units = 1
-opt-level = 3
+opt-level = 2
 
 [[bin]]
 name = "beanieos"

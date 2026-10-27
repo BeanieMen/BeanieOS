@@ -73,6 +73,9 @@ pub(crate) struct File {
     pub inode: Arc<Mutex<Inode>>,
     pub offset: u64,
     pub flags: OpenFlags,
+    // Immutable open-file identity, not cached readiness. Cloned with dup/fork;
+    // each readiness scan still resolves its current FD slot and locks state.
+    pub unix_socket: Option<Arc<Mutex<crate::net::unix::UnixSocket>>>,
 }
 
 impl File {
@@ -81,6 +84,7 @@ impl File {
             inode,
             offset: 0,
             flags,
+            unix_socket: None,
         }
     }
 
@@ -151,6 +155,10 @@ impl File {
             return Err("file is not open for reading");
         }
 
+        if let Some(sock) = &self.unix_socket {
+            return crate::net::vfs::read_socket(sock, buf);
+        }
+
         let (inode, is_dev) = {
             let inode = self.inode.lock();
             if inode.file_type != FileType::Regular && inode.file_type != FileType::Device {
@@ -172,6 +180,10 @@ impl File {
     pub(crate) fn write(&mut self, buf: &[u8]) -> Result<usize, &'static str> {
         if !self.writable() {
             return Err("file is not open for writing");
+        }
+
+        if let Some(sock) = &self.unix_socket {
+            return crate::net::vfs::write_socket(sock, buf);
         }
 
         let offset = if self.flags.append {

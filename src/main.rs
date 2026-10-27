@@ -63,8 +63,12 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
         if let Some((bar0, _size)) = dev.bar0_info() {
             let va = paging::phys_to_direct(bar0);
             let e1000 = net::e1000::E1000::init(x86_64::VirtAddr::new(va));
-            *net::e1000::E1000_DEVICE.lock() = Some(e1000);
-            net::stack::init_stack();
+            // Timer polls acquire these same locks. Keep publication atomic
+            // against that IRQ on this single-CPU boot path.
+            x86_64::instructions::interrupts::without_interrupts(|| {
+                *net::e1000::E1000_DEVICE.lock() = Some(e1000);
+                net::stack::init_stack();
+            });
             kinfo!("e1000 initialized at {:#x}", va);
             break;
         }
@@ -92,8 +96,7 @@ fn kernel_main(boot_info: BootInformation<'_>, mbi_addr: u32, mbi_size: usize) -
     );
 
     loop {
-        task::scheduler::yield_now();
-        x86_64::instructions::hlt();
+        task::scheduler::idle_yield_or_wait();
     }
 }
 

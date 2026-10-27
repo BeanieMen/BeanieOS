@@ -1373,12 +1373,21 @@ fn sys_exit(code: u64) -> ! {
 }
 
 fn sys_write(fd: u64, buf: u64, len: u64) -> SyscallResult {
+    // Tiny writes keep the same copy/FD/error/reschedule path without clearing
+    // a full 4 KiB staging array. Larger requests retain the original chunks.
+    if len <= 64 {
+        write_staged(fd, buf, len, &mut [0u8; 64])
+    } else {
+        write_staged(fd, buf, len, &mut [0u8; 4096])
+    }
+}
+
+fn write_staged(fd: u64, buf: u64, len: u64, staging: &mut [u8]) -> SyscallResult {
     let mut total_written = 0;
     let target = len as usize;
-    let mut staging = [0u8; 4096];
 
     while total_written < target {
-        let chunk = core::cmp::min(target - total_written, 4096);
+        let chunk = core::cmp::min(target - total_written, staging.len());
         let curr_buf = buf + total_written as u64;
 
         if entry::copy_from_user(&mut staging[..chunk], curr_buf).is_err() {
@@ -1417,6 +1426,24 @@ pub(crate) fn wait_for_key() {
     crate::arch::input::remove_waiter(id);
 }
 
+// A live identity handle skips inode and global-map resolution, but never skips
+// the state lock. The owning File clone also retains the inode during the scan,
+// preserving close's existing last-inode-reference rule.
+fn unix_poll_ready(sock: &alloc::sync::Arc<spin::Mutex<crate::net::unix::UnixSocket>>, events: i16) -> i16 {
+    let s = sock.lock();
+    match &s.state {
+        crate::net::unix::SocketState::Listening { incoming, .. } =>
+            if !incoming.is_empty() { events & 1 } else { 0 },
+        crate::net::unix::SocketState::Connected { rx_buffer, peer_closed, .. } => {
+            let mut revents = if !rx_buffer.is_empty() { events & 1 } else { 0 };
+            if *peer_closed { revents |= 1 | 0x10; }
+            else { revents |= events & 4; }
+            revents
+        }
+        _ => 0,
+    }
+}
+
 fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
     let timeout_ms = timeout as i32;
     let start_ticks = crate::arch::interrupts::vectors::ticks();
@@ -1446,14 +1473,23 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
     if nfds > 1024 {
         return Err(Errno::Invalid);
     }
+    // Cache only this syscall's process identity, not its FD entries.
+    // Each slot is still cloned under the same short process lock.
+    let current_process = process::current();
     loop {
+        // Validate the complete descriptor span once per scan. No scheduler call
+        // occurs before all revents stores complete; repeat after every sleep.
+        // Preserve field-only writes so fd/events are never copied back.
+        let span = nfds.checked_mul(8).ok_or(Errno::Fault)?;
+        crate::memory::mmu::check_user_range(fds, span, false).map_err(|_| Errno::Fault)?;
+        crate::memory::mmu::check_user_range(fds.checked_add(6).ok_or(Errno::Fault)?, span - 6, true).map_err(|_| Errno::Fault)?;
         let tty_has_input = !crate::tty::GLOBAL_TTY.lock().queue.is_empty();
         let mut ready = 0u64;
 
         for i in 0..nfds {
             let slot = fds.checked_add(i * 8).ok_or(Errno::Fault)?;
-            let mut pfd_buf = [0u8; 8];
-            entry::copy_from_user(&mut pfd_buf, slot).map_err(|_| Errno::Fault)?;
+            // Range above is mapped user memory, including cross-page slots.
+            let pfd_buf = unsafe { core::ptr::read_unaligned(slot as *const [u8; 8]) };
 
             let fd = i32::from_le_bytes(pfd_buf[0..4].try_into().unwrap());
             let events = i16::from_le_bytes(pfd_buf[4..6].try_into().unwrap());
@@ -1468,8 +1504,11 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
                         revents |= 4; // POLLOUT
                     }
                 } else {
-                    let file = process::with_current_fds(|fds| fds.get(fd as u64).cloned());
+                    let file = current_process.as_ref().map(|p| p.lock().fds.get(fd as u64).cloned());
                     if let Some(Ok(file)) = file {
+                        if let Some(sock) = &file.unix_socket {
+                            revents = unix_poll_ready(sock, events);
+                        } else {
                         let (file_ops, inode_id) = {
                             let inode = file.inode.lock();
                             (inode.file_ops, inode.id)
@@ -1489,40 +1528,9 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
                             if has_mouse && (events & 1 != 0) {
                                 revents |= 1;
                             }
-                        } else if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
-                            if let Some(sock) =
-                                crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned()
-                            {
-                                // UNIX domain socket
-                                let s = sock.lock();
-                                match &s.state {
-                                    crate::net::unix::SocketState::Listening {
-                                        incoming, ..
-                                    } => {
-                                        if !incoming.is_empty() && (events & 1 != 0) {
-                                            revents |= 1; // Incoming connection to accept
-                                        }
-                                    }
-                                    crate::net::unix::SocketState::Connected {
-                                        rx_buffer,
-                                        peer_closed,
-                                        ..
-                                    } => {
-                                        if !rx_buffer.is_empty() && (events & 1 != 0) {
-                                            revents |= 1; // Data ready to read
-                                        }
-                                        if *peer_closed {
-                                            revents |= 1 | 0x10; // EOF / POLLHUP
-                                        }
-                                        if !*peer_closed && (events & 4 != 0) {
-                                            revents |= 4; // Socket is writable
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
                         } else {
                             revents |= events & 5;
+                        }
                         }
                     } else {
                         revents |= 0x20;
@@ -1534,7 +1542,7 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
                 ready += 1;
             }
 
-            entry::copy_to_user(slot + 6, &revents.to_le_bytes()).map_err(|_| Errno::Fault)?;
+            unsafe { core::ptr::write_unaligned((slot + 6) as *mut [u8; 2], revents.to_le_bytes()) };
         }
 
         if ready > 0 || timeout_ms == 0 {
@@ -1554,9 +1562,21 @@ fn sys_poll(fds: u64, nfds: u64, timeout: u64) -> SyscallResult {
     }
 }
 
-fn check_fd_ready(fd: u64, for_write: bool) -> bool {
-    let file = process::with_current_fds(|fds| fds.get(fd).cloned());
+fn check_fd_ready(
+    file: Option<Result<crate::storage::vfs::file::File, &'static str>>,
+    for_write: bool,
+) -> bool {
     if let Some(Ok(file)) = file {
+        if let Some(sock) = &file.unix_socket {
+            let s = sock.lock();
+            return match &s.state {
+                crate::net::unix::SocketState::Listening { incoming, .. } =>
+                    !for_write && !incoming.is_empty(),
+                crate::net::unix::SocketState::Connected { rx_buffer, peer_closed, .. } =>
+                    if for_write { !*peer_closed } else { !rx_buffer.is_empty() || *peer_closed },
+                _ => false,
+            };
+        }
         let (file_ops, inode_id, file_type) = {
             let inode = file.inode.lock();
             (inode.file_ops, inode.id, inode.file_type)
@@ -1585,29 +1605,6 @@ fn check_fd_ready(fd: u64, for_write: bool) -> bool {
                 return true;
             }
             return !crate::input::mouse::MOUSE_QUEUE.lock().is_empty();
-        }
-        if core::ptr::addr_eq(file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
-            if let Some(sock) = crate::net::vfs::SOCKET_MAP.lock().get(&inode_id).cloned() {
-                let s = sock.lock();
-                match &s.state {
-                    crate::net::unix::SocketState::Listening { incoming, .. } => {
-                        return !for_write && !incoming.is_empty();
-                    }
-                    crate::net::unix::SocketState::Connected {
-                        rx_buffer,
-                        peer_closed,
-                        ..
-                    } => {
-                        if for_write {
-                            return !*peer_closed;
-                        } else {
-                            return !rx_buffer.is_empty() || *peer_closed;
-                        }
-                    }
-                    _ => {}
-                }
-                return false;
-            }
         }
         if file_type == crate::storage::vfs::inode::FileType::Device {
             return for_write;
@@ -1667,6 +1664,9 @@ fn sys_select(
         None
     };
 
+    // Cache only this syscall's process identity, not its FD entries.
+    // Each slot is still cloned under the same short process lock.
+    let current_process = process::current();
     loop {
         let mut out_read = [0u64; 16];
         let mut out_write = [0u64; 16];
@@ -1677,14 +1677,14 @@ fn sys_select(
             let bit = 1u64 << (fd % 64);
 
             if readfds != 0 && (in_read[w] & bit != 0) {
-                if check_fd_ready(fd, false) {
+                if check_fd_ready(current_process.as_ref().map(|p| p.lock().fds.get(fd).cloned()), false) {
                     out_read[w] |= bit;
                     count += 1;
                 }
             }
 
             if writefds != 0 && (in_write[w] & bit != 0) {
-                if check_fd_ready(fd, true) {
+                if check_fd_ready(current_process.as_ref().map(|p| p.lock().fds.get(fd).cloned()), true) {
                     out_write[w] |= bit;
                     count += 1;
                 }
@@ -1734,6 +1734,14 @@ fn sys_select(
 }
 
 fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
+    if len <= 64 {
+        read_staged(fd, buf, len, &mut [0u8; 64])
+    } else {
+        read_staged(fd, buf, len, &mut [0u8; 4096])
+    }
+}
+
+fn read_staged(fd: u64, buf: u64, len: u64, staging: &mut [u8]) -> SyscallResult {
     if len == 0 {
         return Ok(0);
     }
@@ -1792,7 +1800,6 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
             }
         }
 
-        let mut staging = [0u8; 4096];
         let to_read = (len as usize).min(staging.len());
         let read = match file.read(&mut staging[..to_read]) {
             Ok(read) => read,
@@ -1808,10 +1815,9 @@ fn sys_read(fd: u64, buf: u64, len: u64) -> SyscallResult {
 
     let mut total_read = 0;
     let target = len as usize;
-    let mut staging = [0u8; 4096];
 
     while total_read < target {
-        let chunk = core::cmp::min(target - total_read, 4096);
+        let chunk = core::cmp::min(target - total_read, staging.len());
         let curr_buf = buf + total_read as u64;
 
         let Some(result) = process::with_current_fds(|fds| fds.read(fd, &mut staging[..chunk]))
@@ -1907,15 +1913,12 @@ fn sys_open(path: u64, flags: u64) -> SyscallResult {
 }
 
 fn sys_close(fd: u64) -> SyscallResult {
-    let file = process::with_current_fds(|fds| fds.get(fd).cloned().ok()).flatten();
-
-    let Some(result) = process::with_current_fds(|fds| fds.close(fd)) else {
+    let Some(result) = process::with_current_fds(|fds| fds.take(fd)) else {
         return Err(Errno::BadFd);
     };
+    let f = result.map_err(|_| Errno::BadFd)?;
 
-    result.map_err(|_| Errno::BadFd)?;
-
-    if let Some(f) = file {
+    {
         let is_socket = {
             let inode = f.inode.lock();
             core::ptr::addr_eq(inode.file_ops, &crate::net::vfs::SOCKET_FILE_OPS)
@@ -2252,13 +2255,7 @@ fn get_socket_by_fd(
 ) -> Result<alloc::sync::Arc<spin::Mutex<crate::net::unix::UnixSocket>>, Errno> {
     let file = process::with_current_fds(|fds| fds.get(fd).cloned()).ok_or(Errno::BadFd)?;
     let f = file.map_err(|_| Errno::BadFd)?;
-    let inode = f.inode.lock();
-    if !core::ptr::addr_eq(inode.file_ops, &crate::net::vfs::SOCKET_FILE_OPS) {
-        return Err(Errno::BadFd);
-    }
-    let inode_id = inode.id;
-    let map = crate::net::vfs::SOCKET_MAP.lock();
-    map.get(&inode_id).cloned().ok_or(Errno::BadFd)
+    f.unix_socket.clone().ok_or(Errno::BadFd)
 }
 
 fn get_inet_socket_by_fd(
