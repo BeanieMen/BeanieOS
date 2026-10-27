@@ -146,7 +146,7 @@ impl Geometry {
         cluster: u32,
         value: u32,
     ) -> Result<(), &'static str> {
-        *CLUSTER_OFFSET_CACHE.lock() = None;
+        *CLUSTER_OFFSET_CACHE.lock() = [None; 16];
 
         if cluster<FIRST_DATA_CLUSTER || cluster>=self.cluster_limit{return Err("cluster outside volume");}
         let fat_offset = cluster as u64 * 4;
@@ -1160,7 +1160,15 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
     }
 }
 
-static CLUSTER_OFFSET_CACHE: Mutex<Option<(usize, u32, u64, u32)>> = Mutex::new(None);
+// Sixteen clean advisory chain positions. Every FAT mutation clears all slots.
+// No data, size or readiness cache. Device lifetime assumptions match baseline.
+static CLUSTER_OFFSET_CACHE: Mutex<[Option<(usize, u32, u64, u32)>;16]> = Mutex::new([None;16]);
+fn cache_chain_position(device:usize,start:u32,index:u64,cluster:u32) {
+    let mut cache=CLUSTER_OFFSET_CACHE.lock();
+    // Group nearby positions into one slot; retain checkpoints across a file.
+    let slot=((index / 256) as usize)%cache.len();
+    cache[slot]=Some((device,start,index,cluster));
+}
 
 impl<D: BlockDevice> Fat32FileOps<D> {
     fn cluster_for_offset(&self, start_cluster: u32, offset: u64) -> Result<u32, &'static str> {
@@ -1172,13 +1180,11 @@ impl<D: BlockDevice> Fat32FileOps<D> {
 
         {
             let cache = CLUSTER_OFFSET_CACHE.lock();
-            if let Some((c_device, c_start, c_idx, c_cluster)) = *cache
-                && c_device == Arc::as_ptr(&self.device) as usize
-                && c_start == start_cluster
-                && c_idx <= target_idx
-            {
-                start_idx = c_idx;
-                cluster = c_cluster;
+            for &(c_device,c_start,c_idx,c_cluster) in cache.iter().flatten() {
+                if c_device==Arc::as_ptr(&self.device) as usize && c_start==start_cluster
+                    && c_idx<=target_idx && c_idx>=start_idx {
+                    start_idx=c_idx;cluster=c_cluster;
+                }
             }
         }
 
@@ -1194,7 +1200,7 @@ impl<D: BlockDevice> Fat32FileOps<D> {
             };
         }
 
-        *CLUSTER_OFFSET_CACHE.lock() = Some((Arc::as_ptr(&self.device) as usize, start_cluster, target_idx, cluster));
+        cache_chain_position(Arc::as_ptr(&self.device) as usize, start_cluster, target_idx, cluster);
 
         Ok(cluster)
     }
@@ -1269,10 +1275,11 @@ impl<D: BlockDevice> Fat32FileOps<D> {
         let mut index = 0u64;
         {
             let cache=CLUSTER_OFFSET_CACHE.lock();
-            if let Some((dev,start,idx,cached))=*cache
-                && dev==Arc::as_ptr(&self.device) as usize && start==inode.cluster && idx<=wanted
-                && cached>=FIRST_DATA_CLUSTER && cached<self.geom.cluster_limit {
-                cluster=cached;index=idx;
+            for &(dev,start,idx,cached) in cache.iter().flatten() {
+                if dev==Arc::as_ptr(&self.device) as usize && start==inode.cluster && idx<=wanted
+                    && idx>=index && cached>=FIRST_DATA_CLUSTER && cached<self.geom.cluster_limit {
+                    cluster=cached;index=idx;
+                }
             }
         }
         let max_hops = self.geom.sectors_per_fat as u64 * 128;
@@ -1538,8 +1545,8 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
         }
 
         if written>0 {
-            *CLUSTER_OFFSET_CACHE.lock()=Some((Arc::as_ptr(&self.device) as usize,inode.cluster,
-                (position as u64-1)/cluster_size as u64,cluster));
+            cache_chain_position(Arc::as_ptr(&self.device) as usize,inode.cluster,
+                (position as u64-1)/cluster_size as u64,cluster);
         }
         Ok(written)
     }
