@@ -4,7 +4,7 @@ use crate::arch::lock::InterruptMutex;
 use smoltcp::iface::{Config, Interface, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
 
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::{dhcpv4, dns};
@@ -138,38 +138,22 @@ fn negotiate() {
             }
         }
         if fake_ms > MAX_FAKE_MS {
-            apply_fallback();
+            let mut guard = NET_STATE.lock();
+            if let Some(state) = guard.as_mut() {
+                if !state.configured {
+                    // No DHCP server answered. Leave the interface
+                    // unconfigured and say so; picking a default address
+                    // would silently be the wrong one off QEMU.
+                    state.dns_done = true;
+                    crate::println!("NET_DHCP_FAIL reason=no-server");
+                }
+            }
             return;
         }
         for _ in 0..30_000 {
             core::hint::spin_loop();
         }
     }
-}
-
-/// No DHCP server answered: fall back to the QEMU user-mode networking
-/// defaults (what used to be hard-coded unconditionally) and say so.
-fn apply_fallback() {
-    let mut guard = NET_STATE.lock();
-    let Some(state) = guard.as_mut() else {
-        return;
-    };
-    if state.configured {
-        return;
-    }
-    state.iface.update_ip_addrs(|addrs| {
-        let _ = addrs.push(IpCidr::new(
-            IpAddress::Ipv4(Ipv4Address::new(10, 0, 2, 15)),
-            24,
-        ));
-    });
-    let _ = state
-        .iface
-        .routes_mut()
-        .add_default_ipv4_route(Ipv4Address::new(10, 0, 2, 2));
-    state.configured = true;
-    state.dns_done = true;
-    crate::println!("NET_DHCP_FALLBACK addr=10.0.2.15/24 gw=10.0.2.2");
 }
 
 pub fn poll() {
