@@ -20,6 +20,11 @@ impl Partition {
         &self.disk
     }
 
+    /// Flush is device-wide, so it forwards with no offset translation.
+    pub(crate) fn flush_cache(&mut self) -> Result<(), &'static str> {
+        self.disk.flush_cache()
+    }
+
     #[inline(always)]
     pub(crate) fn first_lba(&self) -> u64 {
         self.first

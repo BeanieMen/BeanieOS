@@ -85,7 +85,8 @@ pub(crate) fn dispatch(
         Syscall::Uname => sys_uname(args[0]),
         Syscall::Fcntl => sys_fcntl(args[0], args[1], args[2]),
         Syscall::Flock => Ok(0),
-        Syscall::Fsync | Syscall::Fdatasync | Syscall::Sync => Ok(0),
+        Syscall::Fsync | Syscall::Fdatasync => sys_fsync(args[0]),
+        Syscall::Sync => sys_sync(),
         Syscall::Truncate => sys_truncate(args[0], args[1]),
         Syscall::Ftruncate => sys_ftruncate(args[0], args[1]),
         Syscall::Getcwd => sys_getcwd(args[0], args[1]),
@@ -206,11 +207,47 @@ fn sys_rename(old_ptr: u64, new_ptr: u64) -> SyscallResult {
     if old_res == new_res {
         return Ok(0);
     }
+    let note = with_current_fds(|fds| fds.rename(&old_res, &new_res).map_err(rename_errno))
+        .ok_or(Errno::BadFd)??;
+    if let Some(note) = note {
+        crate::task::process::note_renamed(note);
+    }
+    Ok(0)
+}
+
+fn rename_errno(why: &'static str) -> Errno {
+    match why {
+        "file not found" | "no file name" | "empty path" => Errno::NoEntry,
+        "is a directory" => Errno::IsDir,
+        "not a directory" | "relative path" | "no filesystem mounted" => Errno::NotDir,
+        "directory not empty" => Errno::NotEmpty,
+        "rename across filesystems" => Errno::CrossDev,
+        "bad name for FAT32" | "cannot rename . or .." | "cannot move a directory into itself" => {
+            Errno::Invalid
+        }
+        "directory is full" => Errno::NoMem,
+        _ => Errno::Io,
+    }
+}
+
+fn sys_fsync(fd: u64) -> SyscallResult {
     with_current_fds(|fds| {
-        let _ = fds.unlink(&new_res);
+        let file = fds.get(fd).map_err(|_| Errno::BadFd)?;
+        if file.unix_socket.is_some() {
+            return Err(Errno::Invalid);
+        }
+        let inode = file.inode.lock();
+        inode.file_ops.flush(&inode).map_err(|_| Errno::Io)?;
         Ok(0)
     })
     .ok_or(Errno::BadFd)?
+}
+
+fn sys_sync() -> SyscallResult {
+    match with_current_fds(|fds| fds.sync_all()) {
+        Some(Ok(())) | None => Ok(0),
+        Some(Err(_)) => Err(Errno::Io),
+    }
 }
 
 fn sys_symlink(target: u64, linkpath: u64) -> SyscallResult {

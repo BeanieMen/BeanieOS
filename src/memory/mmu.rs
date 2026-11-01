@@ -24,6 +24,21 @@ pub(crate) const USER_RW: PageTableFlags =
 pub(crate) const USER_WC: PageTableFlags =
     PageTableFlags::from_bits_truncate(crate::paging::PTE_USER_WC);
 
+/// Leaf flags for an anonymous mmap: user-accessible, writable only when
+/// PROT_WRITE was requested, executable only when PROT_EXEC was requested.
+pub(crate) fn user_flags_for_prot(prot: u64) -> PageTableFlags {
+    const PROT_WRITE: u64 = 0x2;
+    const PROT_EXEC: u64 = 0x4;
+    let mut bits = crate::paging::PTE_PRESENT | crate::paging::PTE_USER;
+    if prot & PROT_WRITE != 0 {
+        bits |= crate::paging::PTE_WRITABLE;
+    }
+    if prot & PROT_EXEC == 0 {
+        bits |= crate::paging::PTE_NO_EXECUTE;
+    }
+    PageTableFlags::from_bits_truncate(bits)
+}
+
 pub(crate) fn inc_frame_ref(phys: u64) {
     let mut refs = FRAME_REFS.lock();
     *refs.entry(phys).or_insert(1) += 1;
@@ -581,6 +596,10 @@ impl AddressSpace {
     // replacing aliases or splitting huge mappings. Failure never publishes
     // target; empty intermediate nodes may exist and are pruned by rollback.
     pub(crate) fn map_fresh_page(&mut self, virt: u64, target: PhysFrame) -> Result<(), MemoryError> {
+        self.map_fresh_page_flags(virt, target, USER_RW)
+    }
+
+    pub(crate) fn map_fresh_page_flags(&mut self, virt: u64, target: PhysFrame, flags: PageTableFlags) -> Result<(), MemoryError> {
         if virt >= USER_END { return Err(MemoryError::AddressOutOfRange); }
         let mut frame = self.root_addr();
         for level in 0..P1_LEVEL as usize {
@@ -597,7 +616,7 @@ impl AddressSpace {
         let table = phys_to_direct(frame);
         let leaf = index(virt, P1_LEVEL as usize);
         if unsafe { read_entry(table, leaf) } & PTE_PRESENT != 0 { return Err(MemoryError::AddressOutOfRange); }
-        unsafe { write_entry(table, leaf, target.start_address().as_u64() | USER_RW.bits()); }
+        unsafe { write_entry(table, leaf, target.start_address().as_u64() | flags.bits()); }
         if self.root == current_cr3() { x86_64::instructions::tlb::flush(VirtAddr::new(virt)); }
         Ok(())
     }

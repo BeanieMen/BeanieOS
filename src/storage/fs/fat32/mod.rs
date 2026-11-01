@@ -1,4 +1,4 @@
-use crate::storage::vfs::inode::{FileOperations, Inode, InodeOperations, RawEntry};
+use crate::storage::vfs::inode::{FileOperations, Inode, InodeOperations, RawEntry, RenameNote};
 use crate::storage::vfs::mount::FileSystem;
 use alloc::format;
 use alloc::string::ToString;
@@ -965,6 +965,48 @@ impl<D: BlockDevice> Fat32InodeOps<D> {
         }
     }
 
+    fn entry_cluster(entry: &[u8; 32]) -> u32 {
+        let high = u16::from_le_bytes([entry[20], entry[21]]) as u32;
+        let low = u16::from_le_bytes([entry[26], entry[27]]) as u32;
+        (high << 16) | low
+    }
+
+    /// Points a moved directory's `..` entry at its new parent. Only the
+    /// first cluster is scanned: FAT32 keeps `.` and `..` at its start.
+    fn repoint_dotdot(&self, dir_cluster: u32, new_parent_cluster: u32) -> Result<(), &'static str> {
+        let up_cluster = if new_parent_cluster <= FIRST_DATA_CLUSTER {
+            0
+        } else {
+            new_parent_cluster
+        };
+        let first_sector = self.geom.cluster_sector(dir_cluster)?;
+        let mut sector = [0u8; MAX_SECTOR];
+        for sector_index in 0..self.geom.sectors_per_cluster {
+            let sector_number = first_sector + sector_index as u64;
+            read_sector(
+                &self.device,
+                sector_number,
+                self.geom.bytes_per_sector,
+                &mut sector,
+            )?;
+            let len = self.geom.bytes_per_sector as usize;
+            for offset in (0..len).step_by(32) {
+                if sector[offset] == 0x00 {
+                    return Ok(());
+                }
+                if sector[offset] == b'.' && sector[offset + 1] == b'.' && sector[offset + 11] & 0x10 != 0 {
+                    sector[offset + 20..offset + 22]
+                        .copy_from_slice(&((up_cluster >> 16) as u16).to_le_bytes());
+                    sector[offset + 26..offset + 28]
+                        .copy_from_slice(&(up_cluster as u16).to_le_bytes());
+                    write_sector(&self.device, sector_number, self.geom.bytes_per_sector, &sector[..len])?;
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn inode_from_entry(
         &self,
         entry: &[u8; 32],
@@ -1160,6 +1202,112 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
         }
 
         Ok(())
+    }
+
+    fn rename(
+        &self,
+        old_dir: &Inode,
+        old_name: &[u8],
+        new_dir: &Inode,
+        new_name: &[u8],
+    ) -> Result<Option<RenameNote>, &'static str> {
+        if old_dir.file_type != FileType::Directory || new_dir.file_type != FileType::Directory {
+            return Err("not a directory");
+        }
+        if old_name == b"." || old_name == b".." || new_name == b"." || new_name == b".." {
+            return Err("cannot rename . or ..");
+        }
+
+        let mut src_entry = self.find_entry(old_dir.cluster, old_name)?;
+        let src_cluster = Self::entry_cluster(&src_entry);
+        let src_is_dir = src_entry[11] & 0x10 != 0;
+
+        // Build the replacement entry first: this also validates that the new
+        // name fits the 8.3 shapes this filesystem can create.
+        let mut new_entry = Self::directory_entry(
+            new_name,
+            src_cluster,
+            if src_is_dir {
+                FileType::Directory
+            } else {
+                FileType::Regular
+            },
+        )?;
+        new_entry[28..32].copy_from_slice(&src_entry[28..32]);
+
+        // Same directory and same normalized name: nothing to move.
+        if old_dir.cluster == new_dir.cluster && new_entry[..11] == src_entry[..11] {
+            return Ok(None);
+        }
+
+        // Replace an existing destination only with matching shapes, the same
+        // rule unlink+rmdir would apply: file over file, empty dir over
+        // empty dir.
+        if let Ok(mut dst_entry) = self.find_entry(new_dir.cluster, new_name) {
+            let dst_cluster = Self::entry_cluster(&dst_entry);
+            let dst_is_dir = dst_entry[11] & 0x10 != 0;
+            if dst_cluster == src_cluster && dst_is_dir == src_is_dir {
+                return Ok(None);
+            }
+            if src_is_dir && !dst_is_dir {
+                return Err("not a directory");
+            }
+            if !src_is_dir && dst_is_dir {
+                return Err("is a directory");
+            }
+            if dst_is_dir && !Self::is_empty_dir(&self.device, self.geom, dst_cluster)? {
+                return Err("directory not empty");
+            }
+            Self::mark_deleted(&self.device, self.geom, new_dir.cluster, &mut dst_entry)?;
+            if dst_cluster >= FIRST_DATA_CLUSTER {
+                self.free_chain(dst_cluster)?;
+            }
+        }
+
+        // Moving a directory into its own subtree would orphan it.
+        if src_is_dir && old_dir.cluster != new_dir.cluster {
+            let mut cursor = new_dir.cluster;
+            for _ in 0..64 {
+                if cursor == src_cluster {
+                    return Err("cannot move a directory into itself");
+                }
+                if cursor <= FIRST_DATA_CLUSTER {
+                    break;
+                }
+                let up = self.find_entry(cursor, b"..")?;
+                let parent = Self::entry_cluster(&up);
+                if parent < FIRST_DATA_CLUSTER {
+                    break;
+                }
+                cursor = parent;
+            }
+        }
+
+        // Link the new name first, then drop the old one: a crash between the
+        // two leaves a duplicate link instead of a lost file.
+        let (sector_number, offset) = self.free_slot(new_dir.cluster)?;
+        Fat32FileOps {
+            device: self.device.clone(),
+            geom: self.geom,
+        }
+        .write_within_sector(sector_number, offset, &new_entry)?;
+        Self::mark_deleted(&self.device, self.geom, old_dir.cluster, &mut src_entry)?;
+
+        if src_is_dir && old_dir.cluster != new_dir.cluster {
+            self.repoint_dotdot(src_cluster, new_dir.cluster)?;
+        }
+
+        let mut old_name8 = [b' '; 11];
+        old_name8.copy_from_slice(&src_entry[..11]);
+        let mut new_name8 = [b' '; 11];
+        new_name8.copy_from_slice(&new_entry[..11]);
+        Ok(Some(RenameNote {
+            cluster: src_cluster,
+            old_parent: old_dir.cluster,
+            old_name: old_name8,
+            new_parent: new_dir.cluster,
+            new_name: new_name8,
+        }))
     }
 }
 
@@ -1434,6 +1582,12 @@ impl<D: BlockDevice> FileOperations for Fat32FileOps<D> {
         Ok(copied)
     }
 
+    fn flush(&self, _inode: &Inode) -> Result<(), &'static str> {
+        // All data and metadata writes are already synchronous; this asks the
+        // device to make them durable (ATA FLUSH CACHE where honored).
+        self.device.lock().flush()
+    }
+
     fn write(&self, inode: &mut Inode, offset: u64, buf: &[u8]) -> Result<usize, &'static str> {
         if inode.file_type != FileType::Regular {
             return Err("not a regular file");
@@ -1600,7 +1754,12 @@ impl<D: BlockDevice> Fat32FileOps<D> {
                         continue;
                     }
 
-                    if entry[..11] != target {
+                    // The name is the primary key, but a rename changes it;
+                    // the start cluster still identifies this file.
+                    let entry_cluster = ((u16::from_le_bytes([entry[20], entry[21]]) as u32)
+                        << 16)
+                        | u16::from_le_bytes([entry[26], entry[27]]) as u32;
+                    if entry[..11] != target && entry_cluster != inode.cluster {
                         continue;
                     }
 
@@ -1639,6 +1798,8 @@ impl<D: BlockDevice + 'static> FileSystem for Fat32<D> {
     }
 
     fn sync(&self) -> Result<(), &'static str> {
-        Ok(())
+        // Writes are already issued synchronously; this asks the device to
+        // make them durable (ATA FLUSH CACHE where the device honors it).
+        self.device.lock().flush()
     }
 }

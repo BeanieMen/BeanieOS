@@ -24,6 +24,7 @@
 
 .equ MSR_EFER, 0xC0000080
 .equ EFER_LME, (1 << 8)
+.equ EFER_NXE, (1 << 11)
 .equ CR4_PAE, (1 << 5)
 .equ CR4_OSFXSR, (1 << 9)
 .equ CR4_OSXMMEXCPT, (1 << 10)
@@ -151,10 +152,10 @@ _start:
     or $CR0_MP, %eax
     mov %eax, %cr0
 
-    # Enable long mode through EFER.LME.
+    # Enable long mode through EFER.LME and no-execute pages (EFER.NXE).
     mov $MSR_EFER, %ecx
     rdmsr
-    or $EFER_LME, %eax
+    or $(EFER_LME | EFER_NXE), %eax
     wrmsr
 
     # Enable paging to activate IA-32e mode.

@@ -182,7 +182,7 @@ impl ProcessManager {
         pid: ProcessId,
         addr: u64,
         len: u64,
-        _prot: u64,
+        prot: u64,
         flags: u64,
     ) -> Result<u64, ()> {
         if len == 0 {
@@ -206,15 +206,28 @@ impl ProcessManager {
             core::mem::forget(space); return Err(());
         };
         if target == 0 { core::mem::forget(space); return Err(()); }
+        // PROT_NONE pages stay unmapped: no frame, no leaf, so any user
+        // access faults and the fault handler kills the process. Kernel-side
+        // copies already skip inaccessible pages via check_user_range.
+        let prot_none = prot & 0x7 == 0;
+        let leaf_flags = mmu::user_flags_for_prot(prot);
         let pages = span / 4096;
         let mut mapped = 0u64;
         let mut failed_at = None;
         for i in 0..pages {
             let virt = target + i * 4096;
+            if prot_none {
+                if fixed {
+                    // MAP_FIXED replaces whatever was there: drop it.
+                    let _ = space.unmap(virt);
+                }
+                mapped += 1;
+                continue;
+            }
             let Some(frame) = alloc_frame() else { failed_at = Some(virt); break; };
             let direct = phys_to_direct(frame.start_address().as_u64()) as *mut u8;
             unsafe { core::ptr::write_bytes(direct, 0, 4096); }
-            let result = if fixed { space.map(virt, frame, mmu::USER_RW) } else { space.map_fresh_page(virt, frame) };
+            let result = if fixed { space.map(virt, frame, leaf_flags) } else { space.map_fresh_page_flags(virt, frame, leaf_flags) };
             if result.is_err() {
                 // map() writes its leaf only after walk() succeeds.
                 if !fixed { crate::memory::allocator::free_frame(frame.start_address().as_u64()); }
@@ -527,6 +540,29 @@ pub(crate) fn with_current_fds<R>(f: impl FnOnce(&mut FdTable) -> R) -> Option<R
     let mut guard = process.lock();
 
     Some(f(&mut guard.fds))
+}
+
+/// A rename moved a file's directory entry. Open handles cache the entry's
+/// location (parent cluster + 8.3 name) for metadata write-backs like size
+/// updates; repoint every open Inode at the entry's new home so those writes
+/// cannot land in a stale location and corrupt another file's size. Matching
+/// pins the old entry identity, not just the data cluster, because an empty
+/// file has no cluster yet (cluster 0).
+pub(crate) fn note_renamed(note: crate::storage::vfs::inode::RenameNote) {
+    let manager = PROCESS_MANAGER.lock();
+    for proc in manager.processes.values() {
+        let mut p = proc.lock();
+        p.fds.for_each_file_mut(|file| {
+            let mut inode = file.inode.lock();
+            if inode.cluster == note.cluster
+                && inode.parent_cluster == note.old_parent
+                && inode.dir_name == note.old_name
+            {
+                inode.parent_cluster = note.new_parent;
+                inode.dir_name = note.new_name;
+            }
+        });
+    }
 }
 
 pub(crate) fn send_signal(pid: ProcessId, sig: usize) -> bool {

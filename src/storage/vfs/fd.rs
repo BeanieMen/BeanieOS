@@ -3,7 +3,7 @@ use alloc::{sync::Arc, vec::Vec};
 use spin::Mutex;
 
 use super::file::{File, OpenFlags};
-use super::inode::{FileType, Inode};
+use super::inode::{FileType, Inode, RenameNote};
 use super::mount::{FileSystem, MountTable};
 
 pub const MAX_FDS: usize = 1024;
@@ -282,6 +282,56 @@ impl FdTable {
         crate::storage::vfs::path::invalidate_resolve_cache();
 
         Ok(())
+    }
+
+    pub(crate) fn rename(
+        &mut self,
+        old_path: &[u8],
+        new_path: &[u8],
+    ) -> Result<Option<RenameNote>, &'static str> {
+        let (old_parent, old_name) = self.parent_of(old_path)?;
+        let (new_parent, new_name) = self.parent_of(new_path)?;
+
+        let note = if alloc::sync::Arc::ptr_eq(&old_parent, &new_parent) {
+            let guard = old_parent.lock();
+            guard
+                .inode_ops
+                .rename(&guard, &old_name, &guard, &new_name)?
+        } else {
+            // Lock in a stable order so concurrent renames cannot deadlock.
+            let (first, second, first_is_old) =
+                if alloc::sync::Arc::as_ptr(&old_parent) < alloc::sync::Arc::as_ptr(&new_parent) {
+                    (&old_parent, &new_parent, true)
+                } else {
+                    (&new_parent, &old_parent, false)
+                };
+            let first_guard = first.lock();
+            let second_guard = second.lock();
+            let (old_guard, new_guard) = if first_is_old {
+                (&*first_guard, &*second_guard)
+            } else {
+                (&*second_guard, &*first_guard)
+            };
+            if !core::ptr::addr_eq(old_guard.inode_ops, new_guard.inode_ops) {
+                return Err("rename across filesystems");
+            }
+            old_guard
+                .inode_ops
+                .rename(old_guard, &old_name, new_guard, &new_name)?
+        };
+        crate::storage::vfs::path::invalidate_resolve_cache();
+
+        Ok(note)
+    }
+
+    /// Visit every open file so the process layer can keep open handles
+    /// consistent after a rename moved their file's directory entry.
+    pub(crate) fn for_each_file_mut(&mut self, mut f: impl FnMut(&mut File)) {
+        for slot in &mut self.slots {
+            if let Some(file) = slot {
+                f(file);
+            }
+        }
     }
 
     pub(crate) fn touch(&mut self, path: &[u8]) -> Result<(), &'static str> {

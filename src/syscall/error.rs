@@ -25,6 +25,8 @@ pub(crate) enum Errno {
     Overflow = 75,
     ConnRefused = 111,
     Range = 34,
+    Io = 5,
+    CrossDev = 18,
 }
 
 pub(crate) fn encode(result: SyscallResult) -> u64 {

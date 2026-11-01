@@ -281,4 +281,17 @@ impl Disk {
 
         self.execute(command, true, lba, count)
     }
+
+    /// ATA FLUSH CACHE: asks the drive to make prior writes durable. DMA
+    /// write completion alone only means the adapter finished the transfer,
+    /// not that the data survives a reset.
+    pub(crate) fn flush_cache(&mut self) -> Result<(), &'static str> {
+        let command = if self.lba48 {
+            ATA_FLUSH_CACHE_EXT
+        } else {
+            ATA_FLUSH_CACHE
+        };
+
+        self.execute_nodata(command)
+    }
 }

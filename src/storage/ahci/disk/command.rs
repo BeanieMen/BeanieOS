@@ -7,6 +7,54 @@ const PRDT_LENGTH_OFFSET: usize = 0x46;
 const CMD_TABLE_BASE_OFFSET: usize = 0x48;
 
 impl Disk {
+    /// Non-data ATA command (e.g. FLUSH CACHE): no PRDT, no transfer buffer.
+    pub(super) fn execute_nodata(&mut self, command: u8) -> Result<(), &'static str> {
+        let base = self.port_base();
+
+        if reg(base, PX_CI) & 1 != 0 {
+            return Err("command slot still busy");
+        }
+
+        let table = self.dma.command_table() as *mut u8;
+        let ctba = kernel_to_phys(self.dma.command_table() as u64);
+
+        let f0 = (FIS_H2D_REGISTER as u32) | (0x80 << 8) | ((command as u32) << 16);
+        write_u32(table, 0, f0);
+        write_u32(table, 4, 0);
+        write_u32(table, 8, 0);
+        write_u32(table, 12, 0);
+        write_u32(table, PRDT_LENGTH_OFFSET, 0);
+        write_u32(table, CMD_TABLE_BASE_OFFSET, ctba as u32);
+        write_u32(table, CMD_TABLE_BASE_OFFSET + 4, (ctba >> 32) as u32);
+
+        let list = self.dma.command_list() as *mut u8;
+        write_u32(list, 0, 5);
+        write_u32(list, 4, 0);
+        write_u32(list, 8, ctba as u32);
+        write_u32(list, 12, (ctba >> 32) as u32);
+
+        super::super::irq::arm(base);
+
+        dma_publish();
+
+        set_reg(base, PX_CI, 1);
+
+        super::super::irq::wait(base)?;
+
+        let status = reg(base, PX_IS);
+
+        if status & ERROR_BITS != 0 || reg(base, PX_TFD) & TFD_ERR != 0 {
+            return Err(match take_signature_error(base) {
+                Some(why) => why,
+                None => "drive reported an error",
+            });
+        }
+
+        dma_consume();
+
+        Ok(())
+    }
+
     pub(super) fn execute(
         &mut self,
         command: u8,

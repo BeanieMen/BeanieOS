@@ -92,6 +92,8 @@ pub(crate) const SATA_SIGNATURE_CDROM: u32 = 0xeb14_0101;
 pub(crate) const ATA_IDENTIFY: u8 = 0xEC;
 pub(crate) const ATA_READ_DMA_EXT: u8 = 0x25;
 pub(crate) const ATA_WRITE_DMA_EXT: u8 = 0x35;
+pub(crate) const ATA_FLUSH_CACHE: u8 = 0xE7;
+pub(crate) const ATA_FLUSH_CACHE_EXT: u8 = 0xEA;
 pub(crate) const FIS_H2D_REGISTER: u8 = 0x27;
 
 #[inline(always)]
