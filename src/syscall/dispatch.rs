@@ -2060,6 +2060,17 @@ fn sys_close(fd: u64) -> SyscallResult {
     let f = result.map_err(|_| Errno::BadFd)?;
 
     {
+        // Raw frame sockets: drop the registry entry on last close so the
+        // tap stops queueing and the buffers are freed.
+        let is_raw = {
+            let inode = f.inode.lock();
+            core::ptr::addr_eq(inode.file_ops, &crate::net::raw::RAW_FILE_OPS)
+        };
+        if is_raw && alloc::sync::Arc::strong_count(&f.inode) <= 1 {
+            let id = f.inode.lock().id;
+            crate::net::raw::RAW_MAP.lock().remove(&id);
+        }
+
         let is_socket = {
             let inode = f.inode.lock();
             core::ptr::addr_eq(inode.file_ops, &crate::net::vfs::SOCKET_FILE_OPS)

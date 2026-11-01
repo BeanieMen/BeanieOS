@@ -9,6 +9,10 @@
 // One-shot: it configures and exits. Renewal/rebind policy (a daemon that
 // sleeps and re-requests) is a userspace decision and is not implemented
 // here; the lease time is printed so a future daemon can honor it.
+// Consequence: the applied address and route are NOT removed at lease
+// expiry, so on a network that reassigns addresses the configuration can
+// go stale. Benign under QEMU's slirp (24h lease, stable address), but not
+// correct long-term on real networks until a renewing client exists.
 
 #include "syscall.h"
 
