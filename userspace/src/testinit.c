@@ -162,6 +162,28 @@ static void rename_suite(void) {
   n = read_file("/tname/SIX.TXT", buf, 63);
   buf[n > 0 ? n : 0] = 0;
   check(n == 3 && seq(buf, "ZZZ") == 0, "rename: size honest after open rename", n);
+
+  // Cross-directory open-writer: the size write-back must follow the entry
+  // to its new directory, and must not corrupt the entry that reuses the
+  // old slot.
+  sys_mkdir("/tname/ODIR");
+  fd = sys_open("/tname/ODIR/SEVEN.TXT", O_RDWR | O_CREAT | O_TRUNC);
+  check(fd >= 0, "rename: xdir open-handle setup", fd);
+  check(sys_write(fd, "YY", 2) == 2, "rename: xdir open-handle write", 0);
+  rc = sys_rename("/tname/ODIR/SEVEN.TXT", "/tname/EIGHT.TXT");
+  check(rc == 0, "rename: xdir rename with open handle rc", rc);
+  long fd2 = sys_open("/tname/ODIR/DECOY.TXT", O_RDWR | O_CREAT | O_TRUNC);
+  check(fd2 >= 0, "rename: xdir decoy setup", fd2);
+  check(sys_write(fd2, "dddd", 4) == 4, "rename: xdir decoy write", 0);
+  sys_close(fd2);
+  check(sys_write(fd, "Y", 1) == 1, "rename: xdir write via old handle", 0);
+  sys_close(fd);
+  n = read_file("/tname/EIGHT.TXT", buf, 63);
+  buf[n > 0 ? n : 0] = 0;
+  check(n == 3 && seq(buf, "YYY") == 0, "rename: xdir size honest after open rename", n);
+  n = read_file("/tname/ODIR/DECOY.TXT", buf, 63);
+  buf[n > 0 ? n : 0] = 0;
+  check(n == 4 && seq(buf, "dddd") == 0, "rename: xdir decoy entry uncorrupted", n);
 }
 
 static void fsync_suite(void) {

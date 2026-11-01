@@ -1219,6 +1219,10 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
         }
 
         let mut src_entry = self.find_entry(old_dir.cluster, old_name)?;
+        // mark_deleted() rewrites src_entry[0] in place later; snapshot the
+        // live 8.3 name now so open-handle fixups can match it.
+        let mut old_name8 = [b' '; 11];
+        old_name8.copy_from_slice(&src_entry[..11]);
         let src_cluster = Self::entry_cluster(&src_entry);
         let src_is_dir = src_entry[11] & 0x10 != 0;
 
@@ -1297,8 +1301,6 @@ impl<D: BlockDevice> InodeOperations for Fat32InodeOps<D> {
             self.repoint_dotdot(src_cluster, new_dir.cluster)?;
         }
 
-        let mut old_name8 = [b' '; 11];
-        old_name8.copy_from_slice(&src_entry[..11]);
         let mut new_name8 = [b' '; 11];
         new_name8.copy_from_slice(&new_entry[..11]);
         Ok(Some(RenameNote {
