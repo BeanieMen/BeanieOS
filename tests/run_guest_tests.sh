@@ -51,7 +51,7 @@ boot_and_wait() { # $1=log $2=marker1 $3=marker2 -> kills VM, returns 0 when bot
   rm -f "$1"
   "$QEMU" \
     -machine q35 \
-    -nic none \
+    -netdev user,id=n0 -device e1000,netdev=n0 \
     -audiodev none,id=snd0 -device AC97,audiodev=snd0 \
     -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE.4m.fd \
     -drive if=pflash,format=raw,file="$OUT/OVMF_VARS.fd" \
@@ -87,6 +87,12 @@ if ! grep -q "TESTS_DONE rc=0" "$OUT/phase1.log"; then
   say "FAIL: guest reported failures (rc=1)"
   exit 1
 fi
+for marker in NET_DHCP_OK NET_DNS_OK; do
+  if ! grep -q "$marker" "$OUT/phase1.log"; then
+    say "FAIL: missing network marker $marker (DHCP/DNS negotiation)"
+    exit 1
+  fi
+done
 
 say "phase 2: post-hardreset durability verify"
 if ! boot_and_wait "$OUT/phase2.log" "PERSIST_VERIFY" "TESTS_DONE"; then
