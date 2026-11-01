@@ -10,7 +10,18 @@ use smoltcp::iface::SocketHandle;
 use smoltcp::socket::{dhcpv4, dns};
 use smoltcp::wire::DnsQueryType;
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use super::e1000::E1000_DEVICE;
+
+/// Milliseconds added to the lapic tick count when converting to smoltcp
+/// time. Boot-time negotiation runs with interrupts off (ticks frozen) on a
+/// synthetic clock anchored at the tick base; when it ends, this offset
+/// (= synthetic elapsed - real elapsed, so at most MAX_FAKE_MS) shifts the
+/// runtime clock forward to exactly where negotiation left it. One monotonic
+/// time domain across boot and runtime: timestamps never go backwards and
+/// never jump more than 20s.
+static NET_TIME_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
 
 pub struct SmolDevice;
 
@@ -134,7 +145,7 @@ fn negotiate() {
                 return;
             };
             if state.configured && state.dns_done {
-                return;
+                break;
             }
         }
         if fake_ms > MAX_FAKE_MS {
@@ -148,16 +159,34 @@ fn negotiate() {
                     crate::println!("NET_DHCP_FAIL reason=no-server");
                 }
             }
-            return;
+            break;
         }
         for _ in 0..30_000 {
             core::hint::spin_loop();
         }
     }
+
+    // Hand the clock over: keep instants continuous across the transition.
+    let real_elapsed = crate::arch::interrupts::vectors::ticks() - (base as u64);
+    let synthetic_elapsed = fake_ms as u64;
+    let offset = synthetic_elapsed.saturating_sub(real_elapsed);
+    NET_TIME_OFFSET_MS.store(offset, Ordering::Release);
+    // Self-check: the first runtime instant must be >= the last synthetic one.
+    let last_synthetic = base + fake_ms;
+    let first_runtime = (base as u64 + real_elapsed + offset) as i64;
+    if first_runtime >= last_synthetic {
+        crate::println!("NET_TIME_OK offset_ms={}", offset);
+    } else {
+        crate::println!(
+            "NET_TIME_FAIL last_synthetic={} first_runtime={}",
+            last_synthetic,
+            first_runtime
+        );
+    }
 }
 
 pub fn poll() {
-    let ms = crate::arch::interrupts::vectors::ticks();
+    let ms = crate::arch::interrupts::vectors::ticks() + NET_TIME_OFFSET_MS.load(Ordering::Acquire);
     poll_at(Instant::from_millis(ms as i64));
 }
 

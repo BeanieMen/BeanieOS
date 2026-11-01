@@ -87,7 +87,7 @@ if ! grep -q "TESTS_DONE rc=0" "$OUT/phase1.log"; then
   say "FAIL: guest reported failures (rc=1)"
   exit 1
 fi
-for marker in NET_DHCP_OK NET_DNS_OK; do
+for marker in NET_DHCP_OK NET_DNS_OK NET_TIME_OK; do
   if ! grep -q "$marker" "$OUT/phase1.log"; then
     say "FAIL: missing network marker $marker (DHCP/DNS negotiation)"
     exit 1
