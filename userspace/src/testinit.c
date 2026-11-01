@@ -412,8 +412,94 @@ static void dns_check(void) {
   print("\n");
 }
 
+// Negative coverage for the raw-socket and interface-ioctl mechanism:
+// invalid inputs are rejected, dup'd aliases share one socket until the
+// last close, and cleanup leaves a fresh socket usable.
+static void raw_suite(void) {
+  int bad = sys_socket(17, 1, 0);  // SOCK_STREAM on AF_PACKET: not supported
+  check(bad < 0, "raw: non-raw type rejected", bad);
+  int fd = sys_socket(17, 3, 0);
+  check(fd >= 0, "raw: socket opens", fd);
+  if (fd >= 0) {
+    char tiny[5] = {0, 0, 0, 0, 0};
+    long w = sys_write(fd, tiny, 5);
+    check(w < 0, "raw: short frame rejected", w);
+    char big[1600];
+    for (int i = 0; i < 1600; i++) big[i] = 0;
+    w = sys_write(fd, big, sizeof(big));
+    check(w < 0, "raw: oversize frame rejected", w);
+    int d2 = sys_dup(fd);
+    check(d2 >= 0, "raw: dup alias", d2);
+    sys_close(fd);
+    if (d2 >= 0) {
+      // The socket must survive closing one alias: a valid frame still
+      // goes out through the remaining one.
+      unsigned char frame[60];
+      for (int i = 0; i < 6; i++) frame[i] = 0xff;         // dst broadcast
+      for (int i = 0; i < 6; i++) frame[6 + i] = 0x52;     // src (bogus)
+      frame[12] = 0x88; frame[13] = 0xb5;                  // local ethertype
+      for (int i = 14; i < 60; i++) frame[i] = 0;
+      w = sys_write(d2, frame, sizeof(frame));
+      check(w == 60, "raw: alias usable after close", w);
+      sys_close(d2);
+    }
+    // After the last close, a fresh raw socket must still work.
+    int fd2 = sys_socket(17, 3, 0);
+    check(fd2 >= 0, "raw: reopen after cleanup", fd2);
+    if (fd2 >= 0) sys_close(fd2);
+  }
+  int cfd = sys_socket(17, 3, 0);
+  check(cfd >= 0, "raw: ioctl socket", cfd);
+  if (cfd >= 0) {
+    unsigned char am[8] = {10, 0, 2, 15, 255, 255, 0, 255};
+    long r = sys_ioctl(cfd, 0x8916, am);  // non-contiguous mask
+    check(r < 0, "ioctl: non-contiguous mask rejected", r);
+    unsigned char am0[8] = {10, 0, 2, 15, 0, 0, 0, 0};
+    r = sys_ioctl(cfd, 0x8916, am0);      // zero mask, nonzero addr
+    check(r < 0, "ioctl: zero mask rejected", r);
+    r = sys_ioctl(cfd, 0x8927, (void *)1);  // bad user pointer
+    check(r < 0, "ioctl: bad pointer rejected", r);
+    unsigned char mac[6];
+    r = sys_ioctl(cfd, 0x8927, mac);        // sane call still works
+    check(r == 0, "ioctl: hwaddr query works", r);
+    sys_close(cfd);
+  }
+}
+
+// Run dhcpc with a tiny test lease; at expiry it must clear exactly the
+// configuration it installed, so a TCP connect afterwards must fail.
+static void expiry_test(void) {
+  long pid = sys_fork();
+  if (pid == 0) {
+    char *a[] = {"/bin/dhcpc", "2", 0};
+    char *e[] = {0};
+    sys_execve("/bin/dhcpc", a, e);
+    print("NET_EXPIRY_FAIL reason=exec\n");
+    sys_exit(127);
+  }
+  int st = 0;
+  sys_wait4(pid, &st, 0, 0);
+  check(((st >> 8) & 0xff) == 0, "net: expiry run exits cleanly",
+        (st >> 8) & 0xff);
+  int s = sys_socket(2, 1, 0);  // AF_INET, SOCK_STREAM
+  if (s < 0) {
+    check(0, "net: post-expiry socket", s);
+    return;
+  }
+  struct sockaddr_in_net addr;
+  addr.sin_family = 2;
+  addr.sin_port = htons_(53);
+  unsigned char *a = (unsigned char *)&addr.sin_addr;
+  a[0] = 10; a[1] = 0; a[2] = 2; a[3] = 3;
+  for (int i = 0; i < 8; i++) addr.sin_zero[i] = 0;
+  long r = sys_connect(s, (struct sockaddr_un *)&addr, sizeof(addr));
+  check(r < 0, "net: config cleared at lease expiry", r);
+  sys_close(s);
+}
+
 static void net_suite(void) {
   print("-- net\n");
+  raw_suite();
   long pid = sys_fork();
   if (pid == 0) {
     char *dargv[] = {"/bin/dhcpc", 0};
@@ -422,13 +508,27 @@ static void net_suite(void) {
     print("NET_DHCP_FAIL reason=exec\n");
     sys_exit(127);
   }
-  int st = 0;
-  sys_wait4(pid, &st, 0, 0);
-  if (((st >> 8) & 0xff) != 0) {
+  // dhcpc stays resident after configuring; wait until the interface has
+  // an address instead of for its exit. (Query the kernel, not
+  // /etc/resolv.conf: the file's contents can survive a reboot.)
+  int ready = 0;
+  int pfd = sys_socket(17, 3, 0);
+  for (int i = 0; i < 600 && !ready; i++) {  // ~30s
+    unsigned char am[8] = {0};
+    if (pfd >= 0 && sys_ioctl(pfd, 0x8915, am) == 0 &&
+        (am[0] || am[1] || am[2] || am[3]))
+      ready = 1;
+    else
+      sys_sleep_ms(50);
+  }
+  if (pfd >= 0) sys_close(pfd);
+  if (!ready) {
+    print("NET_DHCP_FAIL reason=timeout\n");
     print("NET_DNS_SKIP reason=no-lease\n");
     return;
   }
   dns_check();
+  expiry_test();
 }
 
 int main(int argc, char **argv) {

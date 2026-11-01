@@ -193,6 +193,17 @@ my judgment from reading the code, not from running the kernel.
   Interface addressing is userspace policy (`/bin/dhcpc` via raw sockets and
   the config ioctls); the kernel applies routes with a checked
   `add_default_ipv4_route` that reports a full table instead of panicking.
+- `/bin/dhcpc` is resident but non-renewing: at lease expiry it clears the
+  address and default route it installed (verified via `SIOCGIFADDR` /
+  `NET_IOC_GET_GW` first, so it never clobbers a newer configuration), then
+  exits; the interface stays unconfigured until dhcpc runs again. Renewal/
+  rebind (RFC 2131 T1/T2) is deliberately unimplemented - QEMU slirp hands
+  out 24 h leases, so this is untested against short real-world leases.
+- Raw sockets and the config ioctls have no permission check: any process
+  can tap traffic and reconfigure the interface. There is no privilege
+  model anywhere in BeanieOS yet, so this is consistent with the rest of
+  the system, but it is an exposure to revisit when one exists - not
+  evidence that raw access is inherently safe.
 - `src/net/stack.rs` `SmolDevice::transmit`: `TxToken::consume` allocates a
   `Vec` of `len` bytes and calls `dev.transmit`, which copies into the TX
   buffer. If `len > BUF_SIZE (2048)` transmit returns false but the packet is

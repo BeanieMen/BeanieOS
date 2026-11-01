@@ -6,13 +6,12 @@
 // address and default route through the interface-configuration ioctls and
 // writes /etc/resolv.conf for userspace resolvers.
 //
-// One-shot: it configures and exits. Renewal/rebind policy (a daemon that
-// sleeps and re-requests) is a userspace decision and is not implemented
-// here; the lease time is printed so a future daemon can honor it.
-// Consequence: the applied address and route are NOT removed at lease
-// expiry, so on a network that reassigns addresses the configuration can
-// go stale. Benign under QEMU's slirp (24h lease, stable address), but not
-// correct long-term on real networks until a renewing client exists.
+// It then stays resident until the lease expires and clears the address
+// and default route it installed, but only if the current configuration
+// still matches exactly what it applied (a newer configuration is never
+// clobbered). Renewal/rebind is deliberately not implemented: at expiry
+// the interface goes unconfigured until dhcpc is run again, rather than
+// keeping a stale address past its lease.
 
 #include "syscall.h"
 
@@ -21,8 +20,10 @@
 #define SOCK_NONBLOCK 0x800
 
 #define SIOCSIFADDR 0x8916
+#define SIOCGIFADDR 0x8915
 #define SIOCGIFHWADDR 0x8927
 #define SIOCADDRT 0x890B
+#define NET_IOC_GET_GW 0x89F1  // BeanieOS-specific default-route query
 
 #define DHCP_DISCOVER 1
 #define DHCP_OFFER 2
@@ -206,7 +207,16 @@ static int await_reply(int fd, unsigned int xid, int timeout_ms,
   return 0;
 }
 
-int main(void) {
+static unsigned long parse_secs(const char *p) {
+  unsigned long v = 0;
+  while (*p >= '0' && *p <= '9') { v = v * 10 + (unsigned)(*p - '0'); p++; }
+  return v;
+}
+
+// argv[1], when present, overrides the lease time in seconds. Test hook
+// for exercising expiry without waiting for a real lease to run out.
+int main(int argc, char **argv) {
+  unsigned long lease_override = (argc > 1) ? parse_secs(argv[1]) : 0;
   int fd = sys_socket(AF_PACKET, SOCK_RAW | SOCK_NONBLOCK, 0);
   if (fd < 0) {
     print("NET_DHCP_FAIL reason=no-raw-socket\n");
@@ -328,6 +338,48 @@ int main(void) {
   print(" lease=");
   print_dec(lease);
   print("\n");
+
+  // Stay resident until the lease expires (a lease of 0 is treated as
+  // infinite), then clear only the configuration this run installed.
+  unsigned long wait_s = lease_override ? lease_override : lease;
+  if (lease == 0 && lease_override == 0) {
+    // Infinite lease: nothing to expire.
+    sys_close(fd);
+    return 0;
+  }
+  unsigned long remaining_ms = wait_s * 1000UL;
+  while (remaining_ms > 0) {
+    unsigned long chunk = remaining_ms > 60000UL ? 60000UL : remaining_ms;
+    sys_sleep_ms(chunk);
+    remaining_ms -= chunk;
+  }
+
+  unsigned char cur_am[8] = {0};
+  unsigned char cur_gw[4] = {0};
+  if (sys_ioctl(fd, SIOCGIFADDR, cur_am) < 0 ||
+      sys_ioctl(fd, NET_IOC_GET_GW, cur_gw) < 0) {
+    // Cannot verify the current configuration; leave it untouched.
+    print("NET_EXPIRY_SKIP reason=query-failed\n");
+    sys_close(fd);
+    return 0;
+  }
+  int addr_match = 1;
+  for (int i = 0; i < 8; i++)
+    if (cur_am[i] != addr_mask[i]) addr_match = 0;
+  int gw_match = 1;
+  for (int i = 0; i < 4; i++)
+    if (cur_gw[i] != router[i]) gw_match = 0;
+  if (addr_match && gw_match) {
+    unsigned char zero8[8] = {0};
+    unsigned char zero4[4] = {0};
+    sys_ioctl(fd, SIOCSIFADDR, zero8);  // unconfigure addresses
+    sys_ioctl(fd, SIOCADDRT, zero4);    // remove default route
+    print("NET_EXPIRY_CLEARED addr=");
+    print_ip(yiaddr);
+    print("\n");
+  } else {
+    print("NET_EXPIRY_SKIP reason=reconfigured\n");
+  }
 
   sys_close(fd);
   return 0;

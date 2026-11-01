@@ -1197,6 +1197,21 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
             crate::net::stack::set_default_gateway(gw).map_err(|_| Errno::Invalid)?;
             return Ok(0);
         }
+        0x8915 => {
+            // SIOCGIFADDR: out param { addr [u8;4], mask [u8;4] }; all zeros
+            // when the interface is unconfigured.
+            let (a, m) = crate::net::stack::ipv4_address();
+            entry::copy_to_user(arg, &[a[0], a[1], a[2], a[3], m[0], m[1], m[2], m[3]])
+                .map_err(|_| Errno::Fault)?;
+            return Ok(0);
+        }
+        0x89F1 => {
+            // NET_IOC_GET_GW (BeanieOS-specific): out param gw[4]; all zeros
+            // when no default route is configured.
+            let gw = crate::net::stack::default_gateway();
+            entry::copy_to_user(arg, &gw).map_err(|_| Errno::Fault)?;
+            return Ok(0);
+        }
         _ => {}
     }
 

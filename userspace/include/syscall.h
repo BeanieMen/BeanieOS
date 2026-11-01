@@ -32,6 +32,7 @@ struct sockaddr_un {
   char sun_path[108];
 };
 
+#define SYS_DUP 32
 #define SYS_FORK 57
 #define SYS_EXECVE 59
 #define SYS_EXIT 60
@@ -194,6 +195,8 @@ static inline long sys_poll(void *fds, unsigned long nfds, int timeout_ms) {
 }
 
 static inline long sys_fork(void) { return syscall(SYS_FORK, 0, 0, 0); }
+
+static inline int sys_dup(int oldfd) { return (int)syscall(SYS_DUP, oldfd, 0, 0); }
 
 static inline long sys_wait4(long pid, int *wstatus, int options,
                              void *rusage) {

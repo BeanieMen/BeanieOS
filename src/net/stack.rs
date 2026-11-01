@@ -66,6 +66,9 @@ impl TxToken for SmolTxToken {
 pub struct NetState {
     pub iface: Interface,
     pub sockets: SocketSet<'static>,
+    /// Default gateway currently applied via the config ioctl, for the
+    /// query ioctl (smoltcp's route table has no getter).
+    gateway: Option<[u8; 4]>,
 }
 
 pub static NET_STATE: InterruptMutex<Option<NetState>> = InterruptMutex::new(None);
@@ -90,7 +93,11 @@ pub fn init_stack() {
     let iface = Interface::new(config, &mut device, Instant::from_millis(0));
     let sockets = SocketSet::new(alloc::vec![]);
 
-    *NET_STATE.lock() = Some(NetState { iface, sockets });
+    *NET_STATE.lock() = Some(NetState {
+        iface,
+        sockets,
+        gateway: None,
+    });
 }
 
 pub fn poll() {
@@ -117,6 +124,13 @@ pub fn mac_address() -> Option<[u8; 6]> {
 /// Apply an IPv4 address/prefix chosen by userspace. Replaces any previous
 /// address. Pure mechanism: no policy about which address is right.
 pub fn set_ipv4_address(addr: [u8; 4], mask: [u8; 4]) -> Result<(), &'static str> {
+    let mut guard = NET_STATE.lock();
+    let state = guard.as_mut().ok_or("network stack not initialized")?;
+    if addr == [0, 0, 0, 0] && mask == [0, 0, 0, 0] {
+        // All-zero means unconfigure: drop every IPv4 address.
+        state.iface.update_ip_addrs(|addrs| addrs.clear());
+        return Ok(());
+    }
     let mask_bits = u32::from_be_bytes(mask);
     let prefix = mask_bits.count_ones() as u8;
     // A mask must be a contiguous run of ones followed by zeros.
@@ -127,13 +141,40 @@ pub fn set_ipv4_address(addr: [u8; 4], mask: [u8; 4]) -> Result<(), &'static str
         Ipv4Address::new(addr[0], addr[1], addr[2], addr[3]),
         prefix,
     );
-    let mut guard = NET_STATE.lock();
-    let state = guard.as_mut().ok_or("network stack not initialized")?;
     state.iface.update_ip_addrs(|addrs| {
         addrs.clear();
         let _ = addrs.push(IpCidr::Ipv4(cidr));
     });
     Ok(())
+}
+
+/// Current IPv4 address and mask, all-zero when unconfigured.
+pub fn ipv4_address() -> ([u8; 4], [u8; 4]) {
+    let guard = NET_STATE.lock();
+    let Some(state) = guard.as_ref() else {
+        return ([0; 4], [0; 4]);
+    };
+    for addr in state.iface.ip_addrs().iter() {
+        if let IpCidr::Ipv4(cidr) = addr {
+            let prefix = cidr.prefix_len();
+            let mask = if prefix == 0 {
+                0u32
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            return (cidr.address().octets(), mask.to_be_bytes());
+        }
+    }
+    ([0; 4], [0; 4])
+}
+
+/// Current default gateway, all-zero when none.
+pub fn default_gateway() -> [u8; 4] {
+    let guard = NET_STATE.lock();
+    let Some(state) = guard.as_ref() else {
+        return [0; 4];
+    };
+    state.gateway.unwrap_or([0; 4])
 }
 
 /// Apply or remove the userspace-chosen default gateway. All-zero removes
@@ -143,12 +184,14 @@ pub fn set_default_gateway(gw: [u8; 4]) -> Result<(), &'static str> {
     let state = guard.as_mut().ok_or("network stack not initialized")?;
     if gw == [0, 0, 0, 0] {
         let _ = state.iface.routes_mut().remove_default_ipv4_route();
+        state.gateway = None;
     } else {
         state
             .iface
             .routes_mut()
             .add_default_ipv4_route(Ipv4Address::new(gw[0], gw[1], gw[2], gw[3]))
             .map_err(|_| "route table full")?;
+        state.gateway = Some(gw);
     }
     Ok(())
 }
