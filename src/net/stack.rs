@@ -4,24 +4,10 @@ use crate::arch::lock::InterruptMutex;
 use smoltcp::iface::{Config, Interface, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
-
-use smoltcp::iface::SocketHandle;
-use smoltcp::socket::{dhcpv4, dns};
-use smoltcp::wire::DnsQueryType;
-
-use core::sync::atomic::{AtomicU64, Ordering};
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpCidr, Ipv4Address, Ipv4Cidr};
 
 use super::e1000::E1000_DEVICE;
-
-/// Milliseconds added to the lapic tick count when converting to smoltcp
-/// time. Boot-time negotiation runs with interrupts off (ticks frozen) on a
-/// synthetic clock anchored at the tick base; when it ends, this offset
-/// (= synthetic elapsed - real elapsed, so at most MAX_FAKE_MS) shifts the
-/// runtime clock forward to exactly where negotiation left it. One monotonic
-/// time domain across boot and runtime: timestamps never go backwards and
-/// never jump more than 20s.
-static NET_TIME_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
+use super::raw;
 
 pub struct SmolDevice;
 
@@ -32,6 +18,9 @@ impl Device for SmolDevice {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let dev = E1000_DEVICE.lock();
         let packet = dev.as_ref()?.receive()?;
+        // Tap a copy for raw (AF_PACKET-style) sockets before the stack
+        // consumes the frame, so userspace network clients see everything.
+        raw::tap_frame(&packet);
         Some((SmolRxToken(packet), SmolTxToken))
     }
 
@@ -77,16 +66,13 @@ impl TxToken for SmolTxToken {
 pub struct NetState {
     pub iface: Interface,
     pub sockets: SocketSet<'static>,
-    dhcp: Option<SocketHandle>,
-    dns: Option<SocketHandle>,
-    dns_query: Option<dns::QueryHandle>,
-    dns_started_ms: u64,
-    configured: bool,
-    dns_done: bool,
 }
 
 pub static NET_STATE: InterruptMutex<Option<NetState>> = InterruptMutex::new(None);
 
+/// Bring up the NIC and the TCP/IP stack with NO address configuration.
+/// Choosing an address is policy and belongs to userspace (e.g. /bin/dhcpc),
+/// which applies it through the interface-configuration ioctls below.
 pub fn init_stack() {
     let mac = {
         let dev = E1000_DEVICE.lock();
@@ -101,92 +87,14 @@ pub fn init_stack() {
     let mut config = Config::new(hw_addr);
     config.random_seed = 0x12345678;
 
-    // No static address: the interface is configured by DHCP below. The
-    // constants only come back as a documented fallback when no DHCP server
-    // answers at all.
     let iface = Interface::new(config, &mut device, Instant::from_millis(0));
+    let sockets = SocketSet::new(alloc::vec![]);
 
-    let mut sockets = SocketSet::new(alloc::vec![]);
-    let dhcp_handle = sockets.add(dhcpv4::Socket::new());
-    *NET_STATE.lock() = Some(NetState {
-        iface,
-        sockets,
-        dhcp: Some(dhcp_handle),
-        dns: None,
-        dns_query: None,
-        dns_started_ms: 0,
-        configured: false,
-        dns_done: false,
-    });
-
-    negotiate();
-}
-
-/// Drive the DHCP exchange (and the one-shot DNS self-test it triggers)
-/// until the interface is configured or the window closes. QEMU's slirp
-/// answers within milliseconds; the bound only bites on networks with no
-/// DHCP server, where the previous hard-coded QEMU values are kept as an
-/// explicit fallback so behaviour does not silently change there.
-fn negotiate() {
-    // Interrupts are off this early in boot, so the lapic tick count does
-    // not advance and cannot bound the wait. Drive smoltcp with a synthetic
-    // clock instead: one fake millisecond per poll iteration. Replies from a
-    // DHCP server arrive within a few iterations; the cap only bites when
-    // nothing answers, where the fallback keeps old behaviour.
-    const MAX_FAKE_MS: i64 = 20_000;
-    let base = crate::arch::interrupts::vectors::ticks() as i64;
-    let mut fake_ms: i64 = 0;
-    loop {
-        poll_at(Instant::from_millis(base + fake_ms));
-        fake_ms += 1;
-        {
-            let guard = NET_STATE.lock();
-            let Some(state) = guard.as_ref() else {
-                return;
-            };
-            if state.configured && state.dns_done {
-                break;
-            }
-        }
-        if fake_ms > MAX_FAKE_MS {
-            let mut guard = NET_STATE.lock();
-            if let Some(state) = guard.as_mut() {
-                if !state.configured {
-                    // No DHCP server answered. Leave the interface
-                    // unconfigured and say so; picking a default address
-                    // would silently be the wrong one off QEMU.
-                    state.dns_done = true;
-                    crate::println!("NET_DHCP_FAIL reason=no-server");
-                }
-            }
-            break;
-        }
-        for _ in 0..30_000 {
-            core::hint::spin_loop();
-        }
-    }
-
-    // Hand the clock over: keep instants continuous across the transition.
-    let real_elapsed = crate::arch::interrupts::vectors::ticks() - (base as u64);
-    let synthetic_elapsed = fake_ms as u64;
-    let offset = synthetic_elapsed.saturating_sub(real_elapsed);
-    NET_TIME_OFFSET_MS.store(offset, Ordering::Release);
-    // Self-check: the first runtime instant must be >= the last synthetic one.
-    let last_synthetic = base + fake_ms;
-    let first_runtime = (base as u64 + real_elapsed + offset) as i64;
-    if first_runtime >= last_synthetic {
-        crate::println!("NET_TIME_OK offset_ms={}", offset);
-    } else {
-        crate::println!(
-            "NET_TIME_FAIL last_synthetic={} first_runtime={}",
-            last_synthetic,
-            first_runtime
-        );
-    }
+    *NET_STATE.lock() = Some(NetState { iface, sockets });
 }
 
 pub fn poll() {
-    let ms = crate::arch::interrupts::vectors::ticks() + NET_TIME_OFFSET_MS.load(Ordering::Acquire);
+    let ms = crate::arch::interrupts::vectors::ticks();
     poll_at(Instant::from_millis(ms as i64));
 }
 
@@ -198,101 +106,49 @@ fn poll_at(instant: Instant) {
         return;
     };
     let mut device = SmolDevice;
-    let ms = instant.total_millis() as u64;
     state.iface.poll(instant, &mut device, &mut state.sockets);
+}
 
-    // DHCP: apply configuration changes the client reports.
-    if let Some(handle) = state.dhcp {
-        let event = state.sockets.get_mut::<dhcpv4::Socket>(handle).poll();
-        let mut leased = None;
-        match event {
-            Some(dhcpv4::Event::Configured(config)) => {
-                let cidr = IpCidr::Ipv4(config.address);
-                state.iface.update_ip_addrs(|addrs| {
-                    addrs.clear();
-                    let _ = addrs.push(cidr);
-                });
-                if let Some(router) = config.router {
-                    let _ = state.iface.routes_mut().add_default_ipv4_route(router);
-                }
-                let servers: alloc::vec::Vec<IpAddress> = config
-                    .dns_servers
-                    .iter()
-                    .copied()
-                    .map(IpAddress::Ipv4)
-                    .collect();
-                leased = Some((cidr, config.router, servers));
-            }
-            Some(dhcpv4::Event::Deconfigured) => {
-                if state.configured {
-                    state.iface.update_ip_addrs(|addrs| addrs.clear());
-                    state.configured = false;
-                    crate::println!("NET_DHCP_LOST");
-                }
-            }
-            None => {}
-        }
-        if let Some((addr, router, servers)) = leased {
-            let first_lease = !state.configured;
-            state.configured = true;
-            crate::println!(
-                "NET_DHCP_OK addr={:?} gw={:?} dns={:?}",
-                addr,
-                router,
-                servers
-            );
-            // One-shot end-to-end check: a real DNS lookup through the
-            // leased server exercises ARP, unicast TX/RX and the route.
-            if first_lease && state.dns.is_none() {
-                if servers.is_empty() {
-                    state.dns_done = true;
-                    crate::println!("NET_DNS_SKIP reason=no-server");
-                } else {
-                    let sock = dns::Socket::new(&servers, alloc::vec::Vec::new());
-                    let dns_handle = state.sockets.add(sock);
-                    let query = {
-                        let ctx = state.iface.context();
-                        state
-                            .sockets
-                            .get_mut::<dns::Socket>(dns_handle)
-                            .start_query(ctx, "example.com", DnsQueryType::A)
-                    };
-                    match query {
-                        Ok(qh) => {
-                            state.dns = Some(dns_handle);
-                            state.dns_query = Some(qh);
-                            state.dns_started_ms = ms;
-                        }
-                        Err(_) => {
-                            state.dns_done = true;
-                            crate::println!("NET_DNS_FAIL reason=start");
-                        }
-                    }
-                }
-            }
-        }
-    }
+/// MAC of the NIC backing the stack, for userspace network clients.
+pub fn mac_address() -> Option<[u8; 6]> {
+    E1000_DEVICE.lock().as_ref().map(|d| d.mac())
+}
 
-    // DNS self-test progress.
-    if let (Some(handle), Some(query)) = (state.dns, state.dns_query) {
-        match state.sockets.get_mut::<dns::Socket>(handle).get_query_result(query) {
-            Ok(addrs) => {
-                crate::println!("NET_DNS_OK answers={}", addrs.len());
-                state.dns_done = true;
-                state.dns_query = None;
-            }
-            Err(dns::GetQueryResultError::Pending) => {
-                if ms.saturating_sub(state.dns_started_ms) > 5_000 {
-                    crate::println!("NET_DNS_FAIL reason=timeout");
-                    state.dns_done = true;
-                    state.dns_query = None;
-                }
-            }
-            Err(_) => {
-                crate::println!("NET_DNS_FAIL reason=query");
-                state.dns_done = true;
-                state.dns_query = None;
-            }
-        }
+/// Apply an IPv4 address/prefix chosen by userspace. Replaces any previous
+/// address. Pure mechanism: no policy about which address is right.
+pub fn set_ipv4_address(addr: [u8; 4], mask: [u8; 4]) -> Result<(), &'static str> {
+    let mask_bits = u32::from_be_bytes(mask);
+    let prefix = mask_bits.count_ones() as u8;
+    // A mask must be a contiguous run of ones followed by zeros.
+    if prefix == 0 || mask_bits != u32::MAX << (32 - prefix) {
+        return Err("invalid mask");
     }
+    let cidr = Ipv4Cidr::new(
+        Ipv4Address::new(addr[0], addr[1], addr[2], addr[3]),
+        prefix,
+    );
+    let mut guard = NET_STATE.lock();
+    let state = guard.as_mut().ok_or("network stack not initialized")?;
+    state.iface.update_ip_addrs(|addrs| {
+        addrs.clear();
+        let _ = addrs.push(IpCidr::Ipv4(cidr));
+    });
+    Ok(())
+}
+
+/// Apply or remove the userspace-chosen default gateway. All-zero removes
+/// the default route.
+pub fn set_default_gateway(gw: [u8; 4]) -> Result<(), &'static str> {
+    let mut guard = NET_STATE.lock();
+    let state = guard.as_mut().ok_or("network stack not initialized")?;
+    if gw == [0, 0, 0, 0] {
+        let _ = state.iface.routes_mut().remove_default_ipv4_route();
+    } else {
+        state
+            .iface
+            .routes_mut()
+            .add_default_ipv4_route(Ipv4Address::new(gw[0], gw[1], gw[2], gw[3]))
+            .map_err(|_| "route table full")?;
+    }
+    Ok(())
 }

@@ -633,6 +633,16 @@ static void dispatch(char **argv, int argc) {
 }
 
 int main(void) {
+  // Network configuration is userspace policy: run the DHCP client in the
+  // background. The shell works whether or not a lease arrives.
+  long net_pid = sys_fork();
+  if (net_pid == 0) {
+    char *dargv[] = {"/bin/dhcpc", 0};
+    char *denvp[] = {0};
+    sys_execve("/bin/dhcpc", dargv, denvp);
+    sys_exit(0); // no dhcpc on this image: nothing to do
+  }
+
   print("\n=========================================\n");
   print("     Welcome to BeanieOS User Shell!     \n");
   print("=========================================\n");

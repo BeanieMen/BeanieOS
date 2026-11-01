@@ -26,7 +26,7 @@ KERNEL_OFFSET=33554432
 say() { echo "[guest-tests] $*"; }
 
 make kernel || { say "FAIL: kernel build"; exit 1; }
-make -C userspace bin/testinit || { say "FAIL: testinit build"; exit 1; }
+make -C userspace bin/testinit bin/dhcpc || { say "FAIL: userspace build"; exit 1; }
 
 mkdir -p "$OUT"
 rm -f "$IMG"
@@ -45,6 +45,9 @@ truncate -s 128M "$IMG"
 "$MMD" -i "$IMG@@$KERNEL_OFFSET" ::bin
 "$MCOPY" -i "$IMG@@$KERNEL_OFFSET" target/x86_64/release/beanieos ::boot/kernel
 "$MCOPY" -i "$IMG@@$KERNEL_OFFSET" userspace/bin/testinit ::bin/init
+"$MCOPY" -i "$IMG@@$KERNEL_OFFSET" userspace/bin/dhcpc ::bin/dhcpc
+"$MMD" -i "$IMG@@$KERNEL_OFFSET" ::etc 2>/dev/null || true
+printf "# populated by /bin/dhcpc\n" | "$MCOPY" -i "$IMG@@$KERNEL_OFFSET" - ::etc/resolv.conf
 cp OVMF_VARS.4m.fd "$OUT/OVMF_VARS.fd"
 
 boot_and_wait() { # $1=log $2=marker1 $3=marker2 -> kills VM, returns 0 when both seen
@@ -87,7 +90,7 @@ if ! grep -q "TESTS_DONE rc=0" "$OUT/phase1.log"; then
   say "FAIL: guest reported failures (rc=1)"
   exit 1
 fi
-for marker in NET_DHCP_OK NET_DNS_OK NET_TIME_OK; do
+for marker in NET_DHCP_OK NET_DNS_OK; do
   if ! grep -q "$marker" "$OUT/phase1.log"; then
     say "FAIL: missing network marker $marker (DHCP/DNS negotiation)"
     exit 1

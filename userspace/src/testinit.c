@@ -286,6 +286,151 @@ static void prot_suite(void) {
   check(g_cow[0] == 'A', "mmap: COW parent unaffected", g_cow[0]);
 }
 
+
+// ---- networking (userspace policy over kernel mechanisms) ----
+// DHCP runs as the userspace client /bin/dhcpc; the DNS check below is a
+// userspace resolver probe over the kernel's TCP mechanism (DNS over TCP,
+// RFC 7766) so no resolver lives in the kernel.
+
+struct sockaddr_in_net {
+  unsigned short sin_family;
+  unsigned short sin_port;
+  unsigned int sin_addr;
+  char sin_zero[8];
+};
+
+static unsigned short htons_(unsigned short v) { return (v << 8) | (v >> 8); }
+
+static int parse_nameserver(unsigned char *ip) {
+  long fd = sys_open("/etc/resolv.conf", O_RDONLY);
+  if (fd < 0) return -2;
+  char buf[256];
+  long n = sys_read(fd, buf, sizeof(buf) - 1);
+  sys_close(fd);
+  if (n <= 0) return -3;
+  buf[n] = 0;
+  const char *key = "nameserver ";
+  long i = 0;
+  for (; i + 11 <= n; i++) {
+    long j = 0;
+    while (j < 11 && buf[i + j] == key[j]) j++;
+    if (j == 11) break;
+  }
+  if (i + 11 > n) return -1;
+  i += 11;
+  for (int oct = 0; oct < 4; oct++) {
+    unsigned v = 0;
+    int digits = 0;
+    while (buf[i] >= '0' && buf[i] <= '9') {
+      v = v * 10 + (buf[i] - '0');
+      i++;
+      digits++;
+    }
+    if (!digits || v > 255) return -1;
+    ip[oct] = (unsigned char)v;
+    if (oct < 3 && buf[i] != '.') return -1;
+    i++;
+  }
+  return 0;
+}
+
+static void dns_check(void) {
+  unsigned char ns[4];
+  int pns = parse_nameserver(ns);
+  if (pns == -2) {
+    print("NET_DNS_FAIL reason=resolvconf-open\n");
+    return;
+  }
+  if (pns == -3) {
+    print("NET_DNS_FAIL reason=resolvconf-empty\n");
+    return;
+  }
+  if (pns < 0) {
+    print("NET_DNS_FAIL reason=resolvconf-parse\n");
+    return;
+  }
+  int s = sys_socket(2, 1, 0); // AF_INET, SOCK_STREAM
+  if (s < 0) {
+    print("NET_DNS_FAIL reason=socket\n");
+    return;
+  }
+  struct sockaddr_in_net addr;
+  addr.sin_family = 2;
+  addr.sin_port = htons_(53);
+  unsigned char *a = (unsigned char *)&addr.sin_addr;
+  a[0] = ns[0]; a[1] = ns[1]; a[2] = ns[2]; a[3] = ns[3];
+  for (int i = 0; i < 8; i++) addr.sin_zero[i] = 0;
+  if (sys_connect(s, (struct sockaddr_un *)&addr, sizeof(addr)) < 0) {
+    print("NET_DNS_FAIL reason=connect\n");
+    sys_close(s);
+    return;
+  }
+  // DNS query for example.com A, with the RFC 7766 TCP length prefix.
+  unsigned char q[31];
+  q[0] = 0; q[1] = 29;                     // TCP length prefix: 29-byte msg
+  q[2] = 0x12; q[3] = 0x34;                // id
+  q[4] = 0x01; q[5] = 0x00;                // flags: RD
+  q[6] = 0; q[7] = 1;                      // qdcount
+  q[8] = 0; q[9] = 0; q[10] = 0; q[11] = 0; q[12] = 0; q[13] = 0;
+  unsigned char qname[13] = {7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0};
+  for (int i = 0; i < 13; i++) q[14 + i] = qname[i];
+  q[27] = 0; q[28] = 1;                    // A
+  q[29] = 0; q[30] = 1;                    // IN
+  sys_write(s, q, 31);
+
+  unsigned char resp[512];
+  long got = 0;
+  while (got < 2) {
+    long r = sys_read(s, resp + got, sizeof(resp) - got);
+    if (r <= 0) break;
+    got += r;
+  }
+  if (got >= 2) {
+    long want = 2 + (((long)resp[0] << 8) | resp[1]);
+    if (want > (long)sizeof(resp)) want = sizeof(resp);
+    while (got < want) {
+      long r = sys_read(s, resp + got, want - got);
+      if (r <= 0) break;
+      got += r;
+    }
+  }
+  sys_close(s);
+  if (got < 8) {
+    print("NET_DNS_FAIL reason=query\n");
+    return;
+  }
+  int answers = (resp[2 + 6] << 8) | resp[2 + 7];
+  if (answers <= 0) {
+    print("NET_DNS_FAIL reason=empty\n");
+    return;
+  }
+  print("NET_DNS_OK answers=");
+  char nb[8];
+  int c = 0;
+  while (answers > 0) { nb[c++] = '0' + (answers % 10); answers /= 10; }
+  while (c > 0) { char ch[2] = {nb[--c], 0}; print(ch); }
+  print("\n");
+}
+
+static void net_suite(void) {
+  print("-- net\n");
+  long pid = sys_fork();
+  if (pid == 0) {
+    char *dargv[] = {"/bin/dhcpc", 0};
+    char *denvp[] = {0};
+    sys_execve("/bin/dhcpc", dargv, denvp);
+    print("NET_DHCP_FAIL reason=exec\n");
+    sys_exit(127);
+  }
+  int st = 0;
+  sys_wait4(pid, &st, 0, 0);
+  if (((st >> 8) & 0xff) != 0) {
+    print("NET_DNS_SKIP reason=no-lease\n");
+    return;
+  }
+  dns_check();
+}
+
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -300,6 +445,7 @@ int main(int argc, char **argv) {
       print("PERSIST_VERIFY FAIL\n");
       failures++;
     }
+    net_suite();
     print("TESTS_DONE\n");
     for (;;) sys_sleep_ms(1000);
   }
@@ -308,6 +454,7 @@ int main(int argc, char **argv) {
   rename_suite();
   fsync_suite();
   prot_suite();
+  net_suite();
 
   // Durability phase: write + flush + sync, then report readiness so the
   // harness can hard-kill the VM and verify on the next boot.

@@ -84,7 +84,10 @@ $(DISK): kernel userbins
 	mmd -i $@@@$(KERNEL_OFFSET) ::home
 	mmd -i $@@@$(KERNEL_OFFSET) ::tmp
 
-	echo "nameserver 10.0.2.3" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/resolv.conf
+	# No baked-in nameserver: /bin/dhcpc fills this in from the DHCP lease.
+	# (The in-kernel FAT32 create handles only 8.3 names, so the placeholder
+	# file must exist for dhcpc to update it in place.)
+	printf "# populated by /bin/dhcpc\n" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/resolv.conf
 	printf "http://dl-cdn.alpinelinux.org/alpine/v3.20/main\nhttp://dl-cdn.alpinelinux.org/alpine/v3.20/community\n" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/apk/repositories
 	echo "root:x:0:0:root:/root:/bin/sh" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/passwd
 	echo "127.0.0.1 localhost" | mcopy -i $@@@$(KERNEL_OFFSET) - ::etc/hosts

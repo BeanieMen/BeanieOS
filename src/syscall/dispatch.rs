@@ -626,6 +626,19 @@ fn sys_socket(domain: u64, type_: u64, _proto: u64) -> SyscallResult {
         let fd = process::with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
         return Ok(fd);
     }
+    if domain == 17 {
+        // AF_PACKET-style raw Ethernet frames: mechanism for userspace
+        // network clients (DHCP etc.). SOCK_RAW only.
+        if base_type != 3 {
+            return Err(Errno::Invalid);
+        }
+        let mut file = crate::net::raw::create_raw_socket_file();
+        if (type_ & 0x800) != 0 {
+            file.flags.nonblock = true;
+        }
+        let fd = with_current_fds(|fds| fds.alloc(file)).ok_or(Errno::NoMem)?;
+        return Ok(fd);
+    }
     if domain == 2 {
         let sock_type = match base_type {
             1 => Tcp,
@@ -1154,6 +1167,34 @@ fn sys_ioctl(fd: u64, request: u64, arg: u64) -> SyscallResult {
                 )
             };
             entry::copy_to_user(arg, bytes).map_err(|_| Errno::Fault)?;
+            return Ok(0);
+        }
+        _ => {}
+    }
+
+    // Network interface configuration mechanism. Which address, route or
+    // DNS resolver to use is userspace policy; the kernel only applies it.
+    match request {
+        0x8927 => {
+            // SIOCGIFHWADDR: copy the NIC MAC (6 bytes) to user memory.
+            let mac = crate::net::stack::mac_address().ok_or(Errno::NoEntry)?;
+            entry::copy_to_user(arg, &mac).map_err(|_| Errno::Fault)?;
+            return Ok(0);
+        }
+        0x8916 => {
+            // SIOCSIFADDR: struct { addr [u8;4], mask [u8;4] }
+            let mut raw = [0u8; 8];
+            entry::copy_from_user(&mut raw, arg).map_err(|_| Errno::Fault)?;
+            let addr = [raw[0], raw[1], raw[2], raw[3]];
+            let mask = [raw[4], raw[5], raw[6], raw[7]];
+            crate::net::stack::set_ipv4_address(addr, mask).map_err(|_| Errno::Invalid)?;
+            return Ok(0);
+        }
+        0x890B => {
+            // SIOCADDRT: struct { gateway [u8;4] }; all-zero removes it.
+            let mut gw = [0u8; 4];
+            entry::copy_from_user(&mut gw, arg).map_err(|_| Errno::Fault)?;
+            crate::net::stack::set_default_gateway(gw).map_err(|_| Errno::Invalid)?;
             return Ok(0);
         }
         _ => {}
@@ -1867,6 +1908,11 @@ fn read_staged(fd: u64, buf: u64, len: u64, staging: &mut [u8]) -> SyscallResult
             }
             if (core::ptr::addr_eq(file_ops, &crate::input::mouse::MOUSE_FILE_OPS) || inode_id == 8)
                 && crate::input::mouse::MOUSE_QUEUE.lock().is_empty()
+            {
+                return Err(Errno::Again);
+            }
+            if core::ptr::addr_eq(file_ops, &crate::net::raw::RAW_FILE_OPS)
+                && crate::net::raw::queue_empty(inode_id)
             {
                 return Err(Errno::Again);
             }

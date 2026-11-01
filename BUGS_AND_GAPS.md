@@ -189,9 +189,10 @@ my judgment from reading the code, not from running the kernel.
 
 ## 14. Network stack
 
-- `src/net/stack.rs` `init_stack`: `config.random_seed = 0x12345678` constant;
-  `iface.routes_mut().add_default_ipv4_route(...).unwrap()` panics if the route
-  table is full. At init it is empty, so OK.
+- `src/net/stack.rs` `init_stack`: `config.random_seed = 0x12345678` constant.
+  Interface addressing is userspace policy (`/bin/dhcpc` via raw sockets and
+  the config ioctls); the kernel applies routes with a checked
+  `add_default_ipv4_route` that reports a full table instead of panicking.
 - `src/net/stack.rs` `SmolDevice::transmit`: `TxToken::consume` allocates a
   `Vec` of `len` bytes and calls `dev.transmit`, which copies into the TX
   buffer. If `len > BUF_SIZE (2048)` transmit returns false but the packet is
