@@ -2,13 +2,13 @@
 
 BeanieOS is a hobby operating system with a rust kernel (yes we are ALL on the rust hype train because it so so much better). started this project by following [phillip](https://os.phil-opp.com/async-await/) and his amazing tutorial and then branched out. we have a website for this project under the docs folder
 
-we wanna make it easier for future rust devs to make an os. there arent that many good tutorials and resources are lacking if you cant piece together the [osdev wiki](https://wiki.osdev.org/)
+We wanna make it easier for future rust devs to make an os. there arent that many good tutorials and resources are lacking if you cant piece together the [osdev wiki](https://wiki.osdev.org/)
 
-the docs + guide + download website will guide users on how to start on osdev and build on this os itself or they can just use an iso and run it (will make one after this is in a usable state)
+The docs + guide + download website will guide users on how to start on osdev and build on this os itself or they can just use an iso and run it (will make one after this is in a usable state)
 
-we currently have a functioning kernel, interrupt handling, memory management, a basic process system, and a command-line shell. Its non-VESA graphical framebuffer and FAT32 filesystem with read/write support are also implemented.
+We currently have a functioning kernel, interrupt handling, memory management, a basic process system, and a command-line shell. Its non-VESA graphical framebuffer and FAT32 filesystem with read/write support are also implemented.
 
-development is ongoing, with work focused on process system standardization, filesystem reliability, shell functionality, userspace, and hardware support.
+Development is ongoing, with work focused on process system standardization, filesystem reliability, shell functionality, userspace, and hardware support.
 
 # Website 
 [Visit the BeanieOS website](https://beanie-os.vercel.app/)
@@ -23,7 +23,7 @@ development is ongoing, with work focused on process system standardization, fil
 
 <img width="2880" height="1800" alt="image" src="https://github.com/user-attachments/assets/ebbefe71-3864-4fa5-b296-5402ee7dad83" />
 
-# agenda
+# Agenda
 we have finally gotten user programs working on this god forsaken kernel.
 next on the agenda is getting musl lib c programs compiled on my linux machine to run also here. i dont wanna use my hacky userspace libc definition. then its gonna be implementing unix stuff
 
