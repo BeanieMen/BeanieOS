@@ -10,10 +10,6 @@ we currently have a functioning kernel, interrupt handling, memory management, a
 
 development is ongoing, with work focused on process system standardization, filesystem reliability, shell functionality, userspace, and hardware support.
 
-# Note
-
-pranjal is a beginner and i am teaching him how stuff works so it might be a bit slower 
-
 # Website 
 [Visit the BeanieOS website](https://beanie-os.vercel.app/)
 
